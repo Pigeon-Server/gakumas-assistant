@@ -1,0 +1,10 @@
+opencv-python
+torch
+ultralytics
+pyautogui
+pydirectinput
+loguru
+numpy
+paddlepaddle
+paddleocr
+adbutils
