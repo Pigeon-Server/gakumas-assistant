@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket 图像显示</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: black;
+        }
+
+        canvas {
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+<canvas id="live_image"></canvas>
+
+<script>
+    function parseBinaryData(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let comma1 = -1, comma2 = -1;
+
+        for (let i = 0; i < bytes.length; i++) {
+            if (bytes[i] === 44) {
+                if (comma1 === -1) comma1 = i;
+                else { comma2 = i; break; }
+            }
+        }
+
+        if (comma1 === -1 || comma2 === -1) throw new Error("无效的格式");
+
+        const width = parseInt(String.fromCharCode(...bytes.subarray(0, comma1)), 10);
+        const height = parseInt(String.fromCharCode(...bytes.subarray(comma1 + 1, comma2)), 10);
+        const imageBytes = bytes.subarray(comma2 + 1);
+
+        return { width, height, imageBytes };
+    }
+
+    async function renderToCanvas(buffer, canvasElement) {
+        const { width, height, imageBytes } = parseBinaryData(buffer);
+        const ctx = canvasElement.getContext("2d");
+
+        const blob = new Blob([imageBytes], { type: "image/jpeg" });
+        const imgUrl = URL.createObjectURL(blob);
+        const img = new Image();
+        img.src = imgUrl;
+        await new Promise(resolve => img.onload = resolve);
+
+        // 设备像素比
+        const dpr = window.devicePixelRatio || 1;
+
+        // 计算缩放比例，保持宽高比
+        const scale = Math.min(
+            window.innerWidth / width,
+            window.innerHeight / height
+        );
+
+        const newWidth = Math.round(width * scale);
+        const newHeight = Math.round(height * scale);
+
+        // 设置高分辨率 Canvas
+        canvasElement.width = newWidth * dpr;
+        canvasElement.height = newHeight * dpr;
+        canvasElement.style.width = newWidth + "px";
+        canvasElement.style.height = newHeight + "px";
+
+        ctx.scale(dpr, dpr); // 适配高分辨率屏幕
+        ctx.imageSmoothingEnabled = false; // 关闭平滑，提升清晰度
+
+        // 计算居中位置
+        const offsetX = (newWidth - width * scale) / 2;
+        const offsetY = (newHeight - height * scale) / 2;
+
+        // 清空并绘制
+        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        ctx.drawImage(img, offsetX, offsetY, width * scale, height * scale);
+    }
+
+    const socket = new WebSocket('ws://127.0.0.1:8000/ws');
+    socket.binaryType = 'arraybuffer';
+
+    socket.onmessage = function(event) {
+        if (event.data instanceof ArrayBuffer) {
+            renderToCanvas(event.data, document.getElementById("live_image"));
+        }
+    };
+
+    let lastBuffer = null;
+    window.addEventListener("resize", () => {
+        if (lastBuffer) {
+            renderToCanvas(lastBuffer, document.getElementById("live_image"));
+        }
+    });
+</script>
+</body>
+</html>

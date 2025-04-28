@@ -5,7 +5,7 @@ import numpy as np
 from ultralytics import YOLO
 from ctypes import windll
 import win32gui
-from paddleocr import PaddleOCR
+# from paddleocr import PaddleOCR
 from src.entity.Yolo_Box import Yolo_Box
 
 # 目标窗口名
@@ -37,13 +37,13 @@ def capture_window(window_name):
 
 
 # 初始化模型
-# device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = "cpu"
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# device = "cpu"
 print("device:", device)
-model = YOLO('../model/last.pt').to(device).eval()
+model = YOLO('../model/producer.pt').to(device).eval()
 model_imgsz = model.args['imgsz'] if hasattr(model, 'args') else 640
 print(f"模型输入尺寸: {model_imgsz}")
-ocr = PaddleOCR(lang='japan', debug=False, show_log=False, use_angle_cls=True)
+# ocr = PaddleOCR(lang='japan', debug=False, show_log=False, use_angle_cls=True)
 
 # 设置模型参数，提高推理精度和速度
 model.conf = 0.5  # 置信度阈值
@@ -64,9 +64,11 @@ try:
         # 模型推理
         results = model(frame, imgsz=model_imgsz, verbose=False, stream=True)
 
+        cv2.resizeWindow(debug_window_name, w, h)
         # 结果处理
         for result in results:
             if len(result.boxes) == 0:
+                cv2.imshow(debug_window_name, frame)
                 continue
 
             boxs = []
@@ -75,7 +77,7 @@ try:
                 class_name = model.names[class_id]
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 boxs.append(Yolo_Box(x1, y1, x2, y2, class_name, frame[y1:y2, x1:x2]))
-            print(boxs)
+            # print(boxs)
                 # if class_name in ["Universal Confirm button", "Universal Cancel button", "Universal button", "Universal disable button", "Current location"]:
                 #     ocr_result = ocr.ocr(frame_box, cls=True)
                 #     print(ocr_result)
@@ -89,7 +91,6 @@ try:
             )
 
             # 显示结果
-            cv2.resizeWindow(debug_window_name, w, h)
             cv2.imshow(debug_window_name, annotated_frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):

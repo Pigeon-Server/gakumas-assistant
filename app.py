@@ -3,242 +3,245 @@ import threading
 import cv2
 import torch
 import numpy as np
+from starlette.websockets import WebSocket, WebSocketDisconnect
+
 import config
-import src.constants as constants
 from typing import Union, Callable
 from ultralytics import YOLO
+from fastapi import FastAPI
+from time import sleep
 
-from src.entity.Yolo_Box import Yolo_Box
+# from src.entity.Yolo_Box import Yolo_Box
 from src.core.Android.app import Android_App
+from src.core.Web.websocket import WebSocketManager
 from src.core.Windows.app import Windows_App
-from src.utils.task.core import TaskQueue
-from src.utils.yolo_tools import get_modal, get_element, find_element
+from src.entity.WebSocket_Data import WebSocket_Data
+from src.entity.YOLO_Model_Type import YoloModelType
+from src.entity.Yolo_Results import Yolo_Results
+from src.core.task import TaskQueue
 from src.utils.ocr_instance import init_ocr
 from src.utils.logger import logger
 
+app = FastAPI()
 
 class AppProcessor:
-    """应用程序主处理器，封装核心业务流程"""
+    # 推理设备
     device: str
+    # Yolo模型
     model: YOLO
+    # 操作设备
     app: Android_App | Windows_App
-    _debug_window_created: bool
+    # 最新帧
     latest_frame: np.array
-    latest_results: list[Yolo_Box] | None
-    task_registry: dict[str, Callable] = {}
+    # 最新推理结果
+    latest_results: Yolo_Results | None
+    # 任务注册列表
+    task_registry: dict[str, dict[str, Union[Callable, str]]] = {}
+    # 任务队列
+    task_queue: TaskQueue
+    # 捕获帧状态
+    running: bool = False
+    # 捕获帧线程
+    capture_thread: threading.Thread = None
+    # 暂停捕获帧标志
+    _pause_capture_frame: bool = False
 
     def __init__(self):
-        """初始化处理器"""
         self.device = self._detect_device()
-        self.model = self._init_yolo(self.device)
+        self.load_model()
         init_ocr()
         self.app = self._create_app_instance()
-        self._debug_window_created = False  # 调试窗口创建状态
-        self.task_queue = TaskQueue()
+        self.task_queue = TaskQueue(self)
+        self.start()
+        logger.success("Application Initialized")
 
-        # 存储最新帧和推理结果
-        self.latest_frame = None
-        self.latest_results = None
+    def load_model(self, model_type: str = YoloModelType.BASE_UI):
+        """
+        加载指定类型的Yolo模型
+        :param model_type:
+        :return:
+        """
 
-        # 启动后台线程进行帧捕获和推理
-        self.running = True
-        self.capture_thread = threading.Thread(target=self._thread__capture_and_infer, daemon=True)
-        self.capture_thread.start()
+        def _init(model_type: str):
+            logger.debug(f"Loading YOLO model {model_type}...")
+            model_config = config.model_config.get(model_type)
+            model = YOLO(model_config.get("model_path")).to(self.device).eval()
+            model.conf = model_config.get("conf_threshold")
+            model.iou = model_config.get("iou_threshold")
+            model.half = torch.cuda.is_available()
+            logger.info(f"Model size: {model.overrides.get('imgsz', 640)}")
+            return model
 
-    @classmethod
-    def register_task(cls, task_name: str, description: str):
-        """装饰器：注册任务到任务队列"""
+        if model_type in [YoloModelType.BASE_UI, YoloModelType.PRODUCER]:
+            self.pause_capture_frame()
+            self.model = _init(model_type)
+            self.resume_capture_frame()
+        else:
+            raise ValueError(f'Unknown model type: {model_type}')
+
+
+    def register_task(self, task_name: str, description: str):
+        """实例方法：注册任务"""
+        logger.debug(f"register task: {task_name}")
         def decorator(func: Callable):
-            cls.task_registry[task_name] = (func, description)
-            return func
+            self.task_queue.reg_task(task_name, description, func)
         return decorator
 
+    def pause_capture_frame(self):
+        if self.running and not self._pause_capture_frame:
+            logger.debug("Pause capture frame......")
+            self._pause_capture_frame = True
+            self.capture_thread.join()
+            logger.debug("Paused capture frame")
+
+    def resume_capture_frame(self):
+        if self.running and self._pause_capture_frame:
+            self._pause_capture_frame = False
+            self.capture_thread = threading.Thread(target=self._capture_and_infer, daemon=True)
+            self.capture_thread.start()
+            logger.debug("Resumed capture frame")
 
     @staticmethod
     def _detect_device() -> str:
-        """检测并返回计算设备"""
         device = 'cuda' if torch.cuda.is_available() and not config.use_cpu else 'cpu'
-        logger.info(f"use device: {device.upper()}")
+        logger.info(f"Using device: {device.upper()}")
         return device
 
     @staticmethod
-    def _init_yolo(device) -> YOLO:
-        """
-        初始化YOLO模型
-        """
-        logger.debug("loading yolo model......")
-        model = YOLO(config.model_path).to(device).eval()
-        model.conf = config.conf_threshold  # 置信度阈值
-        model.iou = config.iou_threshold    # IoU阈值
-        model.half = torch.cuda.is_available()
-        # 记录模型参数
-        model_imgsz = model.args.get('imgsz', 640)
-        logger.info(f"model size: {model_imgsz}")
-        logger.info(f"置信度阈值: {model.conf:.2f}")
-        logger.info(f"半精度模式: {model.half}")
-        return model
-
-    @staticmethod
     def _create_app_instance() -> Union[Android_App, Windows_App]:
-        """
-        创建平台特定的应用实例
-        """
         mode = config.mode.lower()
         if mode == 'phone':
-            logger.debug("初始化Android模式")
+            logger.debug("Initializing Android mode")
             return Android_App()
-
         if mode == 'pc':
-            logger.debug("初始化Windows模式")
-            # 处理Windows高DPI缩放问题
+            logger.debug("Initializing Windows mode")
             import ctypes
             ctypes.windll.user32.SetProcessDPIAware()
-            return Windows_App(
-                config.window_name
-            )
+            return Windows_App(config.window_name)
+        raise ValueError(f"Invalid mode: {config.mode}")
 
-        raise ValueError(f"无效的运行模式: {config.mode}")
-
-    def _thread__capture_and_infer(self):
-        while True:
-            # 捕获屏幕帧
+    def _capture_and_infer(self):
+        while self.running and not self._pause_capture_frame:
             frame = self.app.capture()
-
-            # 有效性检查（修复ValueError）
             if frame is None or frame.size <= 0:
+                sleep(0.5)
                 continue
-
             self.latest_frame = frame
+            results = self.model(frame, imgsz=self.model.args['imgsz'] if hasattr(self.model, 'args') else 640, verbose=False, stream=True)
+            self.latest_results = Yolo_Results(results, self.model, self.latest_frame)
+            self._send_frame_to_clients()
 
-            results = self.model(
-                frame,
-                imgsz=self.model.args.get('imgsz', 640),
-                verbose=False,
-                stream=True
+
+    @logger.catch
+    def _send_frame_to_clients(self):
+        """将最新的图像的二进制数据发送给 WebSocket 客户端。"""
+        if self.latest_frame is None:
+            return False
+        # 获取图像尺寸
+        height, width = self.latest_frame.shape[:2]
+        if not self.latest_results.results:
+            _, encoded_frame = cv2.imencode('.jpg', self.latest_frame)
+            frame_bytes = encoded_frame.tobytes()
+            ws_manager.broadcast_sync(WebSocket_Data(None, f"{width},{height}".encode('utf-8') + b"," + frame_bytes))
+        for result in self.latest_results.results:
+            annotated_frame = result.plot(
+                conf=False,
+                line_width=max(1, int(height / 600)),
+                font_size=max(0.5, height / 1200),
+                pil=False
             )
+            _, encoded_frame = cv2.imencode('.jpg', annotated_frame)
+            frame_bytes = encoded_frame.tobytes()
+            ws_manager.broadcast_sync(WebSocket_Data(None, f"{width},{height}".encode('utf-8') + b"," + frame_bytes))
 
-            for result in results:
-                if not result.boxes:
-                    continue
+    def start(self):
+        if not self.running or self._pause_capture_frame:
+            self.running = True
+            self.capture_thread = threading.Thread(target=self._capture_and_infer, daemon=True)
+            self.capture_thread.start()
+            logger.success("Started inference thread.")
 
-                self.latest_results = self._parse_boxes(result, frame)
+    def stop(self):
+        if self.running:
+            self.running = False
+            self.capture_thread.join(timeout=3)
+            logger.success("Stopped inference thread.")
 
-                if config.debug:
-                    self._display_debug_info(frame, result)
+    def exec_task(self):
+        self.task_queue.exec_task()
 
-    def _parse_boxes(self, result, frame: np.ndarray) -> list[Yolo_Box]:
-        """
-        解析YOLO检测框为业务对象
+# 创建处理器实例
+processor = AppProcessor()
+ws_manager = WebSocketManager()
 
-        参数:
-            result: YOLO检测结果
-            frame (np.ndarray): 原始图像帧
-
-        返回:
-            list[Yolo_Box]: 检测框对象列表
-        """
-        boxs = []
-        for box in result.boxes:
-            class_id = int(box.cls)
-            class_name = self.model.names[class_id]
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            boxs.append(Yolo_Box(x1, y1, x2, y2, class_name, frame[y1:y2, x1:x2]))
-        return boxs
-
-    # def _handle_special_components(self, boxes: list[Yolo_Box], frame: np.array):
-    #     """处理特殊界面组件（如模态对话框）"""
-    #     # 处理启动游戏点击
-    #     if find_element(boxes, constants.labels.start_menu_logo) and find_element(boxes,
-    #                                                                               constants.labels.start_menu_click_continue_flag):
-    #         return self._handle_game_start_menu(boxes)
-    #     if find_element(boxes, constants.labels.modal_header) and ((not find_element(boxes,
-    #                                                                                  constants.labels.confirm_button) and find_element(
-    #             boxes, constants.labels.cancel_button)) or (find_element(boxes,
-    #                                                                      constants.labels.confirm_button) and not find_element(
-    #             boxes, src.constants.labels.cancel_button))):
-    #         logger.debug("检测到仅关闭模态框")
-    #         return self._handle_close_only_modal(boxes)
-    #     # 处理模态框
-    #     if find_element(boxes, constants.labels.modal_header) and (find_element(boxes,
-    #                                                                             src.constants.labels.confirm_button) or find_element(
-    #             boxes, src.constants.labels.cancel_button)):
-    #         logger.debug("检测到模态对话框")
-    #         get_modal(boxes, frame)
-
-    # def _handle_game_start_menu(self, boxes: list[Yolo_Box]):
-    #     """处理游戏启动界面"""
-    #     if find_element(boxes, constants.labels.general_loading1):
-    #         return False
-    #     logger.info("click start_menu_click_continue_flag")
-    #     element = get_element(boxes, constants.labels.start_menu_click_continue_flag)[0]
-    #     self.app.click(*element.get_COL())
-    #     return True
-
-    # def _handle_close_only_modal(self, boxes: list[Yolo_Box]):
-    #     logger.debug("close modal box")
-    #     if el := get_element(boxes, constants.labels.confirm_button):
-    #         return self.app.click(*el[0].get_COL())
-    #     if el := get_element(boxes, constants.labels.cancel_button):
-    #         return self.app.click(*el[0].get_COL())
-
-    def _display_debug_info(self, frame: np.ndarray, result):
-        """显示调试信息窗口"""
-        h, w = frame.shape[:2]
-        debug_frame = result.plot(
-            conf=False,
-            line_width=max(1, int(h / 600)),
-            font_size=max(0.5, h / 1200),
-            pil=False
-        )
-
-        if not self._debug_window_created:
-            cv2.namedWindow(config.debug_window_name, cv2.WINDOW_NORMAL)
-            self._debug_window_created = True
-
-        cv2.resizeWindow(config.debug_window_name, w, h)
-        cv2.imshow(config.debug_window_name, debug_frame)
-
-    # def run(self):
-    #     """主运行循环"""
-    #     try:
-    #         logger.info("启动主处理循环")
-    #         while True:
-    #             # 捕获屏幕帧
-    #             frame = self.app.capture()
-    #
-    #             # 有效性检查（修复ValueError）
-    #             if frame is not None and frame.size > 0:
-    #                 self._process_frame(frame)
-    #
-    #             # 检查任务系统状态
-    #             if config.debug and self._task_system.get_status()['current_task']:
-    #                 logger.debug(f"当前任务: {self._task_system.get_status()['current_task']}")
-    #
-    #             # 处理退出指令
-    #             if cv2.waitKey(1) & 0xFF == ord('q'):
-    #                 break
-    #     except Exception as e:
-    #         logger.error(f"主循环异常: {str(e)}")
-    #         raise
-    #     finally:
-    #         self.cleanup()
-
-    def cleanup(self):
-        """清理资源"""
-        if config.debug and self._debug_window_created:
-            cv2.destroyWindow(config.debug_window_name)
-
-def main():
-    """程序入口函数"""
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket 处理端点"""
+    await ws_manager.connect(websocket)
     try:
-        logger.info("启动应用程序")
-        processor = AppProcessor()
-        # processor.run()
-    except Exception as e:
-        logger.critical(f"致命错误: {str(e)}")
-        raise
-    finally:
-        logger.info("应用程序退出")
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
-if __name__ == '__main__':
-    main()
+@app.get("/start")
+def start_inference():
+    processor.exec_task()
+    return {"message": "Inference started"}
+
+@app.get("/stop")
+def stop_inference():
+    processor.task_queue.stop()
+    return {"message": "Inference stopped"}
+
+@app.get("/status")
+def get_status():
+    return {'status': processor.running}
+
+@app.get("/get_registered_tasks")
+def get_registered_tasks():
+    return processor.task_queue.get_task_list()
+
+@app.post("/disable_task/{task_name:str}")
+def disable_task(task_name):
+    return processor.task_queue.disable_task(task_name)
+
+@app.get("/switch_yolo_model/base_ui")
+def switch_yolo_model__base_ui():
+    processor.load_model(YoloModelType.BASE_UI)
+    return {"status": True}
+
+@app.get("/switch_yolo_model/producer")
+def switch_yolo_model__producer():
+    processor.load_model(YoloModelType.PRODUCER)
+    return {"status": True}
+
+# @app.get("/get_enabled_tasks")
+# def get_enabled_tasks():
+#     return processor.task_queue.get_enabled_tasks()
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    processor.stop()
+
+@processor.register_task("test1", "测试任务1")
+def _task__test1(app):
+    logger.debug("task1: run")
+    sleep(3)
+    logger.debug("task1: stop")
+    return False
+
+@processor.register_task("test2", "测试任务2")
+def _task__test2(app):
+    logger.debug("task2: run")
+    sleep(5)
+    logger.debug("task2: stop")
+    return False
+
+@processor.register_task("test3", "测试任务3")
+def _task__test3(app):
+    logger.debug("task3: run")
+    sleep(3)
+    logger.debug("task3: stop")
+    return False

@@ -4,6 +4,8 @@ import pyautogui
 import win32gui
 import pydirectinput
 
+from src.utils.logger import logger
+
 class Windows_App:
     __window_name: str
     def __init__(self, window_name):
@@ -31,6 +33,7 @@ class Windows_App:
         client_height = client_rect[3]  # 客户区高度
         return client_left, client_top, client_width, client_height
 
+    @logger.catch
     def capture(self):
         """
         截取窗口位置
@@ -46,6 +49,7 @@ class Windows_App:
         img = np.array(screenshot)
         return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
+    @logger.catch
     def click(self, x, y):
         """
         点击窗口内容
