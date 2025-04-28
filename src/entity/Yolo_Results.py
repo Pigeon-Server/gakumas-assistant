@@ -12,7 +12,7 @@ class Yolo_Results:
     def __init__(self, yolo_results, model: YOLO, frame: np.array):
         self.results = list(yolo_results)
         self.yolo_boxs = []
-        for result in yolo_results:
+        for result in self.results:
             if not hasattr(result, 'boxes'):
                 continue
             for box in result.boxes:
@@ -20,3 +20,6 @@ class Yolo_Results:
                 class_name = model.names[class_id]
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 self.yolo_boxs.append(Yolo_Box(x1, y1, x2, y2, class_name, frame[y1:y2, x1:x2]))
+
+    def get_yolo_boxs_by_label(self, label:str) -> list[Yolo_Box]:
+        return [box for box in self.yolo_boxs if box.label == label]

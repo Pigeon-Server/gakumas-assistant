@@ -1,3 +1,6 @@
+import ctypes
+import sys
+
 import cv2
 import numpy as np
 import pyautogui
@@ -9,7 +12,22 @@ from src.utils.logger import logger
 class Windows_App:
     __window_name: str
     def __init__(self, window_name):
+        if not self.is_admin():
+            # 不是管理员，重新以管理员身份启动
+            logger.warning("当前不是管理员权限，正在尝试以管理员身份重新启动...")
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", sys.executable, " ".join(sys.argv), None, 1
+            )
+            print(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+            sys.exit()
         self.__window_name = window_name
+
+    @staticmethod
+    def is_admin():
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except:
+            return False
 
     def __find_window(self):
         """

@@ -1,5 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="app" type="Python.FastAPI">
+    <option name="additionalOptions" />
     <option name="file" value="E:\Projects\gkmas-auto\app.py" />
     <module name="gkmas-yolo-test" />
     <option name="ENV_FILES" value="" />

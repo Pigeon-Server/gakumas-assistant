@@ -38,6 +38,14 @@ def find_element(yolo_result: list[Yolo_Box] | tuple[Yolo_Box, Yolo_Box], label:
     """查找带有相关标签的元素"""
     return any(b.label == label for b in yolo_result)
 
+def get_y_min_element(yolo_result: list[Yolo_Box]):
+    """获取y值最低的元素"""
+    min_element: Yolo_Box = yolo_result[0]
+    for box in yolo_result:
+        if min_element.get_COL()[1] > box.get_COL()[1]:
+            min_element = box
+    return min_element
+
 def get_modal(yolo_result: list[Yolo_Box], frame: np.array) -> Modal | None:
     """
     获取模态框
@@ -56,26 +64,30 @@ def get_modal(yolo_result: list[Yolo_Box], frame: np.array) -> Modal | None:
         # 获取确认和取消按钮
         confirm_buttons = get_element(yolo_result, constants.labels.confirm_button)
         cancel_buttons = get_element(yolo_result, constants.labels.cancel_button)
-        if not confirm_buttons or not cancel_buttons:
+        print(confirm_buttons, cancel_buttons)
+        if not confirm_buttons and not cancel_buttons:
             raise ValueError("未找到确认或取消按钮")
 
-        # 识别出在同一行的按钮
-        result = find_element_in_same_row(confirm_buttons, cancel_buttons)
-        if not result:
-            raise ValueError("确认和取消按钮未匹配成功")
+        # 如果有两种按钮
+        if cancel_buttons and confirm_buttons:
+            # 识别出在同一行的按钮
+            result = find_element_in_same_row(confirm_buttons, cancel_buttons)
+            if not result:
+                raise ValueError("确认和取消按钮未匹配成功")
+            confirm_button_el = get_element(result[0], constants.labels.confirm_button)[0]
+            cancel_button_el = get_element(result[0], constants.labels.cancel_button)[0]
+        else:
+            cancel_button_el = get_y_min_element(cancel_buttons) if cancel_buttons else None
+            confirm_button_el = get_y_min_element(confirm_buttons) if confirm_buttons else None
 
-        confirm_button_box = get_element(result[0], constants.labels.confirm_button)[0]
-        cancel_button_box = get_element(result[0], constants.labels.cancel_button)[0]
-
-        # 解析按钮文本
-        confirm_button_text = "".join([item.text for item in get_ocr(confirm_button_box.frame)])
-        cancel_button_text = "".join([item.text for item in get_ocr(cancel_button_box.frame)])
-
-        confirm_button = Button(confirm_button_box.x, confirm_button_box.y, confirm_button_box.w, confirm_button_box.h, confirm_button_text)
-        cancel_button = Button(cancel_button_box.x, cancel_button_box.y, cancel_button_box.w, cancel_button_box.h, cancel_button_text)
+        confirm_button = Button(confirm_button_el) if confirm_button_el else None
+        cancel_button = Button(cancel_button_el) if cancel_button_el else None
 
         # 计算模态框主体区域
-        modal_body_y = max(cancel_button.y, confirm_button.y)
+        if confirm_button and cancel_button:
+            modal_body_y = max(cancel_button.y, confirm_button.y)
+        else:
+            modal_body_y = confirm_button.y if confirm_buttons else cancel_button.y
         modal_body_frame = frame[modal_header.h:modal_body_y, modal_header.x:modal_header.w]
         modal_body_text = " ".join([item.text for item in get_ocr(modal_body_frame)])
 
