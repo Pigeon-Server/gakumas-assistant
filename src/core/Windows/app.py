@@ -7,6 +7,7 @@ import pyautogui
 import win32gui
 import pydirectinput
 
+from src.entity.Yolo_Box import Yolo_Box
 from src.utils.logger import logger
 
 class Windows_App:
@@ -68,7 +69,7 @@ class Windows_App:
         return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
     @logger.catch
-    def click(self, x, y):
+    def click(self, x, y, el_label = ""):
         """
         点击窗口内容
         :param x:
@@ -80,7 +81,10 @@ class Windows_App:
             raise ValueError(f"坐标超出有效范围: ({x}, {y}) 窗口尺寸: {width}x{height}")
         abs_x = left + x
         abs_y = top + y
-        # pydirectinput.moveTo(abs_x, abs_y)
         pydirectinput.click(abs_x, abs_y, button='left')
-        print(f"click: {abs_x, abs_y}")
+        logger.debug(f"click {el_label}: {abs_x, abs_y}" if el_label else f"click: {abs_x, abs_y}")
         return True
+
+    @logger.catch
+    def click_element(self, element: Yolo_Box):
+        self.click(*element.get_COL(), element.label)

@@ -3,6 +3,7 @@ import threading
 import cv2
 import torch
 import numpy as np
+from skimage.filters.rank import modal
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 import config
@@ -11,10 +12,11 @@ from ultralytics import YOLO
 from fastapi import FastAPI
 from time import sleep
 
-# from src.entity.Yolo_Box import Yolo_Box
 from src.core.Android.app import Android_App
 from src.core.Web.websocket import WebSocketManager
 from src.core.Windows.app import Windows_App
+from src.core.tasks.base_ui.start_game import action__click_start_game, \
+    handle__network_error_modal_boxes, action__check_home_tab_exist
 from src.entity.WebSocket_Data import WebSocket_Data
 from src.entity.YOLO_Model_Type import YoloModelType
 from src.entity.Yolo_Results import Yolo_Results
@@ -33,6 +35,8 @@ class AppProcessor:
     model: YOLO
     # 操作设备
     app: Android_App | Windows_App
+    # 当前Yolo模型
+    current_model_type: str
     # 最新帧
     latest_frame: np.array
     # 最新推理结果
@@ -77,6 +81,7 @@ class AppProcessor:
         if model_type in [YoloModelType.BASE_UI, YoloModelType.PRODUCER]:
             self.pause_capture_frame()
             self.model = _init(model_type)
+            self.current_model_type = model_type
             self.resume_capture_frame()
         else:
             raise ValueError(f'Unknown model type: {model_type}')
@@ -156,12 +161,13 @@ class AppProcessor:
             frame_bytes = encoded_frame.tobytes()
             ws_manager.broadcast_sync(WebSocket_Data(None, f"{width},{height}".encode('utf-8') + b"," + frame_bytes))
 
-    def wait_for_label(self, label, timeout=30, interval=1):
+    def wait_for_label(self, label, timeout=30, interval=1, continuous=1):
         """等待指定标签的框出现"""
         wait_time = 0
         count = 0
-        while wait_time < timeout:
-            if count >= 5:
+        logger.debug(f"waiting label: {label}")
+        while wait_time <= timeout:
+            if count > continuous:
                 return True
             if self.latest_results.get_yolo_boxs_by_label(label):
                 count += 1
@@ -173,14 +179,14 @@ class AppProcessor:
             wait_time += interval
         return False
 
-    def wait_for_modal(self, modal_title, timeout=30, interval=1):
-        """等待指定标签的框出现"""
+    def wait_for_modal(self, modal_title, timeout=30, interval=1, no_body: bool = False):
+        """等待指定标题的模态框出现"""
         wait_time = 0
         count = 0
+        logger.debug(f"waiting modal: {modal_title}")
         while wait_time < timeout:
-            print(count)
-            if count > 5:
-                modal = get_modal(self.latest_results.yolo_boxs, self.latest_frame)
+            if count > 3:
+                modal = get_modal(self.latest_results.yolo_boxs, self.latest_frame, no_body)
                 if modal.modal_title == modal_title:
                     return modal
                 return False
@@ -199,10 +205,11 @@ class AppProcessor:
         """等待指定标签并点击"""
         wait_time = 0
         count = 0
+        logger.debug(f"waiting click label: {label}")
         while wait_time < timeout:
             boxs = self.latest_results.get_yolo_boxs_by_label(label)
             if boxs:
-                self.app.click(*boxs[0].get_COL())
+                self.app.click_element(boxs[0])
                 return True
             else:
                 count += 1
@@ -211,6 +218,31 @@ class AppProcessor:
                 sleep(interval)
             wait_time += interval
         return False
+
+    def wait__loading(self, timeout=60):
+        """等待加载"""
+        COUNT = 0
+        while COUNT < timeout:
+            logger.debug("Waiting for loading")
+            if self.latest_results.get_yolo_boxs_by_label(labels.general_loading1) or self.latest_results.get_yolo_boxs_by_label(labels.general_loading2):
+                sleep(1)
+                COUNT += 1
+            else:
+                logger.debug("Wait for the loading to finish")
+                return True
+        raise TimeoutError("Waiting for a load timeout")
+
+    def go_home(self):
+        logger.debug("Going home")
+        if not self.click_on_label(labels.go_home_btn, 3):
+            raise TimeoutError("Waiting for a go home button timeout")
+
+    def back_next_page(self):
+        logger.debug("Going back next page")
+        if self.wait_for_label(labels.back_btn, 3):
+            self.app.click_element(self.latest_results.get_yolo_boxs_by_label(labels.back_btn)[0])
+        else:
+            raise TimeoutError("Waiting for a back button timeout")
 
     def start(self):
         if not self.running or self._pause_capture_frame:
@@ -283,38 +315,65 @@ def switch_yolo_model__producer():
 def shutdown_event():
     processor.stop()
 
+@app.on_event("startup")
+def start_event():
+    sleep(5)
+    processor.start()
+
+def action__back_home(app: AppProcessor):
+    """返回主页面"""
+
+
 @processor.register_task("start_game", "启动游戏")
 def _task__start_game(app: AppProcessor):
     TIMEOUT = 30
-    if app.latest_results.get_yolo_boxs_by_label(labels.start_menu_logo):
-        if app.wait_for_label(labels.start_menu_click_continue_flag, TIMEOUT):
-            if not app.click_on_label(labels.start_menu_click_continue_flag, TIMEOUT):
-                raise TimeoutError("Failed to click on the continue flag within the timeout.")
-        else:
-            raise TimeoutError("Timeout waiting for continue flag in the start menu.")
-        # 检查Home标签是否存在
-        if not app.wait_for_label(labels.tab_home, TIMEOUT):
-            raise TimeoutError("Timeout waiting for home tab to appear.")
+    if action__click_start_game(app, TIMEOUT) is not False:
+        sleep(2)
+        app.wait__loading()
+        handle__network_error_modal_boxes(app)
+    action__check_home_tab_exist(app)
 
 @processor.register_task("get_expenditure", "获取活动费")
 def _task__get_expenditure(app: AppProcessor):
     if tab_home := app.latest_results.get_yolo_boxs_by_label(labels.tab_home):
         tab_home = tab_home[0]
-        app.app.click(*tab_home.get_COL())
+        app.app.click_element(tab_home)
         if not app.wait_for_label(labels.home_get_expenditure):
             raise TimeoutError("Timeout waiting for home expenditure to appear.")
         get_expenditure_btn = app.latest_results.get_yolo_boxs_by_label(labels.home_get_expenditure)[0]
-        app.app.click(*get_expenditure_btn.get_COL())
-        if modal := app.wait_for_modal("活動費"):
-            app.app.click(*modal.cancel_button.get_COL())
+        app.app.click_element(get_expenditure_btn)
+        if modal := app.wait_for_modal("活動費", no_body=True):
+            app.app.click_element(modal.cancel_button)
+            sleep(3)
+            return True
         else:
             raise TimeoutError("Timeout waiting for modal to appear.")
     else:
         raise RuntimeError("当前不在主页")
 
 @processor.register_task("dispatch_work", "派遣任务")
-def _task__dispatch_work(app):
-    logger.debug("task3: run")
-    sleep(3)
-    logger.debug("task3: stop")
-    return False
+def _task__dispatch_work(app: AppProcessor):
+    if tab_home := app.latest_results.get_yolo_boxs_by_label(labels.tab_home):
+        tab_home = tab_home[0]
+        app.app.click_element(tab_home)
+        if not app.wait_for_label(labels.home_dispatch_work):
+            raise TimeoutError("Timeout waiting for home dispatch work to appear.")
+        dispatch_work_btn = app.latest_results.get_yolo_boxs_by_label(labels.home_dispatch_work)[0]
+        app.app.click_element(dispatch_work_btn)
+        sleep(2)
+        app.wait__loading()
+        while True:
+            if not app.latest_results.get_yolo_boxs_by_label(labels.modal_header):
+                break
+            if modal := app.wait_for_modal("お仕事完了", no_body=True):
+                app.app.click_element(modal.confirm_button)
+                sleep(2)
+                if not app.wait_for_label(labels.modal_header, 10):
+                    break
+        # TODO 重新派遣
+        sleep(1)
+        app.go_home()
+        app.wait__loading()
+        return True
+    else:
+        raise RuntimeError("当前不在主页")
