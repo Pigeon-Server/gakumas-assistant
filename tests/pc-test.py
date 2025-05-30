@@ -6,7 +6,7 @@ from ultralytics import YOLO
 from ctypes import windll
 import win32gui
 # from paddleocr import PaddleOCR
-from src.entity.Yolo_Box import Yolo_Box
+from src.entity.Yolo import Yolo_Box
 
 # 目标窗口名
 window_name = "gakumas"

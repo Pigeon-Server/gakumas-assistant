@@ -1,0 +1,2 @@
+class IdolTab:
+    pass

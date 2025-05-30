@@ -17,8 +17,29 @@ page__the_road_to_idols = "アイドルへの道"
 page__daily_task = "ミッション"
 # 成就页面
 page__achievement = "アチーブメント"
+page__achievement_idol = "アイドル"
+page__achievement_producer = "プロデュース"
+page__achievement_other = "その他"
 # 大月卡页面
 page__plan = "ミッションパス"
+# 商店主菜单页面
+page__shop = "ショップ"
+# 商店 - 宝石
+page__shop_gem = "ジュエル"
+# 商店 - 礼包
+page__shop_pack = "パック"
+# 商店 - 大月卡
+page__shop_pass = "パス"
+# 商店 - 扭蛋币
+page__shop_coin_gacha = "コインガシャ"
+# 商店 - 每日交换
+page__shop_daily_exchange = "デイリー交換所"
+# 商店 - 物品交换
+page__shop_item_exchange = "アイテム交換所"
+# 商店 - 服装交换
+page__shop_costume_exchange = "衣装ショップ"
+# 商店 - 票据交换
+page__shop_ticket_exchange = "テヶット交換所"
 # 派遣任务页面
 page__dispatch_work = "お仕事"
 # 主线剧情页面

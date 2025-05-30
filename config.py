@@ -1,5 +1,5 @@
 # 运行模式（Phone | PC）
-from src.entity.YOLO_Model_Type import YoloModelType
+from src.entity.Yolo import YoloModelType
 
 mode = "PC"
 # 游戏窗口名称（仅PC）

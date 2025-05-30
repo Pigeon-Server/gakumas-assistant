@@ -43,7 +43,7 @@ def init_ocr():
 
 def get_ocr(img: np.array):
     """
-
+        获取OCR接口实例
     """
 
     def _quad_to_rect(box):
@@ -63,7 +63,7 @@ def get_ocr(img: np.array):
     loader = PaddleOCRLoader()
     result = loader.ocr.ocr(img, cls=False)
 
-    if not result:
+    if not result or not result[0]:
         return []
 
     temp = []

@@ -84,21 +84,28 @@
         ctx.drawImage(img, offsetX, offsetY, width * scale, height * scale);
     }
 
-    const socket = new WebSocket('ws://127.0.0.1:8000/ws');
-    socket.binaryType = 'arraybuffer';
+    function connect_ws() {
+        const socket = new WebSocket('ws://127.0.0.1:8000/ws');
+        socket.binaryType = 'arraybuffer';
 
-    socket.onmessage = function(event) {
-        if (event.data instanceof ArrayBuffer) {
-            renderToCanvas(event.data, document.getElementById("live_image"));
-        }
-    };
+        socket.onmessage = function(event) {
+            if (event.data instanceof ArrayBuffer) {
+                renderToCanvas(event.data, document.getElementById("live_image"));
+            }
+        };
 
-    let lastBuffer = null;
-    window.addEventListener("resize", () => {
-        if (lastBuffer) {
-            renderToCanvas(lastBuffer, document.getElementById("live_image"));
+        socket.onclose = function (event) {
+            connect_ws()
         }
-    });
+
+        let lastBuffer = null;
+        window.addEventListener("resize", () => {
+            if (lastBuffer) {
+                renderToCanvas(lastBuffer, document.getElementById("live_image"));
+            }
+        });
+    }
+    connect_ws()
 </script>
 </body>
 </html>

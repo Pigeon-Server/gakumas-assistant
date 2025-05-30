@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from queue import Queue
 from typing import Callable
-from threading import Thread, Event
-from time import sleep, time
+from threading import Thread
+from time import time
 
 from src.utils.logger import logger
 
@@ -61,6 +61,7 @@ class TaskQueue:
         if not self._worker_thread.is_alive():
             self._worker_thread = Thread(target=self._processor_task_queue, daemon=True)
             self._worker_thread.start()
+        return True
 
     def _processor_task_queue(self):
         """任务队列处理器，确保任务按顺序执行"""
@@ -128,3 +129,4 @@ class TaskQueue:
         self._task_queue.queue.clear()
         # 释放执行锁
         self._run_lock = False
+        return True
