@@ -50,6 +50,10 @@ def get_ocr(img: np.array):
         获取OCR接口实例
     """
 
+    if img is None or img.shape[0] == 0 or img.shape[1] == 0:
+        logger.warning(f"Empty images or dimensions are illegal: {img.shape if img is not None else 'None'}")
+        return []
+
     def _quad_to_rect(box):
         """将四边形坐标转换为矩形框(x,y,width,height)"""
         # 提取所有x和y坐标

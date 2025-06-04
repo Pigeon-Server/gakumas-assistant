@@ -7,7 +7,7 @@ from src.constants import *
 from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.logger import logger
 from src.utils.ocr_instance import get_ocr
-from src.utils.yolo_tools import check_status_detection
+from src.utils.opencv_tools import check_status_detection
 
 @logger.catch
 def get_current_location(boxes: Yolo_Results) -> str | None:

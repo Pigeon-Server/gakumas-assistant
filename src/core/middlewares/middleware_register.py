@@ -14,6 +14,7 @@ def register_middlewares(processor: "AppProcessor"):
     def _init_location(app: "AppProcessor"):
         if app.game_status_manager.current_location is None:
             app.update_current_location()
+            app.exec_task()
         return True
 
 

@@ -36,24 +36,24 @@ def register_tasks(processor: "AppProcessor"):
         action__check_home_tab_exist(app)
         app.update_current_location()
 
-    @processor.register_task("get_expenditure", "获取活动费", 30)
-    @logger.catch
-    def _task__get_expenditure(app: "AppProcessor"):
-        app.go_home()
-        app.wait__loading()
-        if not app.wait_for_label(base_labels.home_get_expenditure):
-            raise TimeoutError("Timeout waiting for [home:expenditure] to appear.")
-        app.app.click_element(app.latest_results.filter_by_label(base_labels.home_get_expenditure).first())
-        sleep(3)
-        if modal := app.wait_for_modal("活動費", no_body=True, timeout=10):
-            print(modal)
-            app.app.click_element(modal.cancel_button)
-            sleep(3)
-            return True
-        elif app.latest_results.exists_label(base_labels.tab_home):
-            logger.warning("There are no claimable expenses")
-            return True
-        raise TimeoutError("Timeout waiting for modal to appear.")
+    # @processor.register_task("get_expenditure", "获取活动费", 30)
+    # @logger.catch
+    # def _task__get_expenditure(app: "AppProcessor"):
+    #     app.go_home()
+    #     app.wait__loading()
+    #     if not app.wait_for_label(base_labels.home_get_expenditure):
+    #         raise TimeoutError("Timeout waiting for [home:expenditure] to appear.")
+    #     app.app.click_element(app.latest_results.filter_by_label(base_labels.home_get_expenditure).first())
+    #     sleep(3)
+    #     if modal := app.wait_for_modal("活動費", no_body=True, timeout=10):
+    #         print(modal)
+    #         app.app.click_element(modal.cancel_button)
+    #         sleep(3)
+    #         return True
+    #     elif app.latest_results.exists_label(base_labels.tab_home):
+    #         logger.warning("There are no claimable expenses")
+    #         return True
+    #     raise TimeoutError("Timeout waiting for modal to appear.")
 
     @processor.register_task("dispatch_work", "派遣任务", 30)
     @logger.catch

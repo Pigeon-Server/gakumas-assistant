@@ -4,6 +4,8 @@ from typing import Tuple
 import cv2
 import numpy as np
 
+from src.utils.logger import logger
+
 
 def rgb_to_hsv_range(rgb1, rgb2, expand_ratio=0.0):
     """
@@ -93,12 +95,36 @@ def check_color_in_region(
     if roi.size == 0:
         return False
     hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    cv2.imshow("hsv_roi", hsv_roi)
+    # cv2.imshow("hsv_roi", hsv_roi)
     # 自动修正 RGB 顺序并转换为 HSV
     hsv_lower, hsv_upper = rgb_to_hsv_range(lower_color, upper_color,5)
-    hsv_range_to_image_cv(hsv_lower, hsv_upper)
+    # hsv_range_to_image_cv(hsv_lower, hsv_upper)
     mask = cv2.inRange(hsv_roi, hsv_lower, hsv_upper)
-    cv2.imshow("mask", mask)
-    cv2.waitKey(10)
-    print(cv2.countNonZero(mask))
+    # cv2.imshow("mask", mask)
+    # cv2.waitKey(10)
     return cv2.countNonZero(mask) >= threshold
+
+@logger.catch
+def check_status_detection(frame: np.array, threshold=0.15, upper_color: Tuple[int, int, int] = (22, 255, 255), lower_color: Tuple[int, int, int]=(8, 100, 100)):
+    """
+    选中状态检测：忽略白色背景，专注文本区域标记
+    """
+    if frame.size == 0:
+        return False
+    lower_color = np.array(lower_color)
+    upper_color = np.array(upper_color)
+    # 1. 预处理 - 转换为HSV和灰度
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # 2. 创建白色背景掩码（忽略区域）
+    white_mask = cv2.inRange(gray, 220, 255)  # 忽略亮色区域
+    # 3. 创建橙色文本掩码（扩大检测范围）
+    orange_mask = cv2.inRange(hsv, lower_color, upper_color)
+    # 4. 组合掩码（只在非白色区域检测橙色）
+    combined_mask = cv2.bitwise_and(orange_mask, cv2.bitwise_not(white_mask))
+    # 5. 计算有效区域比例（排除白色后的区域）
+    non_white_area = cv2.countNonZero(cv2.bitwise_not(white_mask))
+    if non_white_area == 0:
+        return False
+    orange_ratio = cv2.countNonZero(combined_mask) / non_white_area
+    return orange_ratio > threshold

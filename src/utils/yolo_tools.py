@@ -38,7 +38,8 @@ def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False)
         confirm_button = None
         cancel_button = buttons
     if not confirm_button and not cancel_button:
-        raise ValueError("未找到确认或取消按钮")
+        logger.warning("Cancel or Confirm buttons not found")
+        return None
     confirm_button = Button(confirm_button.first()) if confirm_button else None
     cancel_button = Button(cancel_button.first()) if cancel_button else None
     # 计算模态框主体区域
@@ -49,30 +50,4 @@ def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False)
     modal_body_frame = frame[modal_header.h:modal_body_y, modal_header.x:modal_header.w]
     modal_body_text = "" if no_body else " ".join([item.text for item in get_ocr(modal_body_frame)])
     modal_obj = Modal(modal_header_text, modal_body_text, confirm_button, cancel_button)
-    # logger.debug(modal_obj)
     return modal_obj
-
-@logger.catch
-def check_status_detection(frame: np.array, threshold=0.15, upper_color: Tuple[int, int, int] = (22, 255, 255), lower_color: Tuple[int, int, int]=(8, 100, 100)):
-    """
-    选中状态检测：忽略白色背景，专注文本区域标记
-    """
-    if frame.size == 0:
-        return False
-    lower_color = np.array(lower_color)
-    upper_color = np.array(upper_color)
-    # 1. 预处理 - 转换为HSV和灰度
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    # 2. 创建白色背景掩码（忽略区域）
-    white_mask = cv2.inRange(gray, 220, 255)  # 忽略亮色区域
-    # 3. 创建橙色文本掩码（扩大检测范围）
-    orange_mask = cv2.inRange(hsv, lower_color, upper_color)
-    # 4. 组合掩码（只在非白色区域检测橙色）
-    combined_mask = cv2.bitwise_and(orange_mask, cv2.bitwise_not(white_mask))
-    # 5. 计算有效区域比例（排除白色后的区域）
-    non_white_area = cv2.countNonZero(cv2.bitwise_not(white_mask))
-    if non_white_area == 0:
-        return False
-    orange_ratio = cv2.countNonZero(combined_mask) / non_white_area
-    return orange_ratio > threshold

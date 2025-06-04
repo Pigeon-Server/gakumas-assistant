@@ -1,9 +1,11 @@
 from time import sleep
 from typing import TYPE_CHECKING
 
+import cv2
+
 from src.constants import *
 from src.entity.Game.Page.Types.index import GamePageTypes
-from src.entity.Yolo import Yolo_Box
+from src.entity.Yolo import Yolo_Box, Yolo_Results
 from src.utils.logger import logger
 from src.utils.ocr_instance import get_ocr
 from src.utils.opencv_tools import check_color_in_region
@@ -12,6 +14,7 @@ from src.utils.yolo_tools import get_modal
 if TYPE_CHECKING:
     from app import AppProcessor
 
+MAX_WORKS = 2
 
 def action__enter_dispatch_page(app: "AppProcessor"):
     """进入页面并收取历史派遣结果逻辑"""
@@ -21,35 +24,52 @@ def action__enter_dispatch_page(app: "AppProcessor"):
     sleep(1)
     app.wait__loading()
 
-    while True:
+    count = 0
+
+    while count < MAX_WORKS:
         app.update_current_location()
         if app.game_status_manager.current_location == GamePageTypes.HOME_TAB.WORK:
-            break
+            return
         if app.wait_for_label(base_labels.modal_header, 3):
             modal = get_modal(app.latest_results, app.latest_frame, True)
             app.app.click_element(modal.cancel_button)
+            count += 1
             sleep(3)
+    else:
+        raise RuntimeError("Too many attempts to claim daily dispatch task.")
 
 def action__dispatch_all_available_work(app: "AppProcessor"):
     """派遣任务逻辑"""
     height, width = app.latest_frame.shape[:2]
     item_group = app.latest_results.filter_by_label(base_labels.item).group_yolo_boxes_by_position(10, width / 4)
 
-    if len(item_group) != 2:
+    if len(item_group) != MAX_WORKS:
         raise RuntimeError("Error in calculating the range of the box body")
 
     for group in item_group:
         if _is_work_already_dispatched(app, group, width):
             continue
         _dispatch_single_work(app, group)
+        sleep(3)
+        app.wait_for_label(base_labels.avatar, 10)
 
 def _is_work_already_dispatched(app: "AppProcessor", group, width):
     """判断该任务是否已派遣"""
     return group.get_vertical_range_elements(app.latest_results, width / 4).exists_label(base_labels.avatar)
 
-def _is_avatar_busy(avatar):
+def _is_avatar_busy(avatar, full_frame):
     """判断角色是否“工作中”"""
-    return "お仕事中" in [ocr_obj.text for ocr_obj in get_ocr(avatar.frame)]
+    h, w = full_frame.shape[:2]
+
+    x1 = max(0, avatar.x - 10)
+    y1 = max(0, avatar.y - 10)
+    x2 = min(w, avatar.w)
+    y2 = min(h, avatar.cy)
+
+    target_frame = full_frame[y1:y2, x1:x2]
+
+    ocr_result = get_ocr(target_frame)
+    return "お仕事中" in [ocr_obj.text for ocr_obj in ocr_result]
 
 def _is_avatar_guaranteed_success(avatar):
     """判断角色是否带有标志“好調：大成功確定”"""
@@ -59,9 +79,9 @@ def _is_avatar_guaranteed_success(avatar):
     rgb_upper = (89, 186, 260)
     return check_color_in_region(avatar.frame, region, rgb_lower, rgb_upper, 20)
 
-def _assign_avatar_to_work(app: "AppProcessor", avatar):
+def _assign_avatar_to_work(app: "AppProcessor", avatar=None):
     """选中角色并点击时长按钮"""
-    app.app.click_element(avatar)
+    if avatar: app.app.click_element(avatar)
     sleep(0.5)
     app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_min_element().first())
     sleep(1)
@@ -100,14 +120,25 @@ def _dispatch_single_work(app: "AppProcessor", group):
     """派遣单个任务"""
     app.app.click_element(group)
     sleep(1)
-    avatars = app.latest_results.filter_by_label(base_labels.avatar)
-
-    for avatar in avatars:
-        if _is_avatar_busy(avatar):
-            logger.debug("Skip 'お仕事中' avatar")
-            continue
-        if _is_avatar_guaranteed_success(avatar):
-            _assign_avatar_to_work(app, avatar)
-            break
-    app.wait_for_label(base_labels.avatar, 10)
+    def _exec():
+        avatars = app.latest_results.filter_by_label(base_labels.avatar)
+        avatars = Yolo_Results.from_boxes([avatar for avatar in avatars if avatar.x >= 10])
+        for avatar in avatars:
+            sleep(0.5)
+            cv2.imshow("avatar", avatar.frame)
+            cv2.waitKey(10)
+            if _is_avatar_busy(avatar, app.latest_frame):
+                logger.debug("Skip 'お仕事中' avatar")
+                continue
+            if _is_avatar_guaranteed_success(avatar):
+                _assign_avatar_to_work(app, avatar)
+                return True
+        return False
+    if not _exec():
+        avatars = app.latest_results.filter_by_label(base_labels.avatar)
+        x, y = avatars.get_COL()
+        app.app.scrollY(x, y, -10)
+        sleep(1)
+        _exec()
+        _assign_avatar_to_work(app)
 

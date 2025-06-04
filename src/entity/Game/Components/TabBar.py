@@ -5,8 +5,8 @@ import cv2
 import numpy as np
 
 from src.entity.Yolo import Yolo_Box
-from src.utils.ocr_instance import get_ocr, OCR_Result
-from src.utils.yolo_tools import check_status_detection
+from src.utils.ocr_instance import get_ocr
+from src.utils.opencv_tools import check_status_detection
 
 
 @dataclass
