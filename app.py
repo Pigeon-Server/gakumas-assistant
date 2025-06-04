@@ -219,7 +219,6 @@ class AppProcessor:
                 wait_time += interval
                 sleep(interval)
                 continue
-            print(modal)
             if modal_title is not None and modal_title in modal.modal_title:
                 return modal
             elif modal_title is None:
