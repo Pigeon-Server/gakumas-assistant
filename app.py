@@ -93,11 +93,11 @@ class AppProcessor:
         else:
             raise ValueError(f'Unknown model type: {model_type}')
 
-    def register_task(self, task_name: str, description: str):
+    def register_task(self, task_name: str, description: str, timeout: int | None = None):
         """实例方法：注册任务"""
         logger.debug(f"register task: {task_name}")
         def decorator(func: Callable):
-            self.task_queue.reg_task(task_name, description, func)
+            self.task_queue.reg_task(task_name, description, func, timeout)
         return decorator
 
     def register_middleware(self):
@@ -204,24 +204,29 @@ class AppProcessor:
     def wait_for_modal(self, modal_title, timeout=30, interval=1, no_body: bool = False):
         """等待指定标题的模态框出现"""
         wait_time = 0
-        count = 0
         logger.debug(f"waiting modal: {modal_title}")
         while wait_time < timeout:
-            if count > 3:
-                modal = get_modal(self.latest_results, self.latest_frame, no_body)
-                if modal.modal_title == modal_title:
-                    return modal
-                return False
-
-            if not (self.latest_results.filter_by_label(base_labels.modal_header) and self.latest_results.filter_by_label(
-                    base_labels.button)):
+            if not (
+                    self.latest_results.filter_by_label(base_labels.modal_header) and
+                    self.latest_results.filter_by_label(base_labels.button)
+            ):
                 sleep(interval)
-                count = 0
                 wait_time += interval
                 continue
+
+            modal = get_modal(self.latest_results, self.latest_frame, no_body)
+            if modal is None:
+                wait_time += interval
+                sleep(interval)
+                continue
+            print(modal)
+            if modal_title is not None and modal_title in modal.modal_title:
+                return modal
+            elif modal_title is None:
+                return modal
             else:
-                count += 1
-                sleep(0.3)
+                wait_time += interval
+                sleep(interval)
         return False
 
     def click_on_label(self, label, timeout=30, interval=1):
@@ -258,9 +263,28 @@ class AppProcessor:
         raise TimeoutError("Waiting for a load timeout")
 
     def go_home(self):
-        logger.debug("Going home")
-        if not self.click_on_label(base_labels.go_home_btn, 3):
-            raise TimeoutError("Waiting for a go home button timeout")
+        self.update_current_location()
+        if self.game_status_manager.current_location == GamePageTypes.MAIN_MENU__HOME:
+            return
+        for _ in range(5):
+            logger.debug(f"[{_}]Try going home")
+            main_menu_items = [
+                value for name, value in vars(GamePageTypes).items()
+                if name.startswith("MAIN_MENU__")
+            ]
+            if self.game_status_manager.current_location in main_menu_items:
+                self.app.click_element(self.latest_results.filter_by_label(base_labels.tab_home).first())
+                self.wait__loading()
+                self.update_current_location()
+                return
+            elif go_home_btn := self.latest_results.filter_by_label(base_labels.go_home_btn):
+                self.app.click_element(go_home_btn.first())
+                self.wait__loading()
+                self.update_current_location()
+                return
+            sleep(2)
+        raise RuntimeError("Going home failed")
+
 
     def back_next_page(self):
         logger.debug("Going back next page")
@@ -270,10 +294,11 @@ class AppProcessor:
             raise TimeoutError("Waiting for a back button timeout")
 
     def update_current_location(self):
+        logger.debug("Updating current location......")
         current_location = get_current_location(self.latest_results)
         if current_location and current_location != self.game_status_manager.current_location:
             self.game_status_manager.current_location = current_location
-            logger.info(f"Current location: {self.game_status_manager.current_location}")
+            logger.debug(f"Current location: {self.game_status_manager.current_location}")
 
     def start(self):
         if not self.running or self._pause_capture_frame:
@@ -308,113 +333,3 @@ def shutdown_event():
 def start_event():
     sleep(5)
     processor.start()
-
-# def action__back_home(app: AppProcessor):
-#     """返回主页面"""
-
-# @processor.register_middleware()
-# @logger.catch
-# def _update_location(app: AppProcessor):
-#     if app.game_status_manager.current_location == GamePageTypes.UNKNOWN:
-#         app.update_current_location()
-#
-# @processor.register_task("start_game", "启动游戏")
-# @logger.catch
-# def _task__start_game(app: AppProcessor):
-#     print(get_current_location(app.latest_results))
-#     TIMEOUT = 30
-#     if action__click_start_game(app, TIMEOUT) is not False:
-#         sleep(2)
-#         app.wait__loading()
-#         handle__network_error_modal_boxes(app)
-#     action__check_home_tab_exist(app)
-#     print(get_current_location(app.latest_results))
-#
-# @processor.register_task("get_expenditure", "获取活动费")
-# @logger.catch
-# def _task__get_expenditure(app: AppProcessor):
-#     if tab_home := app.latest_results.filter_by_label(base_labels.tab_home):
-#         tab_home = tab_home[0]
-#         app.app.click_element(tab_home)
-#         if not app.wait_for_label(base_labels.home_get_expenditure):
-#             raise TimeoutError("Timeout waiting for home expenditure to appear.")
-#         get_expenditure_btn = app.latest_results.filter_by_label(base_labels.home_get_expenditure, True)
-#         app.app.click_element(get_expenditure_btn)
-#         if modal := app.wait_for_modal("活動費", no_body=True):
-#             app.app.click_element(modal.cancel_button)
-#             sleep(3)
-#             return True
-#         else:
-#             raise TimeoutError("Timeout waiting for modal to appear.")
-#     else:
-#         raise RuntimeError("当前不在主页")
-#
-# @processor.register_task("dispatch_work", "派遣任务")
-# @logger.catch
-# def _task__dispatch_work(app: AppProcessor):
-#     if tab_home := app.latest_results.filter_by_label(base_labels.tab_home):
-#         tab_home = tab_home[0]
-#         app.app.click_element(tab_home)
-#         if not app.wait_for_label(base_labels.home_dispatch_work):
-#             raise TimeoutError("Timeout waiting for home dispatch work to appear.")
-#         dispatch_work_btn = app.latest_results.filter_by_label(base_labels.home_dispatch_work, True)
-#         app.app.click_element(dispatch_work_btn)
-#         sleep(2)
-#         app.wait__loading()
-#         sleep(5)
-#         while True:
-#             if not app.latest_results.filter_by_label(base_labels.modal_header):
-#                 break
-#             if modal := app.wait_for_modal("お仕事完了", no_body=True):
-#                 app.app.click_element(modal.confirm_button)
-#                 sleep(2)
-#                 if not app.wait_for_label(base_labels.modal_header, 10):
-#                     break
-#         sleep(1)
-#         # TODO 重新派遣
-#         # print("latest_results: ", app.latest_results)
-#         group = group_yolo_boxes_by_position(app.latest_results.filter_by_label(base_labels.item))
-#         _, width = app.latest_frame.shape[:2]
-#         for g in group:
-#             if len(g.boxes) > 2:
-#                 continue
-#             # logger.debug(g)
-#             vertical_elements = g.get_vertical_range_elements(app.latest_results.yolo_boxs, int(width / 4))
-#             print("vertical_elements:", vertical_elements)
-#             print("\n\n")
-#         app.go_home()
-#         app.wait__loading()
-#         return True
-#     else:
-#         raise RuntimeError("当前不在主页")
-#
-# @processor.register_task("get_gift", "获取礼物/邮箱")
-# @logger.catch
-# def _task__get_gift(app: AppProcessor):
-#     if tab_home := app.latest_results.filter_by_label(base_labels.tab_home):
-#         tab_home = tab_home[0]
-#         app.app.click_element(tab_home)
-#         if not app.wait_for_label(base_labels.home_gift_btn):
-#             raise TimeoutError("Timeout waiting for Home: Gift Button to appear.")
-#         sleep(2)
-#         if confirm_button := app.latest_results.filter_by_label(base_labels.confirm_button):
-#             confirm_button = confirm_button[0]
-#             app.app.click_element(confirm_button)
-#             sleep(1)
-#             if modal := app.wait_for_modal("受取完了", no_body=True):
-#                 app.click_on_label(modal.cancel_button)
-#             sleep(1)
-#             app.go_home()
-#         elif app.latest_results.filter_by_label(base_labels.disable_button):
-#             logger.debug("There are no gifts to be claimed")
-#     else:
-#         raise RuntimeError("当前不在主页")
-#
-# @processor.register_task("claim_task_rewards", "领取任务奖励")
-# @logger.catch
-# def _task__claim_task_rewards(app: AppProcessor):
-#     if tab_home := app.latest_results.filter_by_label(base_labels.tab_home):
-#         tab_home = tab_home[0]
-#         app.app.click_element(tab_home)
-#     else:
-#         raise RuntimeError("当前不在主页")

@@ -11,7 +11,7 @@ class PlayerInfo:
 
 class GameStatusManager:
     player: PlayerInfo = PlayerInfo()
-    current_location: str = GamePageTypes.UNKNOWN
+    current_location: str = None
     page_entity: object
 
     def __init__(self):

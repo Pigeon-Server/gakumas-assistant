@@ -5,8 +5,7 @@ pyautogui
 pydirectinput
 loguru
 numpy
-paddlepaddle
-paddleocr
+easyocr
 adbutils
 fastapi
 uvicorn[standard]

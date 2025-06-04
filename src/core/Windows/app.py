@@ -7,7 +7,7 @@ import pyautogui
 import win32gui
 import pydirectinput
 
-from src.entity.Yolo import Yolo_Box
+from src.entity.Yolo import Yolo_Box, Yolo_Results
 from src.utils.logger import logger
 
 class Windows_App:
@@ -72,6 +72,7 @@ class Windows_App:
     def click(self, x, y, el_label = ""):
         """
         点击窗口内容
+        :param el_label:
         :param x:
         :param y:
         :return:
@@ -86,5 +87,5 @@ class Windows_App:
         return True
 
     @logger.catch
-    def click_element(self, element: Yolo_Box):
-        self.click(*element.get_COL(), element.label)
+    def click_element(self, element: Yolo_Box | Yolo_Results):
+        self.click(*element.get_COL(), hasattr(element, "label"))

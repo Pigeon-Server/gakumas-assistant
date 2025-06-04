@@ -1,12 +1,15 @@
 from typing import List
 
+import cv2
+
 from src.entity.Yolo import Yolo_Results, Yolo_Box
 from src.constants import *
 from src.entity.Game.Page.Types.index import GamePageTypes
+from src.utils.logger import logger
 from src.utils.ocr_instance import get_ocr
 from src.utils.yolo_tools import check_status_detection
 
-
+@logger.catch
 def get_current_location(boxes: Yolo_Results) -> str | None:
     if boxes.exists_label(base_labels.start_menu_logo): return GamePageTypes.START_GAME
     if boxes.exists_label(base_labels.general_loading1) or boxes.exists_label(
@@ -48,13 +51,15 @@ def get_current_location(boxes: Yolo_Results) -> str | None:
         for item in home_tab_bar:
             if check_status_detection(item.frame):
                 return TAB_LABEL_TO_PAGE.get(item.label)
-    if boxes.exists_label(base_labels.current_location):
+    elif boxes.exists_label(base_labels.current_location):
         current_location = boxes.filter_by_label(base_labels.current_location).first()
+        if current_location.frame is None or current_location.frame.size == 0:
+            return GamePageTypes.UNKNOWN
         location_text = get_ocr(current_location.frame)
         if location_text is None:
-            return None
+            return GamePageTypes.UNKNOWN
         location_text = " ".join([ocr_item.text for ocr_item in location_text])
         for label in TAB_LABEL_TO_PAGE.keys():
             if label in location_text:
                 return TAB_LABEL_TO_PAGE.get(label)
-    return None
+    return GamePageTypes.UNKNOWN

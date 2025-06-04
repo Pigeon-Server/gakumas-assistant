@@ -5,6 +5,7 @@ import threading
 from paddleocr import PaddleOCR
 from src.utils.logger import logger
 
+
 class PaddleOCRLoader:
     _instance = None
     _lock = threading.Lock()
@@ -19,6 +20,7 @@ class PaddleOCRLoader:
                     show_log=False
                 )
             return cls._instance
+
 
 @dataclass
 class OCR_Result:
@@ -37,9 +39,11 @@ class OCR_Result:
         self.text = text
         self.confidence = confidence
 
+
 def init_ocr():
     logger.info("loading PaddleOCR......")
     PaddleOCRLoader()
+
 
 def get_ocr(img: np.array):
     """
@@ -60,8 +64,15 @@ def get_ocr(img: np.array):
 
         return [round(x), round(y), round(w), round(h)]
 
-    loader = PaddleOCRLoader()
-    result = loader.ocr.ocr(img, cls=False)
+    # loader = PaddleOCRLoader()
+    # result = loader.ocr.ocr(img, cls=False)
+
+    loader = PaddleOCR(
+        lang='japan',
+        # use_angle_cls=False,
+        show_log=False
+    )
+    result = loader.ocr(img, cls=False)
 
     if not result or not result[0]:
         return []

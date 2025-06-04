@@ -1,4 +1,6 @@
+import sys
 from dataclasses import dataclass
+from functools import partial
 from queue import Queue
 from typing import Callable
 from threading import Thread
@@ -6,6 +8,13 @@ from time import time
 
 from src.utils.logger import logger
 
+class TaskStatus:
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    RETRY = "RETRY"
+    FAILED = "FAILED"
+    CANCELED = "CANCELED"
 
 @dataclass
 class Task:
@@ -13,20 +22,38 @@ class Task:
     description: str
     enable: bool
     function: Callable
+    timeout: int
+    status: str = TaskStatus.PENDING
+    _start_time: int | None = -1
+    _end_time: int | None = -1
     last_run_time: float = 0
 
-    def __init__(self, name: str, description: str, enable: bool, function: Callable):
+    def __init__(self, name: str, description: str, enable: bool, function: Callable, timeout: int = 30):
         """
         :param name: 任务名
         :param description: 任务介绍
         :param enable: 是否启用
         :param function: 方法
+        :param timeout: 任务超时事件
         """
         self.name = name
         self.description = description
         self.enable = enable
         self.function = function
+        self.timeout = timeout
 
+    def update_start_time(self):
+        self._start_time = int(time())
+        self.last_run_time = self._start_time
+        self._end_time = None
+        return self._start_time
+
+    def update_end_time(self):
+        self._end_time = int(time())
+        return self._end_time
+
+    def get_start_time(self):
+        return self._start_time
 
 class TaskQueue:
     _app = None
@@ -40,13 +67,13 @@ class TaskQueue:
         self._worker_thread = Thread(target=self._processor_task_queue, daemon=True)
         self._worker_thread.start()
 
-    def reg_task(self, task_name: str, task_description: str, task_func: Callable):
+    def reg_task(self, task_name: str, task_description: str, task_func: Callable, timeout: int | None = None):
         """
         注册任务
         """
         if self._find_task(task_name):
             raise RuntimeError(f"Duplicate task name: {task_name}")
-        self._task_list.append(Task(task_name, task_description, True, task_func))
+        self._task_list.append(Task(task_name, task_description, True, task_func, timeout))
 
     def exec_task(self):
         """执行任务"""
@@ -75,22 +102,40 @@ class TaskQueue:
             logger.info(f"Run task: {task.name}")
             self._task_thread(task)
 
-    def _task_thread(self, task: Task):
-        """执行任务，并处理超时"""
-        start_time = time()
+    def _trace_calls(self, frame, event, arg, task: Task):
+        if task.timeout and task.timeout != -1 and task.get_start_time() - int(time()) > task.timeout:
+            task.status = TaskStatus.FAILED
+            raise TimeoutError(f"Task {task.name} execution timed out.")
+        if frame.f_code.co_name != task.function.__name__:
+            return partial(self._trace_calls, task=task)
+        elif event == 'line':
+            lineno = frame.f_lineno
+            filename = frame.f_globals["__file__"]
+            logger.debug(f"[LINE] {filename}:{lineno}")
+        return partial(self._trace_calls, task=task)
 
+    def _task_thread(self, task: Task):
+        """执行任务"""
         logger.debug(f"Executing task: {task.name}")
 
         def wrapper():
             try:
-                task.function(self._app)
+                task.status = TaskStatus.RUNNING
+                sys.settrace(partial(self._trace_calls, task=task))
+                if task.function(self._app) is False:
+                    task.status = TaskStatus.FAILED
+                else:
+                    task.status = TaskStatus.SUCCESS
             except Exception as e:
+                task.status = TaskStatus.FAILED
                 logger.error(f"Task {task.name} failed: {e}")
+            finally:
+                task.update_end_time()
+                sys.settrace(None)
 
         worker = Thread(target=wrapper, daemon=True)
         worker.start()
         worker.join()
-        task.last_run_time = start_time # 记录任务执行时间
 
     def _find_task(self, task_name: str):
         """查找任务"""
@@ -103,7 +148,15 @@ class TaskQueue:
     def get_task_list(self):
         """获取所有任务列表"""
         return [
-            {task.name: {"description": task.description, "enable": task.enable, "last_run_time": task.last_run_time}}
+            {
+                task.name: {
+                "description": task.description,
+                "enable": task.enable,
+                "last_run_time": task.last_run_time,
+                "start_time": task.get_start_time(),
+                "status": task.status,
+                }
+            }
             for task in self._task_list
         ]
 

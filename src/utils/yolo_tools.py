@@ -10,6 +10,7 @@ from src.entity.Yolo import Yolo_Box, Yolo_Results
 from src.utils.ocr_instance import get_ocr
 from src.utils.logger import logger
 
+@logger.catch
 def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False) -> Modal | None:
     """
     获取模态框
@@ -20,16 +21,13 @@ def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False)
     """
     # try:
     # 获取模态框头部
-    modal = yolo_result.find_containing_groups(base_labels.modal_header, [base_labels.button], 'or')
+    modal = yolo_result.filter_by_labels([base_labels.modal_header, base_labels.button])
     if not modal:
         raise ValueError("未找到模态框")
-    modal = modal[0]
     modal_header = modal.filter_by_label(base_labels.modal_header).first()
     modal_header_text = get_ocr(modal_header.frame)[0].text
     # 获取确认和取消按钮
-    # TODO: 因在BaseUI模型中取消了confirm_button和cancel_button按钮区分，需重构此部分
     buttons = modal.filter_by_label(base_labels.button).group_yolo_boxes_by_position(30, None)
-    print(buttons)
     if buttons:
         buttons = buttons[0]
         confirm_button = buttons.get_x_max_element()
@@ -39,7 +37,6 @@ def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False)
         buttons = modal.filter_by_label(base_labels.button).get_y_min_element()
         confirm_button = None
         cancel_button = buttons
-    print(confirm_button, cancel_button)
     if not confirm_button and not cancel_button:
         raise ValueError("未找到确认或取消按钮")
     confirm_button = Button(confirm_button.first()) if confirm_button else None
@@ -52,16 +49,13 @@ def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False)
     modal_body_frame = frame[modal_header.h:modal_body_y, modal_header.x:modal_header.w]
     modal_body_text = "" if no_body else " ".join([item.text for item in get_ocr(modal_body_frame)])
     modal_obj = Modal(modal_header_text, modal_body_text, confirm_button, cancel_button)
-    logger.debug(modal_obj)
+    # logger.debug(modal_obj)
     return modal_obj
 
-    # except Exception as e:
-    #     logger.error(f"解析模态框失败: {e}")
-    #     return None
-
+@logger.catch
 def check_status_detection(frame: np.array, threshold=0.15, upper_color: Tuple[int, int, int] = (22, 255, 255), lower_color: Tuple[int, int, int]=(8, 100, 100)):
     """
-    选中状态检测：忽略白色背景，专注文本区域橙色标记
+    选中状态检测：忽略白色背景，专注文本区域标记
     """
     if frame.size == 0:
         return False
