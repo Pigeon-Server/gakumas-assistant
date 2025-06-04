@@ -34,7 +34,7 @@ def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False)
         cancel_button = buttons.get_x_min_element()
     else:
         # 不区分按钮类型时，取最下面的按钮作为取消按钮
-        buttons = modal.filter_by_label(base_labels.button).get_y_min_element()
+        buttons = modal.filter_by_label(base_labels.button).get_y_max_element()
         confirm_button = None
         cancel_button = buttons
     if not confirm_button and not cancel_button:

@@ -83,14 +83,14 @@ def _assign_avatar_to_work(app: "AppProcessor", avatar=None):
     """选中角色并点击时长按钮"""
     if avatar: app.app.click_element(avatar)
     sleep(0.5)
-    app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_min_element().first())
+    app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_max_element().first())
     sleep(1)
     app.wait_for_label(base_labels.button)
 
     duration_box = _select_work_duration(app)
     app.app.click_element(duration_box)
     sleep(1)
-    app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_min_element().first())
+    app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_max_element().first())
     sleep(1)
 
     modal = app.wait_for_modal("お仕事開始確認", 10, no_body=True)
@@ -101,7 +101,7 @@ def _select_work_duration(app: "AppProcessor"):
     """选择工作时长"""
     frame_h, frame_w = app.latest_frame.shape[:2]
     y_start = frame_h // 2
-    y_end = int(app.latest_results.filter_by_label(base_labels.button).get_y_min_element().first().y)
+    y_end = int(app.latest_results.filter_by_label(base_labels.button).get_y_max_element().first().y)
     y_end = min(frame_h, max(y_start + 1, y_end))
     frame = app.latest_frame[y_start:y_end, 0:frame_w]
 

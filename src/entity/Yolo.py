@@ -139,13 +139,13 @@ class Yolo_Results:
         return all(label in existing_labels for label in labels)
 
     def get_y_min_element(self) -> Optional["Yolo_Results"]:
-        """返回Y轴最小的元素（最靠下）"""
+        """返回Y轴最小的元素（最靠上）"""
         if not self.boxes:
             return None
         return self.from_boxes([min(self.boxes, key=lambda box: box.y)])
 
     def get_y_max_element(self) -> Optional["Yolo_Results"]:
-        """返回Y轴最小的元素（最靠上）"""
+        """返回Y轴最小的元素（最靠下）"""
         if not self.boxes:
             return None
         return self.from_boxes([max(self.boxes, key=lambda box: box.h)])

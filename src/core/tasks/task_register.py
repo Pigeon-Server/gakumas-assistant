@@ -55,36 +55,34 @@ def register_tasks(processor: "AppProcessor"):
     #         return True
     #     raise TimeoutError("Timeout waiting for modal to appear.")
 
-    @processor.register_task("dispatch_work", "派遣任务", 30)
+    # @processor.register_task("dispatch_work", "派遣任务", 30)
+    # @logger.catch
+    # def _task__dispatch_work(app: "AppProcessor"):
+    #     app.go_home()
+    #     app.wait__loading()
+    #     action__enter_dispatch_page(app)
+    #     action__dispatch_all_available_work(app)
+
+    @processor.register_task("get_gift", "获取礼物/邮箱")
     @logger.catch
-    def _task__dispatch_work(app: "AppProcessor"):
+    def _task__get_gift(app: "AppProcessor"):
         app.go_home()
         app.wait__loading()
-        action__enter_dispatch_page(app)
-        action__dispatch_all_available_work(app)
-
-    #
-    # @processor.register_task("get_gift", "获取礼物/邮箱")
-    # @logger.catch
-    # def _task__get_gift(app: AppProcessor):
-    #     if tab_home := app.latest_results.filter_by_label(base_labels.tab_home):
-    #         tab_home = tab_home[0]
-    #         app.app.click_element(tab_home)
-    #         if not app.wait_for_label(base_labels.home_gift_btn):
-    #             raise TimeoutError("Timeout waiting for Home: Gift Button to appear.")
-    #         sleep(2)
-    #         if confirm_button := app.latest_results.filter_by_label(base_labels.confirm_button):
-    #             confirm_button = confirm_button[0]
-    #             app.app.click_element(confirm_button)
-    #             sleep(1)
-    #             if modal := app.wait_for_modal("受取完了", no_body=True):
-    #                 app.click_on_label(modal.cancel_button)
-    #             sleep(1)
-    #             app.go_home()
-    #         elif app.latest_results.filter_by_label(base_labels.disable_button):
-    #             logger.debug("There are no gifts to be claimed")
-    #     else:
-    #         raise RuntimeError("当前不在主页")
+        if not app.wait_for_label(base_labels.home_gift_btn):
+            raise TimeoutError("Timeout waiting for [home:gift] to appear.")
+        app.app.click_element(app.latest_results.filter_by_label(base_labels.home_gift_btn).first())
+        sleep(3)
+        if not app.latest_results.exists_label(base_labels.item):
+            logger.info("Not to collect gifts")
+            return
+        app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_max_element().first())
+        sleep(1)
+        if app.wait_for_label(base_labels.modal_header, 10):
+            modal = get_modal(app.latest_results)
+            app.app.click_element(modal.cancel_button)
+            sleep(1)
+        else:
+            raise TimeoutError("Timeout waiting for [modal:header] to appear.")
     #
     # @processor.register_task("claim_task_rewards", "领取任务奖励")
     # @logger.catch
