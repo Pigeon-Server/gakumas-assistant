@@ -9,10 +9,12 @@
  - 领取活动费
  - 每日派遣
  - 自动领取礼物
+ - 自动每日竞技场
 ### 待实现/待完善：
  - 工具框架
  - WebUI
  - 完善任务
+ - 自动P卡
 
 ## License
 Copyright © 2020-2025 Pigeon Server Team, All rights reserved.

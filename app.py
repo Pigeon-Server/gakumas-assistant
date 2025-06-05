@@ -67,6 +67,8 @@ class AppProcessor:
         self._middleware_registry = []
         self.task_queue = TaskQueue(self)
         self.game_status_manager = GameStatusManager()
+        register_tasks(self)
+        register_middlewares(self)
         self.start()
         logger.success("Application Initialized")
 
@@ -341,8 +343,6 @@ processor = AppProcessor()
 ws_manager = WebSocketManager()
 
 register_routes(app, processor, ws_manager)
-register_tasks(processor)
-register_middlewares(processor)
 
 @app.on_event("shutdown")
 def shutdown_event():
