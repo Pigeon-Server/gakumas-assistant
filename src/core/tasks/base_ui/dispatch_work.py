@@ -26,7 +26,7 @@ def action__enter_dispatch_page(app: "AppProcessor"):
 
     count = 0
 
-    while count < MAX_WORKS:
+    while count < MAX_WORKS + 2:
         app.update_current_location()
         if app.game_status_manager.current_location == GamePageTypes.HOME_TAB.WORK:
             return
@@ -93,7 +93,7 @@ def _assign_avatar_to_work(app: "AppProcessor", avatar=None):
     app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_max_element().first())
     sleep(1)
 
-    modal = app.wait_for_modal("お仕事開始確認", 10, no_body=True)
+    modal = app.wait_for_modal("仕事開始確", 10, no_body=True)
     app.app.click_element(modal.confirm_button)
     sleep(1)
 
@@ -124,9 +124,8 @@ def _dispatch_single_work(app: "AppProcessor", group):
         avatars = app.latest_results.filter_by_label(base_labels.avatar)
         avatars = Yolo_Results.from_boxes([avatar for avatar in avatars if avatar.x >= 10])
         for avatar in avatars:
-            sleep(0.5)
-            cv2.imshow("avatar", avatar.frame)
-            cv2.waitKey(10)
+            # cv2.imshow("avatar", avatar.frame)
+            # cv2.waitKey(10)
             if _is_avatar_busy(avatar, app.latest_frame):
                 logger.debug("Skip 'お仕事中' avatar")
                 continue

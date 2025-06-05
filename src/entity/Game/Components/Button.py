@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from typing import List
 
-from src.entity.Yolo import Yolo_Box
+from src.entity.Yolo import Yolo_Box, Yolo_Results
+from src.constants import *
 from src.utils.ocr_instance import get_ocr
 
 
@@ -16,8 +17,26 @@ class Button(Yolo_Box):
 class ButtonList:
     buttons: List[Button]
 
-    def get_button_by_text(self, text):
+    def __init__(self, yolo_results: Yolo_Results):
+        self.buttons = [Button(el) for el in yolo_results.filter_by_label(base_labels.button)]
+
+    def __bool__(self):
+        return bool(self.buttons)
+
+    def __len__(self):
+        return len(self.buttons)
+
+    def __iter__(self):
+        return iter(self.buttons)
+
+    @classmethod
+    def from_list(cls, buttons: List[Button]):
+        inst = cls.__new__(cls)
+        inst.buttons = buttons
+        return inst
+
+    def get_button_by_text(self, text) -> Button | None:
         for button in self.buttons:
-            if button.text == text:
+            if text in button.text:
                 return button
         return None

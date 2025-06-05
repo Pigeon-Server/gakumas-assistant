@@ -108,10 +108,10 @@ class TaskQueue:
             raise TimeoutError(f"Task {task.name} execution timed out.")
         if frame.f_code.co_name != task.function.__name__:
             return partial(self._trace_calls, task=task)
-        elif event == 'line':
-            lineno = frame.f_lineno
-            filename = frame.f_globals["__file__"]
-            logger.debug(f"[LINE] {filename}:{lineno}")
+        # elif event == 'line':
+        #     lineno = frame.f_lineno
+        #     filename = frame.f_globals["__file__"]
+        #     logger.debug(f"[LINE] {filename}:{lineno}")
         return partial(self._trace_calls, task=task)
 
     def _task_thread(self, task: Task):
@@ -128,6 +128,7 @@ class TaskQueue:
                     task.status = TaskStatus.SUCCESS
             except Exception as e:
                 task.status = TaskStatus.FAILED
+                self.stop()
                 logger.error(f"Task {task.name} failed: {e}")
             finally:
                 task.update_end_time()

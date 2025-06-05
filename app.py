@@ -19,6 +19,7 @@ from src.core.middlewares.middleware_register import register_middlewares
 from src.core.tasks.base_ui.start_game import action__click_start_game, handle__network_error_modal_boxes, \
     action__check_home_tab_exist
 from src.core.tasks.task_register import register_tasks
+from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Game_Info import GameStatusManager
 from src.entity.Game.Page.Types.index import GamePageTypes
 from src.entity.WebSocket_Data import WebSocket_Data
@@ -203,32 +204,31 @@ class AppProcessor:
 
     def wait_for_modal(self, modal_title, timeout=30, interval=1, no_body: bool = False):
         """等待指定标题的模态框出现"""
+        logger.debug(f"Waiting for modal with title: {modal_title}")
         wait_time = 0
-        logger.debug(f"waiting modal: {modal_title}")
-        while wait_time < timeout:
-            if not (
-                    self.latest_results.filter_by_label(base_labels.modal_header) and
-                    self.latest_results.filter_by_label(base_labels.button)
-            ):
-                sleep(interval)
-                wait_time += interval
-                continue
 
-            modal = get_modal(self.latest_results, self.latest_frame, no_body)
-            if modal is None:
-                wait_time += interval
-                sleep(interval)
-                continue
-            if modal_title is not None and modal_title in modal.modal_title:
-                return modal
-            elif modal_title is None:
-                return modal
+        while wait_time < timeout:
+            headers = self.latest_results.filter_by_label(base_labels.modal_header)
+            buttons = self.latest_results.filter_by_label(base_labels.button)
+
+            if not (headers and buttons):
+                logger.debug(f"No modal header or button found, waiting... ({wait_time}/{timeout})")
             else:
-                wait_time += interval
-                sleep(interval)
+                modal = get_modal(self.latest_results, self.latest_frame, no_body)
+                if modal:
+                    if modal_title is None or modal_title in modal.modal_title:
+                        logger.debug(f"Modal found: {modal.modal_title}")
+                        return modal
+                    else:
+                        logger.debug(f"Modal title '{modal.modal_title}' does not match '{modal_title}'")
+
+            sleep(interval)
+            wait_time += interval
+
+        logger.warning(f"Timeout reached ({timeout}s): modal with title '{modal_title}' not found.")
         return False
 
-    def click_on_label(self, label, timeout=30, interval=1):
+    def click_on_label(self, label, timeout=10, interval=1):
         """等待指定标签并点击"""
         wait_time = 0
         count = 0
@@ -261,6 +261,23 @@ class AppProcessor:
                 return True
         raise TimeoutError("Waiting for a load timeout")
 
+    def click_button(self, text, timeout=10):
+        """点击指定文字按钮"""
+        logger.debug(f"waiting click label: {text}")
+        self.app.click_element(self.wait__button(text,timeout))
+
+    def wait__button(self, text, timeout=10):
+        """等待指定文字按钮"""
+        COUNT = 0
+        while COUNT < timeout:
+            buttons = ButtonList(self.latest_results)
+            print(buttons)
+            if button := buttons.get_button_by_text(text):
+                return button
+            sleep(1)
+            COUNT += 1
+        raise TimeoutError(f"Waiting for {text} button timeout")
+
     def go_home(self):
         self.update_current_location()
         if self.game_status_manager.current_location == GamePageTypes.MAIN_MENU__HOME:
@@ -292,12 +309,15 @@ class AppProcessor:
         else:
             raise TimeoutError("Waiting for a back button timeout")
 
-    def update_current_location(self):
+    def update_current_location(self, location: str = None):
         logger.debug("Updating current location......")
-        current_location = get_current_location(self.latest_results)
-        if current_location and current_location != self.game_status_manager.current_location:
-            self.game_status_manager.current_location = current_location
-            logger.debug(f"Current location: {self.game_status_manager.current_location}")
+        if location:
+            self.game_status_manager.current_location = location
+        else:
+            current_location = get_current_location(self.latest_results)
+            if current_location and current_location != self.game_status_manager.current_location:
+                self.game_status_manager.current_location = current_location
+        logger.debug(f"Current location: {self.game_status_manager.current_location}")
 
     def start(self):
         if not self.running or self._pause_capture_frame:
