@@ -41,11 +41,14 @@ def action__check_home_tab_exist(app: "app.AppProcessor", timeout=30):
         if close_btn := app.latest_results.filter_by_label(labels.close_button):
             app.app.click_element(close_btn.first())
             sleep(2)
+        if skip_btn := app.latest_results.filter_by_label(labels.skip_button):
+            app.app.click_element(skip_btn.first())
+            sleep(2)
         elif app.latest_results.exists_label(labels.tab_home):
             return True
         else:
             height, width = app.latest_frame.shape[:2]
-            app.app.click(int(height / 2), int(width / 2))
+            app.app.click(width // 2, height // 2)
             count += 3
             sleep(3)
     raise TimeoutError("Timeout waiting for home tab exist in the timeout.")
