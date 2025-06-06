@@ -65,8 +65,8 @@ def hsv_range_to_image_cv(lower, upper, height=50, width=300):
         img[:, i, 1] = int(g * 255)
         img[:, i, 2] = int(r * 255)
 
-    cv2.imshow("HSV Range", img)
-    cv2.waitKey(10)
+    cv2.imshow(f"HSV Range {upper} - {lower}", img)
+    # cv2.waitKey(0)
 
 def check_color_in_region(
         frame: np.array,

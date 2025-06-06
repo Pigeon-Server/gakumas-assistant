@@ -17,7 +17,7 @@ def action__enter_contest_page(app: "AppProcessor"):
     进入竞技场页面流程。
     包括点击主界面竞技场 Tab 和内部按钮。
     """
-    app.app.click_element(app.latest_results.filter_by_label(base_labels.tab_contest).first())
+    app.click_on_label(base_labels.tab_contest)
     app.update_current_location(GamePageTypes.MAIN_MENU__CONTEST)
     sleep(2)
     app.click_button("コンテスト")  # 点击进入竞技场功能

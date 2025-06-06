@@ -128,8 +128,9 @@ class TaskQueue:
                     task.status = TaskStatus.SUCCESS
             except Exception as e:
                 task.status = TaskStatus.FAILED
-                self.stop()
-                logger.error(f"Task {task.name} failed: {e}")
+                self._task_queue.queue.clear()
+                # logger.error(f"Task {task.name} failed: {e}")
+                raise RuntimeError(f"Task {task.name} failed.")
             finally:
                 task.update_end_time()
                 sys.settrace(None)

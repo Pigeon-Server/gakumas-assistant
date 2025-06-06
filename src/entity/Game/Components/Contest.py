@@ -35,10 +35,10 @@ class ContestItem(Yolo_Box):
         digits = re.findall(r'\d+', pt_result.text)
         pt = int(digits[0]) if digits else 0
 
-        # 3. combat_power：在锚点下方最近的一条
         lower_results = [r for r in ocr_results if r.y > power_anchor.y]
         combat_power_result = min(lower_results, key=lambda r: r.y, default=None)
-        combat_power = int(combat_power_result.text) if combat_power_result and combat_power_result.text.isdigit() else None
+        digits = re.findall(r'\d+', combat_power_result.text) if combat_power_result else []
+        combat_power = int(digits[0]) if digits else None
 
         # 4. username：最靠左下角（y 最大，其次 x 最小）
         username_result = max(ocr_results, key=lambda r: (r.y, -r.x))
@@ -60,7 +60,7 @@ class ContestList:
         self._start_y = results.filter_by_label(base_labels.button).get_y_max_element().first().h
         self._end_y = results.filter_by_label(base_labels.back_btn).first().y
         self.contest_area = frame[self._start_y:self._end_y, 0:self._width]
-        # cv2.imshow("contest_area", self.contest_area)
+        cv2.imshow("contest_area", self.contest_area)
         self._get_contest_items()
 
     def __str__(self):
@@ -76,7 +76,7 @@ class ContestList:
         return bool(self.contests)
 
     def _append_contest(self, x: float, y: float, w: float, h: float, frame: np.ndarray):
-        # cv2.imshow(f"contest_{len(self.contests) + 1}", frame)
+        cv2.imshow(f"contest_{len(self.contests) + 1}", frame)
         self.contests.append(ContestItem(x, y, w, h, f"contest_{len(self.contests) + 1}",frame))
 
     def _get_contest_items(self):
@@ -92,16 +92,19 @@ class ContestList:
             if w > self._width//2 and h > 10:
                 roi = self.contest_area[y:y+h, x:x+w]
                 self._append_contest(x, box_y := self._start_y+y, x+w, box_y+h, roi)
-        # cv2.waitKey(0)
+        cv2.waitKey(10)
+
+    def _get_valid_contests(self) -> List[ContestItem]:
+        return [r for r in self.contests if r.combat_power is not None]
 
     def get_combat_power_min(self):
-        return min(self.contests, key=lambda r: r.combat_power, default=None)
+        return min(self._get_valid_contests(), key=lambda r: r.combat_power, default=None)
 
     def get_combat_power_max(self):
-        return max(self.contests, key=lambda r: r.combat_power, default=None)
+        return max(self._get_valid_contests(), key=lambda r: r.combat_power, default=None)
 
     def get_pt_min(self):
-        return min(self.contests, key=lambda r: r.pt, default=None)
+        return min(self._get_valid_contests(), key=lambda r: r.pt, default=None)
 
     def get_pt_max(self):
-        return max(self.contests, key=lambda r: r.pt, default=None)
+        return max(self._get_valid_contests(), key=lambda r: r.pt, default=None)
