@@ -61,8 +61,8 @@ def _is_avatar_busy(avatar, full_frame):
     """判断角色是否“工作中”"""
     h, w = full_frame.shape[:2]
 
-    x1 = max(0, avatar.x - 10)
-    y1 = max(0, avatar.y - 10)
+    x1 = max(0, avatar.x - 15)
+    y1 = max(0, avatar.y - 15)
     x2 = min(w, avatar.w)
     y2 = min(h, avatar.cy)
 
@@ -75,17 +75,16 @@ def _is_avatar_guaranteed_success(avatar):
     """判断角色是否带有标志“好調：大成功確定”"""
     height, width = avatar.frame.shape[:2]
     region = (width / 2, 0, width, height / 2)
-    rgb_lower = (96, 183, 238)
-    rgb_upper = (89, 186, 260)
-    return check_color_in_region(avatar.frame, region, rgb_lower, rgb_upper, 20)
+    return check_color_in_region(avatar.frame, region, (97,230,250), (108,255,255), 20)
 
 def _assign_avatar_to_work(app: "AppProcessor", avatar=None):
     """选中角色并点击时长按钮"""
-    if avatar: app.app.click_element(avatar)
-    sleep(0.5)
-    app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_max_element().first())
-    sleep(1)
-    app.wait_for_label(base_labels.button)
+    if avatar:  # 当有头像元素时
+        app.app.click_element(avatar)
+        sleep(0.5)
+        app.app.click_element(app.latest_results.filter_by_label(base_labels.button).get_y_max_element().first())
+        sleep(1)
+        app.wait_for_label(base_labels.button)
 
     duration_box = _select_work_duration(app)
     app.app.click_element(duration_box)
@@ -120,12 +119,11 @@ def _dispatch_single_work(app: "AppProcessor", group):
     """派遣单个任务"""
     app.app.click_element(group)
     sleep(1)
+    app.wait_for_label(base_labels.avatar)
     def _exec():
         avatars = app.latest_results.filter_by_label(base_labels.avatar)
         avatars = Yolo_Results.from_boxes([avatar for avatar in avatars if avatar.x >= 10])
         for avatar in avatars:
-            # cv2.imshow("avatar", avatar.frame)
-            # cv2.waitKey(10)
             if _is_avatar_busy(avatar, app.latest_frame):
                 logger.debug("Skip 'お仕事中' avatar")
                 continue
@@ -134,10 +132,10 @@ def _dispatch_single_work(app: "AppProcessor", group):
                 return True
         return False
     if not _exec():
-        avatars = app.latest_results.filter_by_label(base_labels.avatar)
-        x, y = avatars.get_COL()
+        x, y = app.latest_results.filter_by_label(base_labels.avatar).get_COL()
         app.app.scrollY(x, y, -10)
-        sleep(1)
-        _exec()
+        sleep(0.5)
+        if _exec():
+            return
         _assign_avatar_to_work(app)
 

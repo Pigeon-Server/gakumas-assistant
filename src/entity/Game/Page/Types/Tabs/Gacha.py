@@ -1,2 +1,2 @@
-class Gacha:
+class GachaTab:
     pass

@@ -1,0 +1,3 @@
+class SubMenu:
+    # P図鑑
+    PRODUCER_ILLUSTRATED = "PRODUCER_ILLUSTRATED"

@@ -5,49 +5,50 @@ import cv2
 import numpy as np
 
 from src.utils.logger import logger
+from sklearn.metrics.pairwise import cosine_similarity
 
 
-def rgb_to_hsv_range(rgb1, rgb2, expand_ratio=0.0):
-    """
-    输入两个 RGB 值（0-255），输出 OpenCV HSV 范围的 lower 和 upper，支持范围扩大。
+def get_mask_contours(img, lower_color, upper_color):
+    """从图像中提取指定颜色范围的轮廓"""
+    hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv_img, lower_color, upper_color)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return contours
 
-    返回:
-        lower: tuple(int, int, int)，OpenCV HSV下限（H:0-179, S,V:0-255）
-        upper: tuple(int, int, int)，OpenCV HSV上限
-    """
-    def to_hsv_opencv(rgb):
-        r, g, b = [x / 255.0 for x in rgb]
-        h, s, v = colorsys.rgb_to_hsv(r, g, b)
-        h_opencv = int(h * 179)          # colorsys h是0~1，乘179映射OpenCV
-        s_opencv = int(s * 255)
-        v_opencv = int(v * 255)
-        return (h_opencv, s_opencv, v_opencv)
+def get_max_contour(contours):
+    """返回最大轮廓和其边界框"""
+    max_area = 0
+    max_contour = None
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area > max_area:
+            max_area = area
+            max_contour = contour
+    return max_contour
 
-    hsv1 = to_hsv_opencv(rgb1)
-    hsv2 = to_hsv_opencv(rgb2)
+def extract_roi_from_mask(img, lower_color, upper_color):
+    """提取最大轮廓的ROI"""
+    contours = get_mask_contours(img, lower_color, upper_color)
+    max_contour = get_max_contour(contours)
 
-    hsv_min = [min(a, b) for a, b in zip(hsv1, hsv2)]
-    hsv_max = [max(a, b) for a, b in zip(hsv1, hsv2)]
+    if max_contour is not None:
+        x, y, w, h = cv2.boundingRect(max_contour)
+        return x, y, w, h
+    return None
 
-    def expand_range(min_val, max_val, total):
-        delta = (max_val - min_val) * expand_ratio / 2
-        low = max(0, int(min_val - delta))
-        high = min(total, int(max_val + delta))
-        return low, high
-
-    h_min, h_max = expand_range(hsv_min[0], hsv_max[0], 179)
-    s_min, s_max = expand_range(hsv_min[1], hsv_max[1], 255)
-    v_min, v_max = expand_range(hsv_min[2], hsv_max[2], 255)
-
-    lower = (h_min, s_min, v_min)
-    upper = (h_max, s_max, v_max)
-
-    return lower, upper
+def get_mark_y_position(img, lower_color, upper_color, roi_y, roi_h):
+    """提取mark区域的Y位置"""
+    contours = get_mask_contours(img[roi_y + roi_h:], lower_color, upper_color)
+    mark_y = 0
+    for contour in contours:
+        _x, _y, _w, _h = cv2.boundingRect(contour)
+        if _h > 5 and _w > 5:
+            mark_y = min(_y, mark_y)
+    return mark_y
 
 def hsv_range_to_image_cv(lower, upper, height=50, width=300):
     """
     用 OpenCV HSV 范围的 lower 和 upper 生成一张条形图，表示色调范围。
-    lower, upper: (H:0-179, S:0-255, V:0-255)
     """
     h_vals = np.linspace(lower[0], upper[0], width)
     s_val = (lower[1] + upper[1]) / 2
@@ -56,12 +57,11 @@ def hsv_range_to_image_cv(lower, upper, height=50, width=300):
     img = np.zeros((height, width, 3), dtype=np.uint8)
 
     for i, h in enumerate(h_vals):
-        # colorsys hsv 输入范围是 H:0-1, S/V:0-1，需要转换
         h_norm = h / 179
         s_norm = s_val / 255
         v_norm = v_val / 255
         r, g, b = colorsys.hsv_to_rgb(h_norm, s_norm, v_norm)
-        img[:, i, 0] = int(b * 255)  # OpenCV 是 BGR 顺序
+        img[:, i, 0] = int(b * 255)
         img[:, i, 1] = int(g * 255)
         img[:, i, 2] = int(r * 255)
 
@@ -77,16 +77,6 @@ def check_color_in_region(
 ):
     """
     检查图像某区域是否存在指定 RGB 范围的颜色
-
-    参数:
-        frame         : 输入图像（BGR）
-        region      : 区域 (x, y, w, h)，从图像中裁剪
-        lower_color   : RGB 下限，如 (255, 0, 0)
-        upper_color   : RGB 上限，如 (255, 100, 100)
-        threshold   : 最小像素数量（默认 1），低于该值视为不存在
-
-    返回:
-        True 表示存在颜色，False 表示不存在
     """
     if frame.size == 0:
         return False
@@ -95,13 +85,7 @@ def check_color_in_region(
     if roi.size == 0:
         return False
     hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    # cv2.imshow("hsv_roi", hsv_roi)
-    # 自动修正 RGB 顺序并转换为 HSV
-    hsv_lower, hsv_upper = rgb_to_hsv_range(lower_color, upper_color,5)
-    # hsv_range_to_image_cv(hsv_lower, hsv_upper)
-    mask = cv2.inRange(hsv_roi, hsv_lower, hsv_upper)
-    # cv2.imshow("mask", mask)
-    # cv2.waitKey(10)
+    mask = cv2.inRange(hsv_roi, lower_color, upper_color)
     return cv2.countNonZero(mask) >= threshold
 
 @logger.catch
@@ -124,7 +108,7 @@ def check_status_detection(
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    height, width = gray.shape
+    height, width = gray.shape[:2]
     total_area = height * width
 
     # 白色背景掩码
@@ -156,3 +140,8 @@ def check_status_detection(
             return False
         orange_ratio = cv2.countNonZero(combined_mask) / non_white_area
         return orange_ratio > threshold
+
+def extract_feature(image: np.ndarray) -> np.ndarray:
+    # 简单处理方式：resize + flatten 成向量
+    resized = cv2.resize(image, (64, 64))
+    return resized.flatten().astype(np.float32).reshape(1, -1)

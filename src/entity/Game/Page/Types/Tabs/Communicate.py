@@ -1,4 +1,4 @@
-class Communicate:
+class CommunicateTab:
     # 初星コミュ
     MAIN_STORY = "MAIN_STORY"
     # アイドルコミュ

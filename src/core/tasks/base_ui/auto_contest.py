@@ -22,7 +22,7 @@ def action__enter_contest_page(app: "AppProcessor"):
     sleep(2)
     app.click_button("コンテスト")  # 点击进入竞技场功能
     sleep(3)
-    app.update_current_location(GamePageTypes.CONTEST.ARENA)
+    app.update_current_location(GamePageTypes.CONTEST_TAB.ARENA)
 
 def action__check_and_collect_rewards(app: "AppProcessor"):
     """
@@ -49,7 +49,9 @@ def action__loop_challenge_contest(app: "AppProcessor"):
         if not contest:
             logger.info("There is no contest.")
             break
-        app.app.click_element(contest.get_combat_power_min())
+        target = contest.get_combat_power_min()
+        logger.info(f"try contest: {target}")
+        app.app.click_element(target)
         sleep(1)
         if app.latest_results.exists_label(base_labels.blank_slot):
             _auto_form_team(app)

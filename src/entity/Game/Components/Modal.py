@@ -1,16 +1,14 @@
 from dataclasses import dataclass
 
+import numpy as np
+
 from src.entity.Game.Components import Button
 
 
 @dataclass
 class Modal:
     modal_title: str
-    modal_body: str
-    confirm_button: Button
-    cancel_button: Button
-    def __init__(self, modal_title: str, modal_body: str = None, confirm_button: Button =None, cancel_button: Button =None):
-        self.modal_title = modal_title
-        self.modal_body = modal_body
-        self.confirm_button = confirm_button
-        self.cancel_button = cancel_button
+    modal_body: np.array
+    modal_body_text: str
+    confirm_button: Button = None
+    cancel_button: Button = None

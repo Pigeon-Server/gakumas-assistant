@@ -40,6 +40,22 @@ class Yolo_Box:
         self.cx = int(median(self.x, self.w))
         self.cy = int(median(self.y, self.h))
 
+    def __eq__(self, other):
+        """
+        自定义相等比较：根据框的坐标、尺寸、标签判断两个 Yolo_Box 是否相等。
+        """
+        if isinstance(other, Yolo_Box):
+            return (self.x == other.x and self.y == other.y and
+                    self.w == other.w and self.h == other.h and
+                    self.label == other.label)
+        return False
+
+    def __hash__(self):
+        """
+        自定义哈希：通过框的坐标、尺寸和标签计算哈希值。
+        """
+        return hash((self.x, self.y, self.w, self.h, self.label))
+
     def get_COL(self) -> Tuple[int, int]:
         return self.cx, self.cy
 
@@ -65,6 +81,7 @@ class Yolo_Results:
                 class_name = model.names[class_id]
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 self.boxes.append(Yolo_Box(x1, y1, x2, y2, class_name, frame[y1:y2, x1:x2]))
+        self.boxes.sort(key=lambda box: (box.label, box.x, box.y))
 
     def __bool__(self):
         return bool(self.boxes)
@@ -75,6 +92,9 @@ class Yolo_Results:
     def __iter__(self):
         return iter(self.boxes)
 
+    def __getitem__(self, index):
+        return self.from_boxes(self.boxes[index])
+
     @classmethod
     def from_boxes(cls, boxes: List[Yolo_Box]) -> "Yolo_Results":
         """
@@ -83,6 +103,7 @@ class Yolo_Results:
         inst = cls.__new__(cls)
         inst.results = []
         inst.boxes = boxes
+        inst.boxes.sort(key=lambda box: (box.label, box.x, box.y))
         return inst
 
     def first(self):
@@ -116,6 +137,34 @@ class Yolo_Results:
         return self.from_boxes(
             [box for box in self.boxes if box.label in labels]
         )
+
+    def remove_by_label(self, label: str) -> None:
+        """
+        移除指定标签的元素。
+
+        Args:
+            label: 要移除的标签名。
+        """
+        self.boxes = [box for box in self.boxes if box.label != label]
+
+    def remove_by_yolo_results(self, other_yolo_results: "Yolo_Results") -> "Yolo_Results":
+        """
+        移除与指定 Yolo_Results 对象中的元素相同的目标框。
+
+        Args:
+            other_yolo_results: 要删除的 Yolo_Results 对象。
+        """
+        other_boxes = set(other_yolo_results.boxes)
+        return self.from_boxes([box for box in self.boxes if box not in other_boxes])
+
+    def remove_by_yolo_box(self, yolo_box: Yolo_Box) -> "Yolo_Results":
+        """
+        移除指定的 Yolo_Box 元素。
+
+        Args:
+            yolo_box: 要移除的 Yolo_Box 对象。
+        """
+        return self.from_boxes([box for box in self.boxes if box != yolo_box])
 
     def exists_label(self, label: str) -> bool:
         """

@@ -20,7 +20,7 @@ class ContestItem(Yolo_Box):
     def __init__(self, x: float, y: float, w: float, h: float, label: str, frame: np.ndarray):
         super().__init__(x, y, w, h, label, frame)
         ocr_result = get_ocr(frame)
-        logger.debug(f"ocr_result: {ocr_result}")
+        # logger.debug(f"ocr_result: {ocr_result}")
         # [OCR_Result(x=514, y=0, w=89, h=24, text='+139p+', confidence=0.8393095135688782), OCR_Result(x=30, y=32, w=104, h=23, text='総合力合計', confidence=0.999838650226593), OCR_Result(x=26, y=71, w=165, h=32, text='106980', confidence=0.9857919216156006), OCR_Result(x=20, y=128, w=80, h=22, text='ふ一ちや', confidence=0.8578659892082214)]
         self._parse_ocr_results(ocr_result)
 
@@ -60,8 +60,8 @@ class ContestList:
         self._start_y = results.filter_by_label(base_labels.button).get_y_max_element().first().h
         self._end_y = results.filter_by_label(base_labels.back_btn).first().y
         self.contest_area = frame[self._start_y:self._end_y, 0:self._width]
-        cv2.imshow("contest_area", self.contest_area)
-        self._get_contest_items()
+        if not [res for res in get_ocr(self.contest_area) if "消費しました" in res.text]:
+            self._get_contest_items()
 
     def __str__(self):
         return str(self.contests)
@@ -76,7 +76,6 @@ class ContestList:
         return bool(self.contests)
 
     def _append_contest(self, x: float, y: float, w: float, h: float, frame: np.ndarray):
-        cv2.imshow(f"contest_{len(self.contests) + 1}", frame)
         self.contests.append(ContestItem(x, y, w, h, f"contest_{len(self.contests) + 1}",frame))
 
     def _get_contest_items(self):
@@ -92,7 +91,6 @@ class ContestList:
             if w > self._width//2 and h > 10:
                 roi = self.contest_area[y:y+h, x:x+w]
                 self._append_contest(x, box_y := self._start_y+y, x+w, box_y+h, roi)
-        cv2.waitKey(10)
 
     def _get_valid_contests(self) -> List[ContestItem]:
         return [r for r in self.contests if r.combat_power is not None]

@@ -52,3 +52,5 @@ page__produce_card_list = "サポートコミュ"
 page__event_plot = "イベントコミュ"
 # P卡任务选择界面
 page__produce = "プロデュース"
+# P图鉴
+page__producer_illustrated = "P図鑑"

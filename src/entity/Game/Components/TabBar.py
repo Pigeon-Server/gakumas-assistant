@@ -23,9 +23,17 @@ class TabBar(Yolo_Box):
     selected: TabBarItem = None
     def __init__(self, element: Yolo_Box):
         super().__init__(element.x, element.y, element.w, element.h, element.label, element.frame)
-        self.tab_items = [TabBarItem(item.x, item.y, item.w, item.h, item.text, element) for item in get_ocr(element.frame) if len(item.text) > 1]
+        w, h = element.frame.shape[:2]
+        el_cy = h // 2
+        self.tab_items = [
+            TabBarItem(item.x, item.y, item.w, item.h, item.text, element)
+            for item in get_ocr(element.frame)
+            if len(item.text) > 2
+        ]
+        print(el_cy)
         for tab_item in self.tab_items:
             if check_status_detection(tab_item.frame):
+                print(abs(self.h - self.y))
                 self.selected = tab_item
                 break
 

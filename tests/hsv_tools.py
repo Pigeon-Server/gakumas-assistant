@@ -51,7 +51,7 @@ def get_hsv_value(event, x, y, flags, param):
         cv2.setTrackbarPos('Upper V', 'Trackbars', min(v + 50, 255))
 
 # 读取图像
-img = cv2.imread(r"C:\Users\fsj\Desktop\cyan-buttons.png")
+img = cv2.imread(r"E:\Projects\gkmas-auto\tests\Trade Confirm.png")
 
 # 创建窗口
 cv2.namedWindow('Trackbars')
@@ -66,6 +66,7 @@ cv2.createTrackbar('Upper V', 'Trackbars', 255, 255, nothing)
 
 # 设置鼠标点击事件
 cv2.namedWindow('Original Image')
+cv2.moveWindow("Original Image", 100, 100)
 cv2.setMouseCallback('Original Image', get_hsv_value)
 
 while True:

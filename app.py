@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from time import sleep
 
 from src.core.Android.app import Android_App
+from src.core.CLIP_services.services import CLIPServiceManager
 from src.core.Web.routers import register_routes
 from src.core.Web.websocket import WebSocketManager
 from src.core.Windows.app import Windows_App
@@ -26,7 +27,6 @@ from src.entity.WebSocket_Data import WebSocket_Data
 from src.core.task import TaskQueue
 from src.entity.Yolo import YoloModelType, Yolo_Results
 from src.utils.game_tools import get_current_location
-from src.utils.ocr_instance import init_ocr
 from src.utils.logger import logger
 
 from src.constants import *
@@ -58,15 +58,17 @@ class AppProcessor:
     _middleware_registry: List[Callable]
     # 游戏状态管理器
     game_status_manager: GameStatusManager
+    # 图像记忆管理器
+    clip_manager: CLIPServiceManager
 
     def __init__(self):
         self.app = self._create_app_instance()
         self.device = self._detect_device()
         self.load_model()
-        init_ocr()
         self._middleware_registry = []
         self.task_queue = TaskQueue(self)
         self.game_status_manager = GameStatusManager()
+        self.clip_manager = CLIPServiceManager()
         register_tasks(self)
         register_middlewares(self)
         self.start()

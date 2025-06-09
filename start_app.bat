@@ -7,5 +7,5 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-.\.venv-3.10\Scripts\python.exe -m uvicorn app:app 
+.\.venv\Scripts\python.exe -m uvicorn app:app 
 pause

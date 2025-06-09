@@ -49,5 +49,4 @@ def get_modal(yolo_result: Yolo_Results, frame: np.array, no_body: bool = False)
         modal_body_y = confirm_button.y if confirm_button else cancel_button.y
     modal_body_frame = frame[modal_header.h:modal_body_y, modal_header.x:modal_header.w]
     modal_body_text = "" if no_body else " ".join([item.text for item in get_ocr(modal_body_frame)])
-    modal_obj = Modal(modal_header_text, modal_body_text, confirm_button, cancel_button)
-    return modal_obj
+    return Modal(modal_header_text, modal_body_frame, modal_body_text, confirm_button, cancel_button)
