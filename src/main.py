@@ -76,6 +76,8 @@ class AppProcessor:
             "code": "initializing",
             "message": "正在初始化设备...",
         }
+        self._device_polling_thread = threading.Thread(target=self._poll_device_state_loop, daemon=True)
+        self._device_polling_thread.start()
         self._init_environment()
         self._init_database()
         self.config_service = ConfigService()
@@ -244,6 +246,21 @@ class AppProcessor:
             "code": code,
             "message": message,
         }
+
+    def _poll_device_state_loop(self):
+        """定期检测设备状态并广播更新"""
+        while not self.is_shutdown_requested():
+            try:
+                self._update_device_state(self.device)
+                
+                # If device recently became available and inference hasn't started, start it
+                with self._device_state_lock:
+                    is_available = self._device_status.get('available', False)
+                if is_available and not getattr(self.yolo_engine, "running", False):
+                    self.start_inference_if_possible()
+            except Exception as exc:
+                logger.debug(f"Device polling error: {exc}")
+            sleep(2)
 
     def _update_device_state(self, device: BaseDevice):
         with self._device_state_lock:
