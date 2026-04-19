@@ -226,6 +226,9 @@ Web UI 基础设施
 
 随包分发的二进制依赖来源与版权说明见 [bin/THIRD_PARTY_NOTICES.md](./bin/THIRD_PARTY_NOTICES.md)。
 
+## 交流群
+QQ Group: **328346267**
+![](./docs/qq_group.jpg)
 
 ## Star History
 
