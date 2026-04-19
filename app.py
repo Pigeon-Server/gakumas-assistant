@@ -174,8 +174,12 @@ def _start_pywebview(url: str):
     window = webview_module.create_window("Gakumas Assistant", url, **window_options)
     PYWEBVIEW_WINDOW_BRIDGE.bind_window(window)
     icon_path = resolve_runtime_str("assets", "images", "gakumas_logo.png")
-    start_kwargs: dict[str, str] = {}
-    if os.path.exists(icon_path):
+    start_kwargs = {}
+    # On Windows, pywebview's WinForms backend passes the icon to
+    # System.Drawing.Icon() which only accepts .ico files and crashes
+    # with PNG images. Skip the custom icon on Windows and let pywebview
+    # fall back to the default executable icon.
+    if platform.system() != "Windows" and os.path.exists(icon_path):
         start_kwargs["icon"] = icon_path
     if platform.system() == "Linux":
         start_kwargs["gui"] = "qt"
