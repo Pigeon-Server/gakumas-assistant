@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from src.constants.game.producer_gameplay import GameplayPhase, TRANSITION_POSITIONS
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
-from src.core.tasks.producer_challenge.gameplay.common import click_relative_point
+from src.core.tasks.producer_challenge.shared.common import click_relative_point
 from src.core.tasks.producer_challenge.gameplay.handler_base import (
     GameplayHandler,
     HandlerResult,

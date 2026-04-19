@@ -20,15 +20,23 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from time import sleep
 from typing import TYPE_CHECKING, Any, List
+
+import cv2
 
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.constants.game.text.produce_text import ProduceText
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.inference.ocr_engine import OCRService
+from src.core.tasks.producer_challenge.catalog import match_card_and_item_entries
+from src.core.tasks.producer_challenge.shared.common import (
+    detect_bottom_white_modal_region,
     invoke_decision_strategy,
     ocr_text,
     resolve_candidate_index,
@@ -43,6 +51,8 @@ from src.core.tasks.producer_challenge.gameplay.handler_base import (
     HandlerResult,
 )
 from src.utils.logger import logger
+from src.utils.runtime_paths import resolve_data_str
+from src.utils.string_tools import fullwidth_to_halfwidth, normalize_ocr_jp
 
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
@@ -56,7 +66,39 @@ _REWARD_CARD_LABELS = (
 )
 
 # 再抽選剩余次数 OCR 匹配正则
-_REDRAW_REMAINING_RE = re.compile(r"あと\s*(\d+)\s*回")
+_REDRAW_REMAINING_RE = re.compile(ProduceText.REMAINING_COUNT_PATTERN)
+_SKILL_REWARD_INFO_PANEL_LABELS = (
+    ProducerLabels.SKILL_CARD_INFO,
+    ProducerLabels.PC_ACTION_INFO,
+)
+_SKILL_REWARD_PANEL_OCR = OCRService()
+_SKILL_REWARD_NAME_NOISE_RE = re.compile(r'^[\|｜\[\]「」【】\s]+|[\|｜\[\]「」【】\s]+$')
+_SKILL_REWARD_EFFECT_PREFIXES = ("↑", "↓", "→", "←", "↗", "↘", "♥", "❤", "♡")
+_SKILL_REWARD_EFFECT_LINE_RE = re.compile(
+    r"(元気|好印象|やる気|体力|集中|好調|スコア|パラメータ).*[+\-−]\d+"
+)
+_SKILL_REWARD_JP_CHAR_RE = re.compile(r"[ぁ-んァ-ヶー一-龯]")
+_SKILL_REWARD_TITLE_NOISE_TOKENS = (
+    "受け取る",
+    "スキルカード",
+    "選んで",
+    "ください",
+    "獲得ガイド",
+    "おすすめ",
+    "NEW",
+)
+_SKILL_REWARD_SETTLE_LABELS = (
+    BaseUILabels.SKILL_CARD_ACTIVE,
+    BaseUILabels.SKILL_CARD_MENTAL,
+    BaseUILabels.SKILL_CARD_TRAP,
+)
+_SKILL_REWARD_SETTLE_POLL_SLEEP = 0.12
+_SKILL_REWARD_SETTLE_MAX_POLLS = 6
+_SKILL_REWARD_SETTLE_STABLE_COUNT_STREAK = 2
+_SKILL_REWARD_SETTLE_STABLE_BASELINE_STREAK = 2
+_SKILL_REWARD_BASELINE_TOLERANCE_RATIO = 0.016
+_SKILL_REWARD_BASELINE_TOLERANCE_MIN = 14
+_SKILL_REWARD_BASELINE_TOLERANCE_MAX = 52
 
 
 # ────────────────────────────────────────────────────────────
@@ -103,37 +145,211 @@ def _extract_card_name_from_info_panel(
     Returns:
         OCR 识别出的卡名文本（可能为空）
     """
+    def _normalize_panel_name(text: str) -> str:
+        cleaned = normalize_ocr_jp(fullwidth_to_halfwidth(str(text or "")))
+        cleaned = _SKILL_REWARD_NAME_NOISE_RE.sub("", cleaned).strip()
+        return cleaned
+
+    def _looks_like_effect_text(text: str) -> bool:
+        normalized = fullwidth_to_halfwidth(str(text or "")).strip()
+        if not normalized:
+            return False
+        return normalized.startswith(_SKILL_REWARD_EFFECT_PREFIXES)
+
+    def _is_plausible_card_name(text: str) -> bool:
+        normalized = _normalize_panel_name(text)
+        if len(normalized) < 2:
+            return False
+        if _looks_like_effect_text(normalized):
+            return False
+        if _SKILL_REWARD_EFFECT_LINE_RE.search(normalized):
+            return False
+        if any(token in normalized for token in _SKILL_REWARD_TITLE_NOISE_TOKENS):
+            return False
+        return bool(_SKILL_REWARD_JP_CHAR_RE.search(normalized))
+
     frame = getattr(app, "latest_frame", None)
-    if frame is None:
+    if frame is None or getattr(frame, "size", 0) <= 0:
         return ""
-
-    h, w = frame.shape[:2]
-
-    if card_boxes:
-        # 卡片上边缘作为面板底部基线
-        card_top = min(getattr(b, "y", h) for b in card_boxes)
-        # 信息面板卡名区域: 卡片上方约 30% 高度处到卡片顶部偏上
-        panel_name_top = max(0, int(card_top - h * 0.23))
-        panel_name_bottom = max(0, int(card_top - h * 0.18))
-    else:
-        # 无卡片检测时使用经验比例
-        panel_name_top = int(h * 0.42)
-        panel_name_bottom = int(h * 0.48)
-
-    # 水平居中裁剪（卡名居中显示）
-    x_start = int(w * 0.15)
-    x_end = int(w * 0.75)
-
-    region = frame[panel_name_top:panel_name_bottom, x_start:x_end]
-    if region.size == 0:
-        return ""
-
-    card_name = ocr_text(region).strip()
-    logger.debug(
-        "skill_reward: 信息面板 OCR 卡名={!r} (区域 y={}..{}, x={}..{})",
-        card_name, panel_name_top, panel_name_bottom, x_start, x_end,
+    h = frame.shape[0]
+    debugger = getattr(app, "debug_tools", None)
+    panel_rect = detect_bottom_white_modal_region(
+        frame,
+        row_boxes=card_boxes,
+        debug_tools=debugger,
+        debug_label="skill_reward_white_panel",
     )
-    return card_name
+
+    if panel_rect is not None:
+        px1, py1, px2, py2 = panel_rect
+        if px2 > px1 + 20 and py2 > py1 + 20:
+            panel_crop = frame[py1:py2, px1:px2]
+            ocr_result_list = _SKILL_REWARD_PANEL_OCR.ocr(panel_crop)
+            merged_lines = (
+                list(
+                    ocr_result_list.auto_merge_lines(
+                        cy_range=max(8, int(panel_crop.shape[0] * 0.02)),
+                        width_gap=max(12, int(panel_crop.shape[1] * 0.04)),
+                    )
+                )
+                if hasattr(ocr_result_list, "auto_merge_lines")
+                else list(ocr_result_list)
+            )
+            if merged_lines:
+                panel_h = max(1, py2 - py1)
+                panel_w = max(1, px2 - px1)
+                title_bottom = int(panel_h * 0.42)
+                if card_boxes:
+                    card_top = min(int(getattr(box, "y", h)) for box in card_boxes)
+                    boundary = int(card_top - py1 - panel_h * 0.05)
+                    if boundary > int(panel_h * 0.15):
+                        title_bottom = min(title_bottom, boundary)
+                best_line: tuple[float, str, tuple[int, int, int, int]] | None = None
+                for line in merged_lines:
+                    line_text = _normalize_panel_name(str(getattr(line, "text", "") or ""))
+                    if not line_text:
+                        continue
+                    line_y = int(getattr(line, "y", 0))
+                    line_h = max(1, int(getattr(line, "h", 0)))
+                    line_cy = int(getattr(line, "cy", line_y + line_h // 2))
+                    if line_cy < 0 or line_cy > title_bottom:
+                        continue
+                    if not _is_plausible_card_name(line_text):
+                        continue
+                    line_x = int(getattr(line, "x", 0))
+                    line_w = max(1, int(getattr(line, "w", 0)))
+                    line_cx = int(getattr(line, "cx", line_x + line_w // 2))
+                    center_bias = 1.0 - min(1.0, abs(line_cx - panel_w / 2.0) / max(panel_w / 2.0, 1.0))
+                    width_score = min(1.0, line_w / max(panel_w * 0.35, 1.0))
+                    top_score = 1.0 - min(1.0, line_cy / max(title_bottom, 1))
+                    score = center_bias * 3.0 + width_score * 2.0 + top_score
+                    if best_line is None or score > best_line[0]:
+                        best_line = (
+                            score,
+                            line_text,
+                            (px1 + line_x, py1 + line_y, px1 + line_x + line_w, py1 + line_y + line_h),
+                        )
+                if best_line is not None:
+                    _, card_name, (bx1, by1, bx2, by2) = best_line
+                    if debugger is not None:
+                        debugger.add_box(
+                            bx1,
+                            by1,
+                            bx2,
+                            by2,
+                            label=f"skill_reward_title:{card_name[:24]}",
+                            color=(80, 220, 120),
+                            alpha=0.16,
+                            duration=2.5,
+                            font_size=14,
+                        )
+                    logger.debug(
+                        "skill_reward: 信息面板 OCR 卡名={!r} (panel y={}..{}, x={}..{})",
+                        card_name, py1, py2, px1, px2,
+                    )
+                    return card_name
+    return ""
+
+
+def _save_unresolved_skill_reward_probe(
+    app: "AppProcessor",
+    candidate: "SkillRewardCandidate",
+    *,
+    card_name: str,
+) -> None:
+    """保存技能卡奖励未匹配样本，便于后续人工校验和补录。"""
+    card_frame = getattr(candidate.box, "frame", None)
+    if card_frame is None or getattr(card_frame, "size", 0) <= 0:
+        return
+    collect_dir = resolve_data_str("CLIP", "unresolved_skill_reward")
+    os.makedirs(collect_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    stem = f"reward_{timestamp}_idx{int(candidate.index)}"
+    card_path = os.path.join(collect_dir, f"{stem}_card.png")
+    cv2.imwrite(card_path, card_frame)
+
+    panel_path = ""
+    panel_box = None
+    results = getattr(app, "latest_results", None)
+    if results is not None:
+        panel_boxes: list[Any] = []
+        for label in _SKILL_REWARD_INFO_PANEL_LABELS:
+            panel_boxes.extend(list(results.filter_by_label(label)))
+        if panel_boxes:
+            panel_box = max(
+                panel_boxes,
+                key=lambda box: max(0, int(getattr(box, "w", 0) - getattr(box, "x", 0)))
+                * max(0, int(getattr(box, "h", 0) - getattr(box, "y", 0))),
+            )
+    frame = getattr(app, "latest_frame", None)
+    if panel_box is not None and frame is not None and getattr(frame, "size", 0) > 0:
+        fh, fw = frame.shape[:2]
+        x1 = max(0, int(getattr(panel_box, "x", 0)))
+        y1 = max(0, int(getattr(panel_box, "y", 0)))
+        x2 = min(fw, int(getattr(panel_box, "w", 0)))
+        y2 = min(fh, int(getattr(panel_box, "h", 0)))
+        panel_crop = frame[y1:y2, x1:x2] if x2 > x1 and y2 > y1 else None
+        if panel_crop is not None and getattr(panel_crop, "size", 0) > 0:
+            panel_path = os.path.join(collect_dir, f"{stem}_panel.png")
+            cv2.imwrite(panel_path, panel_crop)
+
+    metadata = {
+        "index": int(candidate.index),
+        "raw_candidate_title": str(candidate.title or ""),
+        "ocr_card_name": str(card_name or ""),
+        "action_id": str(candidate.action_id or ""),
+        "db_id": str(candidate.db_id or ""),
+        "card_image": card_path,
+        "panel_image": panel_path,
+    }
+    metadata_path = os.path.join(collect_dir, f"{stem}.json")
+    with open(metadata_path, "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, ensure_ascii=False, indent=2)
+    logger.info(
+        "skill_reward: 未匹配样本已保存 idx={} name={!r} card={} panel={}",
+        candidate.index,
+        card_name,
+        card_path,
+        panel_path or "-",
+    )
+
+
+def _match_skill_reward_card_entry(card_name: str, card_db: Any) -> Any | None:
+    """根据信息面板 OCR 名称匹配技能卡条目。"""
+    query = str(card_name or "").strip()
+    if not query:
+        return None
+
+    variants: list[str] = [query]
+    normalized = normalize_ocr_jp(fullwidth_to_halfwidth(query))
+    stripped = normalized.lstrip("".join(_SKILL_REWARD_EFFECT_PREFIXES)).strip()
+    for text in (normalized, stripped):
+        if text and text not in variants:
+            variants.append(text)
+
+    for text in variants:
+        found, card_entry = card_db.search_by_name(text)
+        if found and card_entry is not None:
+            return card_entry
+
+    matches = [
+        entry
+        for entry in match_card_and_item_entries(variants, threshold=72)
+        if str(entry.get("kind") or "") == "produce_card"
+    ]
+    if not matches:
+        return None
+    best = max(matches, key=lambda entry: float(entry.get("score") or 0.0))
+    raw_id = str(best.get("id") or "")
+    if not raw_id:
+        return None
+    same_id_cards = list(card_db.get_all_by_raw_id(raw_id))
+    if not same_id_cards:
+        return None
+    if "+" in query or "＋" in query:
+        return max(same_id_cards, key=lambda card: int(getattr(card, "upgradeCount", 0) or 0))
+    return min(same_id_cards, key=lambda card: int(getattr(card, "upgradeCount", 0) or 0))
 
 
 # ────────────────────────────────────────────────────────────
@@ -196,7 +412,11 @@ def _detect_redraw_info(
 
     # 确认按钮文本包含「再抽選」才认定（防误判）
     full_text = btn_text
-    if remaining > 0 or ProduceText.REDRAW in full_text or "再" in full_text:
+    if (
+        remaining > 0
+        or ProduceText.REDRAW in full_text
+        or ProduceText.REDRAW_SHORT in full_text
+    ):
         logger.debug(
             "skill_reward: 检测到再抽選按钮 (剩余{}次, OCR={!r})",
             remaining, btn_text,
@@ -256,17 +476,19 @@ def _probe_unresolved_cards(
 
         if not card_name:
             logger.debug("skill_reward: 探査卡片 #{} 信息面板 OCR 为空", candidate.index)
+            _save_unresolved_skill_reward_probe(app, candidate, card_name="")
             continue
 
         # 匹配主数据库
-        found, card_entry = card_db.search_by_name(card_name)
-        if not found or card_entry is None:
+        card_entry = _match_skill_reward_card_entry(card_name, card_db)
+        if card_entry is None:
             logger.debug(
                 "skill_reward: 探査卡片 #{} 名称 {!r} 未匹配数据库",
                 candidate.index, card_name,
             )
             # 即使 DB 未匹配，也更新 title（比缩略图 OCR 更可靠）
             candidate.title = card_name
+            _save_unresolved_skill_reward_probe(app, candidate, card_name=card_name)
             continue
 
         # 匹配成功 → 更新候选项元数据
@@ -303,6 +525,124 @@ def _probe_unresolved_cards(
 # ────────────────────────────────────────────────────────────
 # 采集 / 决策 / 执行
 # ────────────────────────────────────────────────────────────
+
+def _collect_skill_reward_card_center_ys(results: Any) -> list[int]:
+    if results is None:
+        return []
+    centers: list[int] = []
+    for label in _SKILL_REWARD_SETTLE_LABELS:
+        for box in results.filter_by_label(label):
+            cy = getattr(box, "cy", None)
+            if isinstance(cy, (int, float)):
+                centers.append(int(cy))
+    centers.sort()
+    return centers
+
+
+def _resolve_skill_reward_baseline_tolerance(app: "AppProcessor") -> tuple[int, int]:
+    frame = getattr(app, "latest_frame", None)
+    frame_h = 0
+    if frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 1:
+        frame_h = int(frame.shape[0] or 0)
+    if frame_h <= 0:
+        tolerance = 24
+    else:
+        tolerance = int(frame_h * _SKILL_REWARD_BASELINE_TOLERANCE_RATIO)
+        tolerance = max(
+            _SKILL_REWARD_BASELINE_TOLERANCE_MIN,
+            min(_SKILL_REWARD_BASELINE_TOLERANCE_MAX, tolerance),
+        )
+    stable_delta = max(8, tolerance // 3)
+    return tolerance, stable_delta
+
+
+def _is_skill_reward_card_baseline_settled(
+    center_ys: list[int],
+    *,
+    tolerance: int,
+) -> tuple[bool, int | None]:
+    if not center_ys:
+        return False, None
+    baseline = int(center_ys[len(center_ys) // 2])
+    if len(center_ys) <= 1:
+        return True, baseline
+    outliers = [y for y in center_ys if abs(y - baseline) > tolerance]
+    if not outliers:
+        return True, baseline
+    if len(outliers) == 1:
+        # 选中卡片会轻微上浮，允许单个上浮离群点。
+        floating_offset = baseline - outliers[0]
+        if floating_offset > 0 and floating_offset <= tolerance * 2:
+            return True, baseline
+    return False, baseline
+
+
+def _wait_skill_reward_cards_settle(
+    app: "AppProcessor",
+    *,
+    position: str,
+) -> None:
+    if position not in {"skill_reward_idle", "skill_reward_selected"}:
+        return
+    centers = _collect_skill_reward_card_center_ys(getattr(app, "latest_results", None))
+    if len(centers) < 2:
+        return
+
+    observed_max_count = len(centers)
+    last_count = None
+    stable_count_streak = 0
+    stable_baseline_streak = 0
+    last_baseline = None
+
+    for poll_idx in range(_SKILL_REWARD_SETTLE_MAX_POLLS):
+        centers = _collect_skill_reward_card_center_ys(getattr(app, "latest_results", None))
+        if len(centers) < 2:
+            return
+
+        tolerance, stable_delta = _resolve_skill_reward_baseline_tolerance(app)
+        settled, baseline = _is_skill_reward_card_baseline_settled(centers, tolerance=tolerance)
+        current_count = len(centers)
+        observed_max_count = max(observed_max_count, current_count)
+        if last_count is not None and current_count == last_count:
+            stable_count_streak += 1
+        else:
+            stable_count_streak = 0
+        last_count = current_count
+
+        if settled and baseline is not None and current_count == observed_max_count:
+            if last_baseline is not None and abs(baseline - last_baseline) <= stable_delta:
+                stable_baseline_streak += 1
+            else:
+                stable_baseline_streak = 0
+            last_baseline = baseline
+        else:
+            stable_baseline_streak = 0
+            last_baseline = baseline if settled else None
+
+        if (
+            stable_count_streak >= _SKILL_REWARD_SETTLE_STABLE_COUNT_STREAK
+            and stable_baseline_streak >= _SKILL_REWARD_SETTLE_STABLE_BASELINE_STREAK
+        ):
+            debugger = getattr(app, "debug_tools", None)
+            frame = getattr(app, "latest_frame", None)
+            if debugger is not None and frame is not None and baseline is not None:
+                frame_h, frame_w = frame.shape[:2]
+                debugger.add_box(
+                    0,
+                    max(0, baseline - 2),
+                    max(1, frame_w - 1),
+                    min(frame_h - 1, baseline + 2),
+                    label=f"skill_reward_baseline:{baseline}",
+                    color=(90, 210, 120),
+                    alpha=0.10,
+                    duration=2.0,
+                    font_size=12,
+                )
+            return
+        if poll_idx + 1 >= _SKILL_REWARD_SETTLE_MAX_POLLS:
+            break
+        sleep(_SKILL_REWARD_SETTLE_POLL_SLEEP)
+
 
 def collect_skill_reward_candidates(
     app: "AppProcessor",
@@ -350,7 +690,10 @@ def _append_redraw_candidate(
     candidates.append(SkillRewardCandidate(
         index=redraw_index,
         label="redraw",
-        title=f"{ProduceText.REDRAW}（あと{remaining}回）",
+        title=(
+            f"{ProduceText.REDRAW}"
+            f"{ProduceText.REDRAW_REMAINING_DISPLAY_TEMPLATE.format(remaining=remaining)}"
+        ),
         selected=False,
         box=redraw_box,
         action_id="skill_reward:redraw",
@@ -427,6 +770,8 @@ def execute_skill_reward_step(
     - skill_reward_selected: 点击确认按钮（第 2 步）
     - skill_reward_idle: 选择一张卡（第 1 步），可选再抽選
     """
+    _wait_skill_reward_cards_settle(app, position=position)
+
     if position == "skill_reward_selected":
         # 如果没有记录的待确认选择，先选一张卡再确认
         if ctx.pending_skill_reward_index is None:
@@ -536,7 +881,7 @@ class SkillRewardHandler(GameplayHandler):
     def handle(self, app, ctx, phase, position):
         # 展示画面（单卡获得/强化演出 / メモリー效果）：点击空白区域推进
         if position == "skill_reward_showcase":
-            from .common import click_relative_point
+            from src.core.tasks.producer_challenge.shared.common import click_relative_point
             click_relative_point(app, x_ratio=0.5, y_ratio=0.88, label="skill_reward_showcase_advance")
             logger.info("skill_reward: 展示画面，点击空白推进")
             # 展示消失后常伴随切页动画，给更长的 unknown 重试窗口
@@ -554,7 +899,7 @@ class SkillRewardHandler(GameplayHandler):
             if streak >= 4:
                 logger.info(f"skill_reward: 连续{streak}次 idle，判定为展示画面，点击空白推进")
                 ctx.handler_state["skill_reward_idle_streak"] = 0
-                from .common import click_relative_point
+                from src.core.tasks.producer_challenge.shared.common import click_relative_point
                 # 点击对话框区域（卡片下方），避免点击卡片本身触发详情
                 click_relative_point(app, x_ratio=0.5, y_ratio=0.88, label="skill_reward_advance")
                 return HandlerResult.ok("skill_reward advance (display)", sleep_after=1.0)

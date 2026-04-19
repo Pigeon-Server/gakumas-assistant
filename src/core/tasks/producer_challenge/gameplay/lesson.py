@@ -9,12 +9,16 @@ from src.constants.game.text.produce_text import ProduceText
 from src.constants.game.text.button_text import ButtonText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
-from src.core.tasks.producer_challenge.gameplay.common import click_relative_point
+from src.core.tasks.producer_challenge.shared.common import click_relative_point
 from src.core.tasks.producer_challenge.gameplay.llm.decision_dumper import DecisionDumper
 from src.utils.logger import logger
 from src.utils.string_tools import fullwidth_to_halfwidth
 
-from .common import invoke_decision_strategy, ocr_text, resolve_candidate_index
+from src.core.tasks.producer_challenge.shared.common import (
+    invoke_decision_strategy,
+    ocr_text,
+    resolve_candidate_index,
+)
 from .decision import (
     _apply_resolution,
     _learn_card_clip_from_db_id,
@@ -44,6 +48,15 @@ _PENDING_LESSON_CARD_POINT_STATE_KEY = "pending_lesson_click_point"
 _PENDING_LESSON_CARD_ACTION_ID_STATE_KEY = "pending_lesson_action_id"
 _PENDING_LESSON_CARD_DB_ID_STATE_KEY = "pending_lesson_db_id"
 _CARD_DOUBLE_TAP_INTERVAL = 0.2
+_VERIFY_CARD_PLAYED_POLL_SLEEP = 0.16
+_VERIFY_CARD_PLAYED_STABLE_CLEAR_POLLS = 3
+_BATTLE_DEAL_SETTLE_SAMPLE_SLEEP = 0.18
+_BATTLE_DEAL_SETTLE_MAX_POLLS = 6
+_BATTLE_DEAL_SETTLE_STABLE_COUNT_STREAK = 2
+_BATTLE_DEAL_SETTLE_STABLE_BASELINE_STREAK = 2
+_BATTLE_CARD_BASELINE_TOLERANCE_RATIO = 0.018
+_BATTLE_CARD_BASELINE_TOLERANCE_MIN = 18
+_BATTLE_CARD_BASELINE_TOLERANCE_MAX = 56
 _CRITICAL_BATTLE_STAMINA_RATIO = 0.18
 _LOW_BATTLE_STAMINA_RATIO = 0.32
 _END_TURN_HOTSPOT_X_RATIO = 0.4
@@ -54,20 +67,20 @@ _EMPTY_HAND_NOTICE_Y2_RATIO = 0.86
 _EMPTY_HAND_BLANK_SLOT_Y_RATIO = 0.84
 _EMPTY_HAND_STRONG_BLANK_SLOT_COUNT = 3
 _BATTLE_PLAN_TOKENS = {
-    ProduceText.PLAN_SENSE: ("好調", "絶好調", "集中"),
-    ProduceText.PLAN_LOGIC: ("好印象", "やる気", "元気"),
-    ProduceText.PLAN_ANOMALY: ("全力", "全力値", "強気", "温存", "熱意"),
+    ProduceText.PLAN_SENSE: ProduceText.BATTLE_SENSE_TOKENS,
+    ProduceText.PLAN_LOGIC: ProduceText.BATTLE_LOGIC_TOKENS,
+    ProduceText.PLAN_ANOMALY: ProduceText.BATTLE_ANOMALY_TOKENS,
 }
-_BATTLE_EXTRA_PLAY_TOKENS = ("スキルカード使用数追加", "使用数追加")
-_BATTLE_RECOVERY_TOKENS = ("元気", "体力回復", "消費体力")
-_BATTLE_SETUP_TOKENS = ("好調", "絶好調", "集中", "好印象", "やる気", "熱意", "全力値", "強気", "温存", "パラメータ上昇量増加")
+_BATTLE_EXTRA_PLAY_TOKENS = (
+    ProduceText.SKILL_CARD_USE_COUNT_UP,
+    ProduceText.SKILL_CARD_USE_COUNT_UP_SHORT,
+)
+_BATTLE_RECOVERY_TOKENS = ProduceText.BATTLE_RECOVERY_TOKENS
+_BATTLE_SETUP_TOKENS = ProduceText.BATTLE_SETUP_TOKENS
 _BATTLE_IMMEDIATE_OUTPUT_TOKENS = (
-    "スコア",
+    *ProduceText.BATTLE_IMMEDIATE_OUTPUT_TOKENS,
     "打分",
     "固定打分",
-    "ボーカル",
-    "ダンス",
-    "ビジュアル",
 )
 
 # 空白区域坐标（用于取消卡片选中）
@@ -87,6 +100,10 @@ _CARD_INFO_PANEL_LABELS = (
 # 纯状态驱动轮询：每次短暂 sleep 后检查 YOLO 结果，检测到目标立刻退出
 _DRINK_MODAL_POLL_SLEEP = 0.3   # 轮询间歇（仅防忙等，不作为计时依据）
 _DRINK_MODAL_MAX_POLLS = 20     # 最大轮询次数（足够覆盖慢设备，快设备会提前退出）
+_DRINK_MODAL_STABLE_POLLS = 2   # 目标状态连续命中次数（防止旧帧/残帧误触发）
+_DRINK_MODAL_NAME_MIN_CONF = 0.35
+_DRINK_MODAL_NAME_MIN_SCORE = 1.1
+_DRINK_MODAL_DB_MATCH_MIN_CONF = 0.8
 # 模态头 OCR 排除的文本（标题、按钮等）
 _DRINK_MODAL_HEADER_TEXT = ProduceText.P_DRINK_DETAIL
 _DRINK_MODAL_EXCLUDE_TEXTS = (
@@ -99,6 +116,7 @@ _DRINK_MODAL_EXCLUDE_TEXTS = (
 # ── 饮料模态识别结果缓存 ──
 # 避免每次循环重复弹模态识别同一瓶饮料
 _DRINK_CACHE_KEY = "_lesson_drink_resolved_cache"
+_DRINK_CACHE_SCOPE_KEY = "_lesson_drink_cache_scope"
 _DRINK_CACHE_POS_TOLERANCE = 30  # 像素容差
 _DRINK_MAX_PROBE = 2  # 同一饮料最大模态探查次数
 _DRINK_PROBE_COUNT_KEY = "_lesson_drink_probe_count"
@@ -333,6 +351,120 @@ def _is_battle_empty_hand_observed(app: "AppProcessor") -> bool:
     return False
 
 
+def _count_visible_battle_cards(results: Any) -> int:
+    if results is None:
+        return 0
+    return sum(len(results.filter_by_label(label)) for label in _CARD_LABEL_PRIORITY)
+
+
+def _collect_visible_battle_card_center_ys(results: Any) -> list[int]:
+    if results is None:
+        return []
+    centers: list[int] = []
+    for label in _CARD_LABEL_PRIORITY:
+        for box in results.filter_by_label(label):
+            cy = getattr(box, "cy", None)
+            if isinstance(cy, (int, float)):
+                centers.append(int(cy))
+    centers.sort()
+    return centers
+
+
+def _resolve_battle_card_baseline_tolerance(app: "AppProcessor") -> tuple[int, int]:
+    frame = getattr(app, "latest_frame", None)
+    frame_height = 0
+    if frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 1:
+        frame_height = int(frame.shape[0] or 0)
+    if frame_height <= 0:
+        tolerance = 30
+    else:
+        tolerance = int(frame_height * _BATTLE_CARD_BASELINE_TOLERANCE_RATIO)
+        tolerance = max(
+            _BATTLE_CARD_BASELINE_TOLERANCE_MIN,
+            min(_BATTLE_CARD_BASELINE_TOLERANCE_MAX, tolerance),
+        )
+    stable_delta = max(8, tolerance // 3)
+    return tolerance, stable_delta
+
+
+def _is_battle_card_baseline_settled(
+    center_ys: list[int],
+    *,
+    tolerance: int,
+) -> tuple[bool, int | None]:
+    if not center_ys:
+        return False, None
+    baseline = int(center_ys[len(center_ys) // 2])
+    if len(center_ys) <= 1:
+        return True, baseline
+    outliers = [y for y in center_ys if abs(y - baseline) > tolerance]
+    if not outliers:
+        return True, baseline
+    if len(outliers) == 1:
+        floating_offset = baseline - outliers[0]
+        if floating_offset > 0 and floating_offset <= tolerance * 2:
+            return True, baseline
+    return False, baseline
+
+
+def _wait_battle_card_deal_settle(
+    app: "AppProcessor",
+    *,
+    phase: str,
+    position: str,
+    pending_index: int | None,
+) -> None:
+    """在 idle 首次读手牌前等待到手牌中心点基线稳定，避免发牌动画中途识别。"""
+    if pending_index is not None or not position.endswith("_idle"):
+        return
+    base_centers = _collect_visible_battle_card_center_ys(getattr(app, "latest_results", None))
+    if not base_centers:
+        return
+    observed_max_count = len(base_centers)
+    last_count = None
+    stable_count_streak = 0
+    stable_baseline_streak = 0
+    last_baseline = None
+    for poll_idx in range(_BATTLE_DEAL_SETTLE_MAX_POLLS):
+        center_ys = _collect_visible_battle_card_center_ys(getattr(app, "latest_results", None))
+        if not center_ys:
+            return
+        tolerance, stable_delta = _resolve_battle_card_baseline_tolerance(app)
+        settled, baseline = _is_battle_card_baseline_settled(center_ys, tolerance=tolerance)
+        current_count = len(center_ys)
+        observed_max_count = max(observed_max_count, current_count)
+        if last_count is not None and current_count == last_count:
+            stable_count_streak += 1
+        else:
+            stable_count_streak = 0
+        last_count = current_count
+        if settled and baseline is not None and current_count == observed_max_count:
+            if last_baseline is not None and abs(baseline - last_baseline) <= stable_delta:
+                stable_baseline_streak += 1
+            else:
+                stable_baseline_streak = 0
+            last_baseline = baseline
+        else:
+            stable_baseline_streak = 0
+            last_baseline = baseline if settled else None
+        if (
+            stable_count_streak >= _BATTLE_DEAL_SETTLE_STABLE_COUNT_STREAK
+            and stable_baseline_streak >= _BATTLE_DEAL_SETTLE_STABLE_BASELINE_STREAK
+        ):
+            if poll_idx > 0:
+                logger.debug(
+                    "{}: 发牌基线已稳定 count={} baseline={} tol={}",
+                    phase,
+                    current_count,
+                    last_baseline,
+                    tolerance,
+                )
+            return
+        if poll_idx + 1 >= _BATTLE_DEAL_SETTLE_MAX_POLLS:
+            break
+        time.sleep(_BATTLE_DEAL_SETTLE_SAMPLE_SLEEP)
+
+
 def _confirm_selected_lesson_card(
     app: "AppProcessor",
     ctx: "ProduceContext",
@@ -551,79 +683,119 @@ def _resolve_unidentified_cards_via_info_panel(
 # 饮料模态探查：点击未识别的 P 饮料 → 打开详情模态 → OCR 提取饮料名
 # ─────────────────────────────────────────────────────────────────
 
-def _extract_drink_modal_name(results: Any, frame: Any) -> str | None:
-    """从 Pドリンク詳細 模态中提取饮料名。
+def _looks_like_drink_effect_line(text: str) -> bool:
+    normalized = fullwidth_to_halfwidth(str(text or "")).strip()
+    if not normalized:
+        return True
+    if any(symbol in normalized for symbol in ("+", "＋", "%", "％")) and any(ch.isdigit() for ch in normalized):
+        return True
+    effect_tokens = (
+        ProduceText.GOOD_IMPRESSION,
+        ProduceText.GENKI,
+        ProduceText.YARUKI,
+        ProduceText.STAMINA,
+        ProduceText.PARAMETER,
+        ProduceText.SCORE,
+        ProduceText.NOT_MULTIPLE,
+    )
+    return any(token in normalized for token in effect_tokens)
 
-    模态布局:
-      ┌────────────────────────────────────────┐
-      │      Pドリンク詳細           (header)  │
-      │  [icon]  ジンジャーエール      捨てる   │  ← 饮料名
-      │          強気に変更                     │
-      │          全カ値+1                       │
-      │  キャンセル          使う               │
-      └────────────────────────────────────────┘
 
-    策略:
-      1. 通过 Universal Modal Header 定位模态区域
-      2. 取 header 下方、Cancel 按钮上方的区域做 OCR
-      3. 排除 header 文本、按钮文本等干扰
-      4. 排除 P Drink 图标右侧短文字（如 "捨てる"）
-      5. 按 y 排序取第一行有效文本 = 饮料名
+def _score_drink_modal_name_candidate(
+    *,
+    text: str,
+    item: Any,
+    crop_w: int,
+    crop_h: int,
+) -> float:
+    import re
 
-    Returns:
-        标准化后的饮料名字符串，未检测到模态时返回 None。
-    """
+    center_y_ratio = (float(item.y) + float(item.h) * 0.5) / max(float(crop_h), 1.0)
+    center_x_ratio = (float(item.x) + float(item.w) * 0.5) / max(float(crop_w), 1.0)
+    conf = float(getattr(item, "confidence", 1.0) or 1.0)
+
+    score = 0.0
+    if center_y_ratio <= 0.58:
+        score += 2.4
+    else:
+        score -= 1.2
+    if 0.12 <= center_x_ratio <= 0.76:
+        score += 1.1
+    else:
+        score -= 0.5
+    if re.search(r"[ァ-ヶぁ-ん一-龯]", text):
+        score += 1.3
+    else:
+        score -= 0.8
+    if any(ch.isdigit() for ch in text) or any(symbol in text for symbol in ("+", "＋", "%", "％")):
+        score -= 2.0
+    if _looks_like_drink_effect_line(text):
+        score -= 2.2
+    if len(text) > 14:
+        score -= 1.0
+    score += min(max(conf, 0.0), 1.0) * 0.8
+    return score
+
+
+def _extract_drink_modal_name_candidates(
+    results: Any,
+    frame: Any,
+    *,
+    debugger: Any = None,
+) -> list[str]:
+    """从 Pドリンク詳細 模态中提取候选饮料名（按置信排序）。"""
     from src.utils.string_tools import normalize_ocr_jp
     from src.core.inference.ocr_engine import OCRService
     import re
 
-    # 1. 检测模态头
     modal_headers = list(results.filter_by_label(BaseUILabels.MODAL_HEADER))
     if not modal_headers:
-        return None
+        return []
     header = modal_headers[0]
 
-    # 2. 确定 OCR 区域: 模态头下方 → 取消按钮上方
     cancel_boxes = list(results.filter_by_label(ProducerLabels.CANCEL_BUTTON))
     fh, fw = frame.shape[:2]
-
-    # 上界 = header 底部
-    region_y1 = int(header.h)  # Yolo_Box.h = y2
-    # 下界 = Cancel 按钮顶部（如果找到），否则使用屏幕下方 80%
+    region_y1 = int(header.h)
     region_y2 = int(cancel_boxes[0].y) if cancel_boxes else int(fh * 0.8)
-    # 水平边界: 用模态头的 x 范围（稍微扩展）
     region_x1 = max(0, int(header.x) - 10)
     region_x2 = min(fw, int(header.w) + 10)
-
     if region_y2 <= region_y1 + 20 or region_x2 <= region_x1 + 20:
-        return None
+        return []
+
+    if debugger is not None:
+        debugger.add_box(
+            region_x1,
+            region_y1,
+            region_x2,
+            region_y2,
+            label="battle_drink_modal_ocr",
+            color=(120, 190, 255),
+            alpha=0.1,
+            duration=2.5,
+            font_size=16,
+        )
 
     modal_crop = frame[region_y1:region_y2, region_x1:region_x2]
-
-    # 3. OCR 模态内容区域
-    ocr_svc = OCRService()
-    ocr_results = ocr_svc.ocr(modal_crop)
+    ocr_results = OCRService().ocr(modal_crop)
     if not ocr_results or len(ocr_results) == 0:
-        return None
+        return []
 
-    # 4. 过滤干扰文本，按 y 排序取第一个有效文本
     crop_w = region_x2 - region_x1
+    crop_h = region_y2 - region_y1
     sorted_items = sorted(ocr_results, key=lambda r: r.y)
+    ranked: list[tuple[float, str, Any]] = []
 
     for item in sorted_items:
         text = str(item.text or "").strip()
         if not text or len(text) < 2:
             continue
-        # 过滤低置信度的 OCR 噪点（饮料图标区域容易产生乱码）
         item_conf = float(getattr(item, "confidence", 1.0) or 1.0)
-        if item_conf < 0.5:
+        if item_conf < _DRINK_MODAL_NAME_MIN_CONF:
             logger.debug("battle: 饮料模态排除低置信度文本: \"{}\" conf={:.2f}", text, item_conf)
             continue
-        # 排除已知的 UI 文本
         if any(exc in text for exc in _DRINK_MODAL_EXCLUDE_TEXTS):
             logger.debug("battle: 饮料模态排除 UI 文本: \"{}\"", text)
             continue
-        # 排除靠右边距且较短的文本（"捨てる" 按钮区域）
         right_edge = item.x + item.w
         right_margin = crop_w - right_edge
         if right_margin < crop_w * 0.06 and item.w < crop_w * 0.15:
@@ -632,21 +804,58 @@ def _extract_drink_modal_name(results: Any, frame: Any) -> str | None:
                 text, right_margin,
             )
             continue
-        # 找到有效的饮料名
+
         cleaned = fullwidth_to_halfwidth(text)
         cleaned = normalize_ocr_jp(cleaned)
         cleaned = re.sub(
-            r'^[\|｜\[\]「」【】\s]+|[\|｜\[\]「」【】\s]+$', '', cleaned,
+            r'^[\|｜\[\]「」【】\s]+|[\|｜\[\]「」【】\s]+$',
+            "",
+            cleaned,
         ).strip()
-        if cleaned:
-            if cleaned != text:
-                logger.debug(
-                    "battle: 饮料模态 OCR 原始=\"{}\" → 标准化=\"{}\"",
-                    text, cleaned,
-                )
-            return cleaned
+        if not cleaned:
+            continue
+        if _looks_like_drink_effect_line(cleaned):
+            continue
 
-    return None
+        candidate_score = _score_drink_modal_name_candidate(
+            text=cleaned,
+            item=item,
+            crop_w=crop_w,
+            crop_h=crop_h,
+        )
+        if candidate_score < _DRINK_MODAL_NAME_MIN_SCORE:
+            continue
+        ranked.append((candidate_score, cleaned, item))
+        if cleaned != text:
+            logger.debug(
+                "battle: 饮料模态 OCR 原始=\"{}\" → 标准化=\"{}\"",
+                text, cleaned,
+            )
+
+    if not ranked:
+        return []
+
+    ranked.sort(key=lambda entry: entry[0], reverse=True)
+    names: list[str] = []
+    seen: set[str] = set()
+    for score, name, item in ranked:
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+        if debugger is not None and len(names) <= 2:
+            debugger.add_box(
+                region_x1 + int(item.x),
+                region_y1 + int(item.y),
+                region_x1 + int(item.x + item.w),
+                region_y1 + int(item.y + item.h),
+                label=f"drink_name:{name}({score:.2f})",
+                color=(120, 255, 160),
+                alpha=0.16,
+                duration=2.5,
+                font_size=16,
+            )
+    return names
 
 
 def _cancel_drink_modal(app: "AppProcessor") -> bool:
@@ -656,22 +865,74 @@ def _cancel_drink_modal(app: "AppProcessor") -> bool:
     确认 MODAL_HEADER 消失即返回。不依赖固定时间或帧率。
     """
     clicked = False
+    hidden_streak = 0
     for _ in range(_DRINK_MODAL_MAX_POLLS):
         time.sleep(_DRINK_MODAL_POLL_SLEEP)
         results = app.latest_results
-        has_modal = bool(list(results.filter_by_label(BaseUILabels.MODAL_HEADER)))
-        if not has_modal and clicked:
-            logger.debug("battle: 饮料模态已确认关闭")
-            return True
+        has_modal = _is_drink_modal_visible(results)
+        if not has_modal:
+            hidden_streak += 1
+            if hidden_streak >= _DRINK_MODAL_STABLE_POLLS:
+                if clicked:
+                    logger.debug("battle: 饮料模态已确认关闭")
+                return True
+            continue
+        hidden_streak = 0
         cancel_boxes = list(results.filter_by_label(ProducerLabels.CANCEL_BUTTON))
         if cancel_boxes:
             app.device.click_element(cancel_boxes[0])
             logger.debug("battle: 饮料模态点击 キャンセル 关闭")
             clicked = True
-        elif not has_modal:
-            # 既没模态也没取消按钮，说明本来就没打开或已关闭
-            return True
     logger.warning("battle: 饮料模态关闭轮询 {} 次仍未确认，可能残留", _DRINK_MODAL_MAX_POLLS)
+    return False
+
+
+def _is_drink_modal_visible(
+    results: Any,
+    *,
+    require_action_button: bool = False,
+) -> bool:
+    """判断当前是否处于饮料详情模态。"""
+    if results is None:
+        return False
+    headers = list(results.filter_by_label(BaseUILabels.MODAL_HEADER))
+    if not headers:
+        return False
+    if not require_action_button:
+        return True
+    cancel_boxes = list(results.filter_by_label(ProducerLabels.CANCEL_BUTTON))
+    confirm_boxes = list(results.filter_by_label(ProducerLabels.CONFIRM_BUTTON))
+    return bool(cancel_boxes or confirm_boxes)
+
+
+def _wait_drink_modal_visibility(
+    app: "AppProcessor",
+    *,
+    expected_visible: bool,
+    require_action_button: bool = False,
+    reason: str = "",
+) -> bool:
+    """等待饮料模态到达目标可见状态，并要求连续稳定若干帧。"""
+    stable_streak = 0
+    for _ in range(_DRINK_MODAL_MAX_POLLS):
+        time.sleep(_DRINK_MODAL_POLL_SLEEP)
+        results = app.latest_results
+        visible = _is_drink_modal_visible(
+            results,
+            require_action_button=require_action_button if expected_visible else False,
+        )
+        if visible == expected_visible:
+            stable_streak += 1
+            if stable_streak >= _DRINK_MODAL_STABLE_POLLS:
+                return True
+        else:
+            stable_streak = 0
+    logger.debug(
+        "battle: 等待饮料模态状态超时 expected_visible={} require_action_button={} reason={}",
+        expected_visible,
+        require_action_button,
+        reason,
+    )
     return False
 
 
@@ -682,35 +943,35 @@ def _confirm_drink_usage_modal(app: "AppProcessor") -> bool:
     确认 MODAL_HEADER 消失即返回。不依赖固定时间或帧率。
     """
     # 第一阶段：等待模态出现
-    modal_appeared = False
-    for _ in range(_DRINK_MODAL_MAX_POLLS):
-        time.sleep(_DRINK_MODAL_POLL_SLEEP)
-        results = app.latest_results
-        has_modal = bool(list(results.filter_by_label(BaseUILabels.MODAL_HEADER)))
-        if has_modal:
-            modal_appeared = True
-            break
-    if not modal_appeared:
+    if not _wait_drink_modal_visibility(
+        app,
+        expected_visible=True,
+        require_action_button=True,
+        reason="drink_use_wait_open",
+    ):
         logger.warning("battle: 饮料使用模态等待超时，未检测到模态")
         return False
 
     # 第二阶段：点击确认按钮并等待模态关闭
     clicked = False
+    hidden_streak = 0
     for _ in range(_DRINK_MODAL_MAX_POLLS):
         time.sleep(_DRINK_MODAL_POLL_SLEEP)
         results = app.latest_results
-        has_modal = bool(list(results.filter_by_label(BaseUILabels.MODAL_HEADER)))
-        if not has_modal and clicked:
-            logger.debug("battle: 饮料使用模态已确认关闭")
-            return True
+        has_modal = _is_drink_modal_visible(results)
+        if not has_modal:
+            hidden_streak += 1
+            if hidden_streak >= _DRINK_MODAL_STABLE_POLLS:
+                if clicked:
+                    logger.debug("battle: 饮料使用模态已确认关闭")
+                return True
+            continue
+        hidden_streak = 0
         confirm_boxes = list(results.filter_by_label(ProducerLabels.CONFIRM_BUTTON))
         if confirm_boxes:
             app.device.click_element(confirm_boxes[0])
             logger.debug("battle: 饮料使用模态点击确认（使う）")
             clicked = True
-        elif not has_modal:
-            # 模态已消失（可能被游戏自动处理）
-            return True
     logger.warning("battle: 饮料使用确认轮询 {} 次仍未关闭，可能残留", _DRINK_MODAL_MAX_POLLS)
     return clicked
 
@@ -722,8 +983,28 @@ def _drink_pos_key(box: Any) -> tuple[int, int]:
     return (cx, cy)
 
 
-def _apply_drink_cache(ctx: "ProduceContext", candidates: list[LessonCardCandidate]) -> None:
+def _drink_cache_scope(ctx: "ProduceContext", phase: str) -> tuple[str, int]:
+    return (str(phase or ""), int(ctx.current_week or -1))
+
+
+def _ensure_drink_cache_scope(ctx: "ProduceContext", *, phase: str) -> None:
+    scope = _drink_cache_scope(ctx, phase)
+    previous_scope = ctx.handler_state.get(_DRINK_CACHE_SCOPE_KEY)
+    if previous_scope == scope:
+        return
+    ctx.handler_state[_DRINK_CACHE_SCOPE_KEY] = scope
+    ctx.handler_state[_DRINK_CACHE_KEY] = {}
+    ctx.handler_state[_DRINK_PROBE_COUNT_KEY] = {}
+
+
+def _apply_drink_cache(
+    ctx: "ProduceContext",
+    candidates: list[LessonCardCandidate],
+    *,
+    phase: str,
+) -> None:
     """从 handler_state 缓存中恢复之前模态识别的饮料结果。"""
+    _ensure_drink_cache_scope(ctx, phase=phase)
     cache: dict = ctx.handler_state.get(_DRINK_CACHE_KEY, {})
     if not cache:
         return
@@ -744,8 +1025,14 @@ def _apply_drink_cache(ctx: "ProduceContext", candidates: list[LessonCardCandida
         logger.debug("lesson: 从缓存恢复饮料 #{} → db_id={}", cand.index, cand.db_id)
 
 
-def _save_drink_cache(ctx: "ProduceContext", candidates: list[LessonCardCandidate]) -> None:
+def _save_drink_cache(
+    ctx: "ProduceContext",
+    candidates: list[LessonCardCandidate],
+    *,
+    phase: str,
+) -> None:
     """将已识别的饮料写入缓存。"""
+    _ensure_drink_cache_scope(ctx, phase=phase)
     cache: dict = ctx.handler_state.setdefault(_DRINK_CACHE_KEY, {})
     for cand in candidates:
         if not cand.db_id or cand.label != ProducerLabels.P_DRINK:
@@ -816,19 +1103,22 @@ def _resolve_unidentified_drinks_via_modal(
     for candidate in unresolved:
         probe_count = _increment_drink_probe(ctx, candidate.box)
         try:
+            # 先确认前一个模态已稳定关闭，避免把旧模态内容误当成当前饮料。
+            _wait_drink_modal_visibility(
+                app,
+                expected_visible=False,
+                reason=f"drink_probe_pre_close#{candidate.index}",
+            )
             # 单击饮料 → 轮询等待「Pドリンク詳細」模态出现
             app.device.click_element(candidate.box)
 
             # ── 轮询等待模态出现（状态驱动，不依赖固定时间/帧率） ──
-            modal_appeared = False
-            for poll_i in range(_DRINK_MODAL_MAX_POLLS):
-                time.sleep(_DRINK_MODAL_POLL_SLEEP)
-                results = app.latest_results
-                if results and list(results.filter_by_label(BaseUILabels.MODAL_HEADER)):
-                    modal_appeared = True
-                    break
-
-            if not modal_appeared:
+            if not _wait_drink_modal_visibility(
+                app,
+                expected_visible=True,
+                require_action_button=True,
+                reason=f"drink_probe_wait_open#{candidate.index}",
+            ):
                 logger.debug(
                     "battle: P 饮料 #{} 点击后 {} 次轮询未检测到模态，跳过",
                     candidate.index, _DRINK_MODAL_MAX_POLLS,
@@ -843,9 +1133,13 @@ def _resolve_unidentified_drinks_via_modal(
                 _cancel_drink_modal(app)
                 continue
 
-            # 提取模态中的饮料名
-            modal_name = _extract_drink_modal_name(results, frame)
-            if modal_name is None:
+            # 提取模态中的饮料名候选（按置信度排序）
+            modal_names = _extract_drink_modal_name_candidates(
+                results,
+                frame,
+                debugger=getattr(app, "debug_tools", None),
+            )
+            if not modal_names:
                 logger.debug(
                     "battle: P 饮料 #{} 模态 OCR 未提取到饮料名",
                     candidate.index,
@@ -853,24 +1147,33 @@ def _resolve_unidentified_drinks_via_modal(
                 _cancel_drink_modal(app)
                 continue
 
-            # 用 OCR 提取的饮料名重新走解析管线（CLIP + 数据库匹配）
-            resolution = resolve_produce_drink_identity(
-                modal_name,
-                app=app,
-                box=candidate.box,
-                index=candidate.index,
-            )
-            _apply_resolution(candidate, resolution)
+            # 用候选名逐个重走解析管线，只有匹配置信足够高才接受
+            resolved_name = ""
+            resolved_resolution = None
+            for modal_name in modal_names:
+                resolution = resolve_produce_drink_identity(
+                    modal_name,
+                    app=app,
+                    box=candidate.box,
+                    index=candidate.index,
+                    min_ocr_confidence=_DRINK_MODAL_DB_MATCH_MIN_CONF,
+                )
+                if resolution.db_id:
+                    resolved_name = modal_name
+                    resolved_resolution = resolution
+                    break
 
-            if candidate.db_id:
+            if resolved_resolution is not None:
+                _apply_resolution(candidate, resolved_resolution)
                 drink_image = getattr(candidate.box, "frame", None)
                 if drink_image is not None:
                     _learn_drink_clip_from_db_id(app, drink_image, candidate.db_id)
                 logger.info(
                     "battle: P 饮料 #{} 通过模态识别成功: \"{}\" → db_id={}",
-                    candidate.index, modal_name, candidate.db_id,
+                    candidate.index, resolved_name, candidate.db_id,
                 )
             else:
+                modal_name = modal_names[0]
                 if probe_count >= _DRINK_MAX_PROBE:
                     logger.warning(
                         "battle: P 饮料 #{} 已达最大探查次数({})，OCR=\"{}\" 仍未匹配，跳过后续探查",
@@ -972,6 +1275,7 @@ def _collect_battle_drink_candidates(
     phase: str,
     start_index: int,
 ) -> List[LessonCardCandidate]:
+    _ensure_drink_cache_scope(ctx, phase=phase)
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0:
         return []
@@ -999,6 +1303,7 @@ def _collect_battle_drink_candidates(
             app=app,
             box=box,
             index=index,
+            allow_ocr_fallback=False,
         )
         metadata = dict(resolution.metadata or {})
         metadata["candidate_type"] = "battle_p_drink"
@@ -1025,11 +1330,11 @@ def _collect_battle_drink_candidates(
             )
         )
     # 从缓存恢复之前模态识别的饮料结果
-    _apply_drink_cache(ctx, candidates)
+    _apply_drink_cache(ctx, candidates, phase=phase)
     # 对 CLIP + OCR + 缓存均未识别的饮料，点击打开模态读取饮料名后匹配数据库
     _resolve_unidentified_drinks_via_modal(app, ctx, candidates)
     # 将新识别的结果写入缓存
-    _save_drink_cache(ctx, candidates)
+    _save_drink_cache(ctx, candidates, phase=phase)
     return candidates
 
 
@@ -1113,7 +1418,10 @@ def _select_forced_battle_drink_index(
     description = str(best_drink.get("description") or best_drink.get("label") or "")
     recovery_drink = any(
         token in description
-        for token in ("元気", "体力回復", "消費体力", "ブロック")
+        for token in (
+            *ProduceText.BATTLE_RECOVERY_TOKENS,
+            ProduceText.BLOCK,
+        )
     )
 
     if play_limit_remaining <= 0 and best_score > 0:
@@ -1155,9 +1463,12 @@ def _battle_has_immediate_output(text: str) -> bool:
     normalized = str(text or "")
     if any(token in normalized for token in _BATTLE_IMMEDIATE_OUTPUT_TOKENS):
         return True
-    if "パラメータ上昇量増加" in normalized:
-        normalized = normalized.replace("パラメータ上昇量増加", "")
-    return "パラメータ" in normalized and "上昇" in normalized
+    if ProduceText.PARAMETER_UP_INCREASE in normalized:
+        normalized = normalized.replace(ProduceText.PARAMETER_UP_INCREASE, "")
+    return (
+        ProduceText.PARAMETER in normalized
+        and ProduceText.INCREASE in normalized
+    )
 
 
 def _score_battle_payload(
@@ -1499,9 +1810,14 @@ def _verify_card_played(app: "AppProcessor", timeout: float = 1.5) -> bool:
     只有真正离开卡牌信息面板时才认为出牌成功。
     """
     deadline = time.monotonic() + timeout
+    stable_clear_polls = 0
     time.sleep(0.35)
     while time.monotonic() < deadline:
-        results = app.latest_results
+        results = getattr(app, "latest_results", None)
+        if results is None:
+            stable_clear_polls = 0
+            time.sleep(_VERIFY_CARD_PLAYED_POLL_SLEEP)
+            continue
         if results.exists_label(ProducerLabels.MODAL_HEADER):
             return False
         if (
@@ -1509,9 +1825,19 @@ def _verify_card_played(app: "AppProcessor", timeout: float = 1.5) -> bool:
             or results.exists_label(ProducerLabels.CANCEL_BUTTON)
         ):
             return False
-        if not results.exists_label(ProducerLabels.SKILL_CARD_INFO):
+        info_visible = (
+            results.exists_label(ProducerLabels.SKILL_CARD_INFO)
+            or results.exists_label(ProducerLabels.PC_ACTION_INFO)
+            or results.exists_label(BaseUILabels.PRODUCT_CARD_SELECTED)
+        )
+        if info_visible:
+            stable_clear_polls = 0
+            time.sleep(_VERIFY_CARD_PLAYED_POLL_SLEEP)
+            continue
+        stable_clear_polls += 1
+        if stable_clear_polls >= _VERIFY_CARD_PLAYED_STABLE_CLEAR_POLLS:
             return True
-        time.sleep(0.2)
+        time.sleep(_VERIFY_CARD_PLAYED_POLL_SLEEP)
     return False
 
 
@@ -1675,6 +2001,12 @@ def execute_lesson_step(
     注意：手牌没有真正的“选中态”业务语义，正确交互是双击同一张牌直接出牌。
     这里把 lesson_selected / exam_selected 仅视为“第一击后信息面板仍停留在场上”的恢复态。
     """
+    _wait_battle_card_deal_settle(
+        app,
+        phase=phase,
+        position=position,
+        pending_index=ctx.pending_lesson_card_index,
+    )
     candidates = collect_lesson_card_candidates(app, ctx, phase=phase, position=position)
     empty_hand_observed = _is_battle_empty_hand_observed(app)
     ctx.observability_state = {

@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 
 class ConfirmAndStartStep(ProduceStep):
+    """处理开跑前残留弹窗与加成道具，然后正式启动培育。"""
+
     step_name = "confirm_and_start"
     skip_on_resume = True
 

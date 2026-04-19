@@ -88,8 +88,8 @@ class WebSocketService {
 
   send(action: string, data: any = {}) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      const send_action: string = `${WS_ACTION_HEAD}:${action}`
-      this.ws.send(JSON.stringify({ send_action, data }))
+      const formattedAction: string = `${WS_ACTION_HEAD}:${action}`
+      this.ws.send(JSON.stringify({ action: formattedAction, data }))
     }
   }
 

@@ -30,12 +30,12 @@ debug_tools = DebugTools()
 
 def __navigate_to_page(app: "AppProcessor") -> bool:
     """检查页面"""
-    while True:
-        if app.game_utils.update_current_location() != GamePageTypes.SUB_MENU.PRODUCER_ILLUSTRATED:
-            message_tools.info("任务已挂起，请手动切换到图鉴页面", 30)
-            app.task_queue.suspend_running_task()
-        else:
-            break
+    current_location = app.game_utils.update_current_location()
+    while current_location != GamePageTypes.SUB_MENU.PRODUCER_ILLUSTRATED:
+        logger.warning(f"Skill storage refresh requires P図鑑 page, current location: {current_location}")
+        message_tools.info("任务已挂起，请手动切换到图鉴页面", 30)
+        app.task_queue.suspend_running_task()
+        current_location = app.game_utils.update_current_location()
 
     if app.game_utils.wait_for_label(BaseUILabels.TAB_BAR):
         tabbar = TabBar(app.latest_results.filter_by_label(BaseUILabels.TAB_BAR).first())
@@ -115,7 +115,8 @@ def __get_swipe_range(card_list, width) -> Tuple[int, int]:
 
 def refresh_skill_storage(app: "AppProcessor"):
     """主任务入口函数"""
-    if not __navigate_to_page(app): return False
+    if not __navigate_to_page(app):
+        return False
     if not __validate_environment(app): return False
 
     os.makedirs(DebugPath.NoValidSkillCardInfo, exist_ok=True)

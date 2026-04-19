@@ -20,6 +20,7 @@ class ModalText:
         INFO_FETCH_FAILED = "情報取得に失敗"
         RENTAL_AVAILABLE = "レンタル可能"
         RENTAL_CONFIRMATION = "レンタル確認"
+        MISSION_PASS_PT_ACQUIRED = "ミッションパスPt獲得"
 
     class BODY:
         class CONNECTION_ERROR_ID:

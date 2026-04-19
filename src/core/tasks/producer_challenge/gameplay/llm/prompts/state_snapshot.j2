@@ -66,7 +66,7 @@
 {% endif %}
 
 ### 考试决策焦点
-- 过线压力: 剩余{{ remaining if remaining is not none else '未知' }}回合{% if clear_achieved is not none %}{% if clear_achieved %}，CLEAR 達成済み，PERFECT まで残り {{ remaining_to_perfect }}{% else %}，CLEAR まで残り {{ remaining_to_clear }}{% endif %}{% elif target %}，分数{{ score }}/{{ target }} | CLEAR まで {{ [target - score, 0]|max }}{% endif %}{% if exam_ranking %}，当前排名第{{ exam_ranking }}位{% endif %}{{ '' }}
+- 过线压力: 剩余{{ remaining if remaining is not none else '未知' }}回合{% if clear_achieved is not none %}{% if clear_achieved %}，CLEAR 達成済み，PERFECT まで残り {{ remaining_to_perfect }}{% else %}，CLEAR まで残り {{ remaining_to_clear }}{% endif %}{% elif target %}，分数{{ score }}/{{ target }}{% endif %}{% if exam_ranking %}，当前排名第{{ exam_ranking }}位{% endif %}{{ '' }}
 - 本回合动作窗口: 剩余スキルカード使用数={{ play_limit_remaining if play_limit_remaining is not none else '未知' }}{% if play_limit_total is not none %}/{{ play_limit_total }}{% endif %}{% if drinks %}，另有{{ drinks|length }}瓶饮料可比较{% endif %}{{ '' }}
 - 火力储备: 手牌={{ offensive_counts.hand }}, 牌库={{ offensive_counts.deck }}, 弃牌={{ offensive_counts.grave }}, 保留={{ offensive_counts.hold }}
 - 资源兑现提醒: 剩余回合越少，纯好印象 / 集中 / 元気 / 好調铺垫越需要确认后续是否还有火力牌可以兑现

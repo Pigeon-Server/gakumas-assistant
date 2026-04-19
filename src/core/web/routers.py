@@ -3,10 +3,10 @@ import os.path
 from copy import copy
 
 import adbutils
-import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.websockets import WebSocketState
 
 from src.core.services import game_asset_service
 
@@ -66,13 +66,14 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         await ws_manager.connect(websocket)
-        await asyncio.sleep(1)
         try:
-            await ws_manager.send_action(
+            initial_sent = await ws_manager.send_action(
                 websocket,
                 WebsocketActions.App.StatusChanged,
                 WebSocketData(message=processor.build_app_status()),
             )
+            if not initial_sent:
+                return
             while True:
                 data = await websocket.receive_json()
                 if not data.get("action"):
@@ -84,7 +85,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         except WebSocketDisconnect:
             pass
         except Exception as e:
-            logger.error(f"Websocket Error: {e}")
+            logger.exception(f"Websocket Error: {e}")
         finally:
             ws_manager.disconnect(websocket)
 

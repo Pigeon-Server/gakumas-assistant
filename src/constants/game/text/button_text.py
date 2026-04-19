@@ -31,6 +31,8 @@ class ButtonText:
         PACK = "パック"  # 套装 / 礼包 / Pack
         DAILY_EXCHANGE = "デイリー交換所"  # 每日兑换所 / Daily Exchange Shop
         LIST_UPDATE = "リスト更新"  # 刷新购物列表
+        KEEP_QUANTITY = "変更しない"  # 数量弹窗：保持当前数量
+        SET_MAX_QUANTITY = "最大値にする"  # 数量弹窗：改为最大值
 
     class WORK:
         class TIME:

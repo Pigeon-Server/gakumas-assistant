@@ -22,6 +22,13 @@ class ONNXYoloModelMeta:
     names: Dict[int, str]
     colors: Dict[int, Tuple[int, int, int]]
 
+
+@dataclass
+class ONNXExportMeta:
+    version: str | None
+    args: Dict[str, object]
+    end2end: bool
+
 @dataclass
 class ONNXYoloResult:
     boxes: np.ndarray
@@ -128,11 +135,14 @@ class ONNXYoloClassifyResult:
 
 class YoloModelFromONNX:
     _model_meta: ONNXYoloModelMeta
+    _export_meta: ONNXExportMeta
     _engine: ort.InferenceSession
     _model_dir: str
     _model_file: str
     _model_name: str
     _model_input_name: str
+    _output_layout: str
+    _output_shape: Tuple[object, ...]
     def __init__(self, model_path: str) -> None:
         """
         初始化ONNX模型
@@ -145,6 +155,15 @@ class YoloModelFromONNX:
         self._load_model_meta()
         self._engine = DMLManager.create_dml_session(model_path)
         self._model_input_name = self._engine.get_inputs()[0].name
+        self._output_shape = tuple(self._engine.get_outputs()[0].shape)
+        self._output_layout = self._detect_output_layout(self._output_shape)
+        logger.debug(
+            "Loaded ONNX model {} with Ultralytics {} output {} -> {}",
+            self._model_name,
+            self._export_meta.version or "unknown",
+            self._output_shape,
+            self._output_layout,
+        )
 
     @staticmethod
     def _pastel_palette(n: int):
@@ -163,12 +182,235 @@ class YoloModelFromONNX:
             meta = json.load(f)
         imgsz = json.loads(meta["imgsz"])
         names_mapping = ast.literal_eval(meta["names"])
+        raw_args = meta.get("args", "{}")
+        try:
+            export_args = ast.literal_eval(raw_args) if raw_args else {}
+        except (ValueError, SyntaxError):
+            export_args = {}
         palette_255 = self._pastel_palette(len(names_mapping))
         color_mapping = {
             name_id: color
             for name_id, color in zip(names_mapping.keys(), palette_255)
         }
         self._model_meta = ONNXYoloModelMeta(imgsz, names_mapping, color_mapping)
+        self._export_meta = ONNXExportMeta(
+            version=meta.get("version"),
+            args=export_args if isinstance(export_args, dict) else {},
+            end2end=self._parse_metadata_bool(meta.get("end2end")),
+        )
+
+    @staticmethod
+    def _parse_metadata_bool(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _parse_version_tuple(version: str | None) -> Tuple[int, ...]:
+        if not version:
+            return ()
+        parts: list[int] = []
+        for part in str(version).split("."):
+            digits = "".join(ch for ch in part if ch.isdigit())
+            if not digits:
+                break
+            parts.append(int(digits))
+        return tuple(parts)
+
+    def _detect_output_layout(self, output_shape: Tuple[object, ...]) -> str:
+        if not output_shape:
+            return "legacy"
+        if len(output_shape) >= 2 and output_shape[-1] == 6:
+            return "standalone"
+        if len(output_shape) >= 2 and output_shape[1] == 6:
+            return "standalone"
+
+        version_tuple = self._parse_version_tuple(self._export_meta.version)
+        if version_tuple >= (8, 4, 38):
+            if self._export_meta.args.get("nms") is True:
+                return "standalone"
+        return "legacy"
+
+    @staticmethod
+    def _empty_result(input_image: np.ndarray, model_meta: ONNXYoloModelMeta) -> ONNXYoloResult:
+        return ONNXYoloResult(
+            np.empty((0, 4), dtype=np.float32),
+            np.empty((0,), dtype=np.float32),
+            np.empty((0,), dtype=np.int64),
+            model_meta,
+            input_image,
+        )
+
+    @staticmethod
+    def _flatten_nms_keep(keep) -> list[int]:
+        if keep is None:
+            return []
+        keep_array = np.asarray(keep)
+        if keep_array.size == 0:
+            return []
+        return [int(index) for index in keep_array.reshape(-1).tolist()]
+
+    @staticmethod
+    def _to_box_xywh_from_xyxy(
+            x1: float,
+            y1: float,
+            x2: float,
+            y2: float,
+            ratio: float,
+            dw: float,
+            dh: float,
+    ) -> list[float] | None:
+        left = (x1 - dw) / ratio
+        top = (y1 - dh) / ratio
+        right = (x2 - dw) / ratio
+        bottom = (y2 - dh) / ratio
+        width = max(0.0, right - left)
+        height = max(0.0, bottom - top)
+        if width <= 0 or height <= 0:
+            return None
+        return [left, top, width, height]
+
+    @staticmethod
+    def _normalize_standalone_rows(results: np.ndarray) -> np.ndarray:
+        outputs = np.squeeze(results[0])
+        if outputs.ndim == 1:
+            outputs = outputs.reshape(1, -1)
+        if outputs.ndim != 2:
+            raise ValueError(f"Unsupported standalone output rank: {outputs.ndim}")
+        if outputs.shape[-1] == 6:
+            return outputs
+        if outputs.shape[0] == 6:
+            return outputs.T
+        raise ValueError(f"Unsupported standalone output shape: {outputs.shape}")
+
+    def _postprocess_standalone(
+            self,
+            input_image: np.ndarray,
+            results: np.ndarray,
+            conf_threshold: float,
+            ratio: float,
+            dw: float,
+            dh: float,
+    ) -> ONNXYoloResult:
+        rows = self._normalize_standalone_rows(results)
+        boxes: list[list[float]] = []
+        scores: list[float] = []
+        class_ids: list[int] = []
+
+        for row in rows:
+            score = float(row[4])
+            if score < conf_threshold:
+                continue
+            box = self._to_box_xywh_from_xyxy(
+                float(row[0]),
+                float(row[1]),
+                float(row[2]),
+                float(row[3]),
+                ratio,
+                dw,
+                dh,
+            )
+            if box is None:
+                continue
+            boxes.append(box)
+            scores.append(score)
+            class_ids.append(int(round(float(row[5]))))
+
+        if not boxes:
+            return self._empty_result(input_image, self._model_meta)
+        return ONNXYoloResult(
+            np.asarray(boxes, dtype=np.float32),
+            np.asarray(scores, dtype=np.float32),
+            np.asarray(class_ids, dtype=np.int64),
+            self._model_meta,
+            input_image,
+        )
+
+    def _postprocess_legacy(
+            self,
+            input_image: np.ndarray,
+            results: np.ndarray,
+            conf_threshold: float,
+            iou_threshold: float,
+            ratio: float,
+            dw: float,
+            dh: float,
+            agnostic_nms_groups: list[set[int]] | None = None,
+    ) -> ONNXYoloResult:
+        outputs = np.transpose(np.squeeze(results[0]))
+        if outputs.ndim == 1:
+            outputs = outputs.reshape(1, -1)
+        if outputs.size == 0:
+            return self._empty_result(input_image, self._model_meta)
+
+        rows = outputs.shape[0]
+        boxes = []
+        scores = []
+        class_ids = []
+        for i in range(rows):
+            classes_scores = outputs[i][4:]
+            max_score = np.amax(classes_scores)
+
+            if max_score >= conf_threshold:
+                class_id = np.argmax(classes_scores)
+                x, y, w, h = outputs[i][0], outputs[i][1], outputs[i][2], outputs[i][3]
+
+                left = x - w / 2
+                top = y - h / 2
+
+                left = (left - dw) / ratio
+                top = (top - dh) / ratio
+                width = w / ratio
+                height = h / ratio
+
+                class_ids.append(class_id)
+                scores.append(max_score)
+                boxes.append([left, top, width, height])
+
+        if not boxes:
+            return self._empty_result(input_image, self._model_meta)
+
+        nms_boxes = []
+        nms_scores = []
+        nms_class_ids = []
+
+        agnostic_map: dict[int, int] = {}
+        if agnostic_nms_groups:
+            for gi, group in enumerate(agnostic_nms_groups):
+                for cid in group:
+                    agnostic_map[cid] = gi
+
+        grouped: dict[tuple, list[int]] = {}
+        for i, cid in enumerate(class_ids):
+            if cid in agnostic_map:
+                key = ("agnostic", agnostic_map[cid])
+            else:
+                key = ("class", int(cid))
+            grouped.setdefault(key, []).append(i)
+
+        for indices_in_group in grouped.values():
+            group_boxes = [boxes[i] for i in indices_in_group]
+            group_scores = [scores[i] for i in indices_in_group]
+            group_class_ids = [class_ids[i] for i in indices_in_group]
+
+            keep = self._flatten_nms_keep(
+                cv2.dnn.NMSBoxes(group_boxes, group_scores, conf_threshold, iou_threshold)
+            )
+            nms_boxes.extend([group_boxes[i] for i in keep])
+            nms_scores.extend([group_scores[i] for i in keep])
+            nms_class_ids.extend([group_class_ids[i] for i in keep])
+
+        if not nms_boxes:
+            return self._empty_result(input_image, self._model_meta)
+        return ONNXYoloResult(
+            np.asarray(nms_boxes, dtype=np.float32),
+            np.asarray(nms_scores, dtype=np.float32),
+            np.asarray(nms_class_ids, dtype=np.int64),
+            self._model_meta,
+            input_image
+        )
 
     def _preprocess(self, img: np.ndarray) -> Tuple[np.ndarray, float, float, float]:
         """
@@ -203,78 +445,24 @@ class YoloModelFromONNX:
                                     例如 [{0, 1, 2}] 表示 class 0/1/2 之间的重叠框会互相抑制。
         :return:
         """
-        outputs = np.transpose(np.squeeze(results[0]))
-        # 获取输出数组的行数
-        rows = outputs.shape[0]
-        # 存储检测到的边界框、分数和类别ID的列表
-        boxes = []
-        scores = []
-        class_ids = []
-        # 计算边界框坐标的比例因子
-        h, w, _ = input_image.shape
-        for i in range(rows):
-            # 从当前行提取类别的得分
-            classes_scores = outputs[i][4:]
-            # 找到类别得分中的最大值
-            max_score = np.amax(classes_scores)
-
-            if max_score >= conf_threshold:
-                class_id = np.argmax(classes_scores)
-                x, y, w, h = outputs[i][0], outputs[i][1], outputs[i][2], outputs[i][3]
-
-                # 将中心坐标转为左上角
-                left = x - w / 2
-                top = y - h / 2
-
-                # 还原到 letterbox 前的坐标
-                left = (left - dw) / ratio
-                top = (top - dh) / ratio
-                width = w / ratio
-                height = h / ratio
-
-                class_ids.append(class_id)
-                scores.append(max_score)
-                boxes.append([left, top, width, height])
-
-        nms_boxes = []
-        nms_scores = []
-        nms_class_ids = []
-
-        # ── 构建 class_id → agnostic group 的映射 ──
-        agnostic_map: dict[int, int] = {}  # class_id → group index
-        if agnostic_nms_groups:
-            for gi, group in enumerate(agnostic_nms_groups):
-                for cid in group:
-                    agnostic_map[cid] = gi
-
-        # ── 按 NMS 组分类：agnostic 组内合并，其余按原类别 ──
-        # key: ("agnostic", group_idx) 或 ("class", class_id)
-        grouped: dict[tuple, list[int]] = {}
-        for i, cid in enumerate(class_ids):
-            if cid in agnostic_map:
-                key = ("agnostic", agnostic_map[cid])
-            else:
-                key = ("class", int(cid))
-            grouped.setdefault(key, []).append(i)
-
-        for key, indices_in_group in grouped.items():
-            group_boxes = [boxes[i] for i in indices_in_group]
-            group_scores = [scores[i] for i in indices_in_group]
-            group_class_ids = [class_ids[i] for i in indices_in_group]
-
-            # 应用 NMS（agnostic 组内不同类别的框也会互相抑制）
-            keep = cv2.dnn.NMSBoxes(group_boxes, group_scores, conf_threshold, iou_threshold)
-
-            nms_boxes.extend([group_boxes[i] for i in keep])
-            nms_scores.extend([group_scores[i] for i in keep])
-            nms_class_ids.extend([group_class_ids[i] for i in keep])
-
-        return ONNXYoloResult(
-            np.array(nms_boxes),
-            np.array(nms_scores),
-            np.array(nms_class_ids),
-            self._model_meta,
-            input_image
+        if self._output_layout == "standalone":
+            return self._postprocess_standalone(
+                input_image,
+                results,
+                conf_threshold,
+                ratio,
+                dw,
+                dh,
+            )
+        return self._postprocess_legacy(
+            input_image,
+            results,
+            conf_threshold,
+            iou_threshold,
+            ratio,
+            dw,
+            dh,
+            agnostic_nms_groups=agnostic_nms_groups,
         )
 
     def __call__(self, img: np.ndarray, conf_threshold: float = 0.5, iou_threshold: float = 0.5,

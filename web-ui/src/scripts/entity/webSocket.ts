@@ -15,8 +15,12 @@ export interface WsEventPayloads {
     id: string
     target_status: TaskItem['status']
   }
+  [WS_ACTION.UpdateCurrentTask]: {
+    task_id: string
+  }
   [WS_ACTION.TaskQueueStart]: void
   [WS_ACTION.TaskQueueStop]: void
+  [WS_ACTION.TaskQueueSuspend]: void
   [WS_ACTION.BroadcastLog]: {
     time: string
     level: string

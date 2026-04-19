@@ -34,7 +34,7 @@ from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.general_text import GeneralText
 from src.constants.game.text.produce_text import ProduceText
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.tasks.producer_challenge.shared.common import (
     invoke_decision_strategy,
     ocr_text,
     resolve_candidate_index,

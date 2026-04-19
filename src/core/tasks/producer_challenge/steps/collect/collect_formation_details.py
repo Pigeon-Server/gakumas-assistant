@@ -75,6 +75,8 @@ _FORMATION_NOISE_TEXTS = (
 
 
 class CollectFormationDetailsStep(ProduceStep):
+    """读取编成详情页中的成员与加成信息，补全开局阵容快照。"""
+
     step_name = "collect_formation_details"
     skip_on_resume = True
 

@@ -212,8 +212,11 @@ class YoloInferenceEngine:
             if frame is None or frame.size <= 0:
                 sleep(0.1)
                 continue
-            results = self._engine(frame, conf_threshold=0.6,
-                                   agnostic_nms_groups=self._agnostic_nms_groups)
+            results = self._engine(
+                frame,
+                conf_threshold=0.6,
+                agnostic_nms_groups=self._agnostic_nms_groups
+            )
             with self.__result_write_lock:
                 self._latest_results = Yolo_Results(results, frame)
             self._exec_infer_callback()

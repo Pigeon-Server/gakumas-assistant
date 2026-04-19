@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, List
 
 from src.constants.game.producer_gameplay import GameplayPhase, GameplayPosition
-from src.core.tasks.producer_challenge.gameplay.common import click_relative_point
+from src.core.tasks.producer_challenge.shared.common import click_relative_point
 
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext

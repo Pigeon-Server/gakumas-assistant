@@ -29,6 +29,8 @@ def _is_nia_visible(app: "AppProcessor") -> bool:
 
 
 class SelectScenarioStep(ProduceStep):
+    """在剧本轮播页切到目标剧本，确保后续难度选择命中正确页签。"""
+
     step_name = "select_scenario"
     skip_on_resume = True
 

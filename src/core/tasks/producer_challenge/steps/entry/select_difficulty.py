@@ -18,7 +18,7 @@ from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.ui import find_button, inertial_swipe, wait_frame_stable
-from src.core.tasks.producer_challenge.gameplay.common import ocr_text
+from src.core.tasks.producer_challenge.shared.common import ocr_text
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -46,6 +46,8 @@ MAX_SWIPE_ATTEMPTS = 5
 
 
 class SelectDifficultyStep(ProduceStep):
+    """根据剧本和难度进入对应入口，并等待偶像卡选择页出现。"""
+
     step_name = "select_difficulty"
     skip_on_resume = True
 

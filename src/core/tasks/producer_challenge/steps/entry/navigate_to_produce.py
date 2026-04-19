@@ -11,6 +11,7 @@ from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.inference.ocr_engine import OCRService
+from src.core.tasks.producer_challenge.shared.common import normalize_text
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.ui import (
     click_modal_action_with_retry,
@@ -72,20 +73,16 @@ def _is_produce_resume_modal(app: "AppProcessor", modal=None) -> bool:
     )
 
 
-def _normalize_ocr_text(text: str | None) -> str:
-    return "".join(str(text or "").lower().split())
-
-
 def _is_retire_confirmation_title(title: str | None) -> bool:
-    normalized = _normalize_ocr_text(title)
+    normalized = normalize_text(title)
     if not normalized:
         return False
     return any(
         token in normalized
         for token in (
-            _normalize_ocr_text(ProduceText.PRODUCE_RETIRE_CONFIRM),
-            _normalize_ocr_text(ModalText.TITLE.DESTROYING_PRODUCTION_DATA),
-            _normalize_ocr_text(ButtonText.RETIRE),
+            normalize_text(ProduceText.PRODUCE_RETIRE_CONFIRM),
+            normalize_text(ModalText.TITLE.DESTROYING_PRODUCTION_DATA),
+            normalize_text(ButtonText.RETIRE),
         )
     )
 
@@ -154,10 +151,10 @@ def _pick_ocr_candidate(
     candidates: list[tuple[str, Yolo_Box, float]],
     token: str,
 ) -> Yolo_Box | None:
-    normalized_token = _normalize_ocr_text(token)
+    normalized_token = normalize_text(token)
     matched: list[tuple[str, Yolo_Box, float]] = []
     for text, box, confidence in candidates:
-        normalized_text = _normalize_ocr_text(text)
+        normalized_text = normalize_text(text)
         if not normalized_text:
             continue
         if normalized_token in normalized_text or normalized_text == normalized_token:
@@ -167,7 +164,7 @@ def _pick_ocr_candidate(
     matched.sort(
         key=lambda item: (
             (item[1].w - item[1].x) * (item[1].h - item[1].y),
-            len(_normalize_ocr_text(item[0])),
+            len(normalize_text(item[0])),
             -item[2],
             -item[1].cx,
         )
@@ -464,12 +461,7 @@ def _extract_resume_modal_info(app: "AppProcessor") -> dict:
             break
 
     # 难度（マスター/レギュラー/プロ/レジェンド）
-    difficulty_map = {
-        "マスター": "master",
-        "レギュラー": "regular",
-        "プロ": "pro",
-        "レジェンド": "legend",
-    }
+    difficulty_map = ProduceText.DIFFICULTY_LABEL_MAP
     for t, _, _ in texts:
         for jp, en in difficulty_map.items():
             if jp in t:
@@ -479,7 +471,7 @@ def _extract_resume_modal_info(app: "AppProcessor") -> dict:
 
     # 周数（8/18週目）
     for t, _, _ in texts:
-        m = re.search(r"(\d+)\s*/\s*(\d+)\s*週", t)
+        m = re.search(rf"(\d+)\s*/\s*(\d+)\s*{ProduceText.WEEK}", t)
         if m:
             info["current_week"] = int(m.group(1))
             info["total_weeks"] = int(m.group(2))
@@ -540,6 +532,8 @@ def resume_resumable_produce(app: "AppProcessor", *, timeout: float = 8.0) -> bo
 
 
 class NavigateToProduceStep(ProduceStep):
+    """从主页进入培育入口，并把流程带到后续步骤可接管的稳定页面。"""
+
     step_name = "navigate_to_produce"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:

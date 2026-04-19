@@ -2,7 +2,7 @@
 
 两种模式：
   - auto: 处理「レンタルを使用」复选框 → 点击「おまかせ」→ 确认弹窗「決定」→ 点击「次へ」
-  - preset: 选择用户预设编号（TODO）
+  - preset: 选择用户预设编号
 
 点击「次へ」后可能出现「レンタル可能」弹窗，需要处理。
 「レンタルを使用」复选框的勾选状态由用户配置 ctx.use_rental 控制。
@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
 
 class SelectMemoriesStep(ProduceStep):
+    """完成记忆编成与租借选项同步，并等待最终确认页就绪。"""
+
     step_name = "select_memories"
     skip_on_resume = True
 

@@ -27,6 +27,8 @@ class ProducerLabels(BaseUILabels):
     PC_SKILL_CARD_ENHANCEMENT = "Producer Challenge: Skill Card Enhancement"
     PC_SKILL_CARD_REMOVE = "Producer Challenge: Skill Card Remove"
     PC_TRAINING_REMAINING = "Producer Challenge: Training: Remaining Rounds"
+    PC_CARD_LIBRARY = "Producer Challenge: Card Library"
+    PC_MENU = "Producer Challenge: Menu"
 
     # ── アイテム関連 ──
     SPECIAL_ITEM = "Special Item"

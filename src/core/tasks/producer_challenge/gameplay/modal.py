@@ -28,7 +28,7 @@ from src.core.tasks.producer_challenge.gameplay.handler_base import (
     GameplayHandler,
     HandlerResult,
 )
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.tasks.producer_challenge.shared.common import (
     invoke_decision_strategy,
     resolve_candidate_index,
 )
@@ -44,11 +44,12 @@ if TYPE_CHECKING:
 
 _MODAL_SCREEN_OCR = OCRService()
 _ZERO_VALUE_EFFECT_MODAL_RE = re.compile(
-    r"(好印象|集中|好調|元気|熱意|全力値|やる気)の値が0のため効果が発動しません"
+    rf"({'|'.join(map(re.escape, (*ProduceText.STATUS_VALUE_TOKENS, ProduceText.YARUKI)))})"
+    rf"{ProduceText.ZERO_VALUE_NO_EFFECT_PREFIX}{ProduceText.NO_EFFECT_TRIGGERED}"
 )
 _BATTLE_BLOCKED_CARD_STATE_KEY = "battle_blocked_cards"
 _BATTLE_LAST_ATTEMPTED_CARD_STATE_KEY = "battle_last_attempted_card"
-_EXAM_RETRY_COUNT_RE = re.compile(r"あと\s*(\d+)\s*回")
+_EXAM_RETRY_COUNT_RE = re.compile(ProduceText.REMAINING_COUNT_PATTERN)
 
 
 @dataclass
@@ -120,10 +121,13 @@ def _is_invalid_skill_use_modal(text: str) -> bool:
     normalized = str(text or "").replace("\n", " ")
     if not normalized:
         return False
-    if "スキルカード使用確認" not in normalized and "実行しますか" not in normalized:
+    if (
+        ProduceText.SKILL_CARD_USE_CONFIRM not in normalized
+        and ProduceText.EXECUTE_CONFIRM not in normalized
+    ):
         return False
     return (
-        "効果が発動しません" in normalized
+        ProduceText.NO_EFFECT_TRIGGERED in normalized
         or bool(_ZERO_VALUE_EFFECT_MODAL_RE.search(normalized))
     )
 
@@ -290,7 +294,7 @@ def _handle_exam_retry_confirm_modal(
     # チケット消費確認モーダル（「キャンセル」/「決定」ボタン）の場合、
     # 「決定」（confirm）= チケットを使って再挑戦、「キャンセル」（cancel）= 再挑戦しない
     # → 再挑戦したい場合は confirm を押す必要がある
-    is_ticket_confirm = "チケット" in str(text or "")
+    is_ticket_confirm = ProduceText.TICKET in str(text or "")
     if is_ticket_confirm:
         # チケット消費確認: retry → 決定(confirm), cancel → キャンセル(cancel)
         prefer_confirm = target.action_id == "exam_retry"

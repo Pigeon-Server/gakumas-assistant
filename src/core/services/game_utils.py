@@ -45,24 +45,55 @@ class GameUtils:
         :param label: 标签
         :param timeout: 超时时间
         :param interval: 轮询间隔
-        :param continuous: 连续出现几次再返回
+        :param continuous: 连续出现几次（新帧）再返回
         :return:
         """
         WAIT_TIME = 0
         COUNT = 0
+        MISS_STREAK = 0        # 当前连续未检测到的新帧数
+        MISS_TOLERANCE = 1     # 允许中间漏几帧，防止单帧漏检导致计数重置
+        CENTER_MAX_SHIFT = 50  # 中心点最大允许偏移（像素），超过则视为不同元素
+        last_seen_id = None
+        last_cx, last_cy = None, None  # 上一次确认检测到的中心点
         logger.debug(f"waiting for label: {label}")
         while WAIT_TIME <= timeout:
+            current = self._app_processor.latest_results
+            # 帧未更新：等待下一帧，不纳入连续计数
+            if current is None or id(current) == last_seen_id:
+                sleep(0.1)
+                WAIT_TIME += 0.1
+                continue
+            last_seen_id = id(current)
             if COUNT > continuous:
                 logger.debug(f"Label '{label}' appeared {continuous} times. Returning True.")
                 return True
-            if self._app_processor.latest_results.filter_by_label(label):
+            found = current.filter_by_label(label)
+            if found:
+                box = found.first()
+                # 若存在上一帧中心点记录，检查偏移是否过大
+                if last_cx is not None:
+                    shift = ((box.cx - last_cx) ** 2 + (box.cy - last_cy) ** 2) ** 0.5
+                    if shift > CENTER_MAX_SHIFT:
+                        # 位置明显偏移，视为不同元素，重置计数
+                        logger.debug(f"Label '{label}' center shifted {shift:.1f}px > {CENTER_MAX_SHIFT}px, resetting count.")
+                        COUNT = 0
+                        MISS_STREAK = 0
+                last_cx, last_cy = box.cx, box.cy
                 COUNT += 1
-                logger.debug(f"Found label '{label}' (count={COUNT})")
+                MISS_STREAK = 0
+                logger.debug(f"Found label '{label}' at ({box.cx},{box.cy}) (count={COUNT})")
                 sleep(0.3)
                 continue
             else:
-                COUNT = 0
-                logger.debug(f"Label '{label}' not found. Resetting count.")
+                MISS_STREAK += 1
+                if MISS_STREAK > MISS_TOLERANCE:
+                    # 连续漏帧超过容忍度才重置，同时清除位置记录
+                    COUNT = 0
+                    MISS_STREAK = 0
+                    last_cx, last_cy = None, None
+                    logger.debug(f"Label '{label}' not found. Resetting count.")
+                else:
+                    logger.debug(f"Label '{label}' not found (miss_streak={MISS_STREAK}, count kept={COUNT}).")
             sleep(interval)
             WAIT_TIME += interval
             logger.debug(f"Waiting... {WAIT_TIME}/{timeout}s")
@@ -72,19 +103,52 @@ class GameUtils:
     def wait_label_exist(self, label, timeout=15, interval=1, continuous=1):
         WAIT_TIME = 0
         COUNT = 0
+        MISS_STREAK = 0        # 当前连续检测到的新帧数（对此函数而言，出现即为"miss"）
+        MISS_TOLERANCE = 1     # 允许中间出现几帧，防止单帧误检导致计数重置
+        CENTER_MAX_SHIFT = 50  # 中心点最大允许偏移（像素），超过则视为不同元素
+        last_seen_id = None
+        last_appeared_cx, last_appeared_cy = None, None  # 最近一次出现时的中心点（用于误检位置核验）
         logger.debug(f"Waiting label exist: {label}")
         while WAIT_TIME <= timeout:
+            current = self._app_processor.latest_results
+            # 帧未更新：等待下一帧，不纳入连续计数
+            if current is None or id(current) == last_seen_id:
+                sleep(0.1)
+                WAIT_TIME += 0.1
+                continue
+            last_seen_id = id(current)
             if COUNT > continuous:
-                logger.debug(f"Label '{label}' appeared {continuous} times. Returning True.")
+                logger.debug(f"Label '{label}' disappeared {continuous} times. Returning True.")
                 return True
-            if not self._app_processor.latest_results.filter_by_label(label):
+            found = current.filter_by_label(label)
+            if not found:
                 COUNT += 1
+                MISS_STREAK = 0
                 logger.debug(f"Not found label '{label}' (count={COUNT})")
                 sleep(0.3)
                 continue
             else:
-                COUNT = 0
-                logger.debug(f"Label '{label}' found. Resetting count.")
+                box = found.first()
+                MISS_STREAK += 1
+                if MISS_STREAK > MISS_TOLERANCE:
+                    COUNT = 0
+                    MISS_STREAK = 0
+                    last_appeared_cx, last_appeared_cy = box.cx, box.cy
+                    logger.debug(f"Label '{label}' found at ({box.cx},{box.cy}). Resetting count.")
+                else:
+                    # 在容忍范围内：检查出现位置是否与上次一致
+                    if last_appeared_cx is not None:
+                        shift = ((box.cx - last_appeared_cx) ** 2 + (box.cy - last_appeared_cy) ** 2) ** 0.5
+                        if shift > CENTER_MAX_SHIFT:
+                            # 位置偏移过大，不同元素出现，重置计数
+                            COUNT = 0
+                            MISS_STREAK = 0
+                            logger.debug(f"Label '{label}' appeared at new position, shift={shift:.1f}px. Resetting count.")
+                        else:
+                            logger.debug(f"Label '{label}' found (miss_streak={MISS_STREAK}, shift={shift:.1f}px, count kept={COUNT}).")
+                    else:
+                        logger.debug(f"Label '{label}' found (miss_streak={MISS_STREAK}, count kept={COUNT}).")
+                    last_appeared_cx, last_appeared_cy = box.cx, box.cy
             sleep(interval)
             WAIT_TIME += interval
             logger.debug(f"Waiting... {WAIT_TIME}/{timeout}s")
@@ -205,26 +269,50 @@ class GameUtils:
         等待指定标签并点击
         :param label: 标签
         :param timeout: 超时时间
-        :param interval: 轮询间隔
+        :param interval: 轮询间隔（同时决定早退阈值：连续 3×interval 秒的新帧未检测到则提前退出）
         :return:
         """
-        WAIT_TIME = 0
-        COUNT = 0
+        WAIT_TIME = 0.0
+        MISS_DURATION = 0.0    # 仅统计新帧未检测到的累计时间，跳过未更新的帧
+        POLL = 0.3             # 内部轮询间隔
+        CENTER_MAX_SHIFT = 50  # 中心点最大允许偏移（像素），超过则视为不同元素，不点击
+        last_seen_id = None
+        last_cx, last_cy = None, None  # 上一次检测到的中心点
         logger.debug(f"waiting to click label: {label}")
         while WAIT_TIME < timeout:
-            boxs = self._app_processor.latest_results.filter_by_label(label)
+            current = self._app_processor.latest_results
+            # 帧未更新（ADB 等慢速采集场景常见）：等待下一帧，不纳入检测统计
+            if current is None or id(current) == last_seen_id:
+                sleep(POLL)
+                WAIT_TIME += POLL
+                continue
+            last_seen_id = id(current)
+            boxs = current.filter_by_label(label)
             if boxs:
-                logger.debug(f"Found label '{label}', clicking...")
-                self._app_processor.device.click_element(boxs.first())
+                box = boxs.first()
+                # 检查中心点是否稳定（与上一帧偏移不超过阈值才点击）
+                if last_cx is not None:
+                    shift = ((box.cx - last_cx) ** 2 + (box.cy - last_cy) ** 2) ** 0.5
+                    if shift > CENTER_MAX_SHIFT:
+                        # 位置不稳定，更新位置记录，等待下一帧确认
+                        logger.debug(f"Label '{label}' center shifted {shift:.1f}px, waiting for stable position.")
+                        last_cx, last_cy = box.cx, box.cy
+                        MISS_DURATION = 0.0
+                        sleep(POLL)
+                        WAIT_TIME += POLL
+                        continue
+                logger.debug(f"Found label '{label}' at ({box.cx},{box.cy}), clicking...")
+                self._app_processor.device.click_element(box)
                 return True
-            else:
-                COUNT += 1
-                if COUNT >= 3:
-                    logger.warning(f"Label '{label}' not found 3 times, breaking out of loop.")
-                    break
-                sleep(interval)
-                logger.debug(f"Label '{label}' not found, retrying... ({WAIT_TIME}/{timeout}s)")
-            WAIT_TIME += interval
+            last_cx, last_cy = None, None  # 未检测到时清除位置记录
+            MISS_DURATION += POLL
+            if MISS_DURATION >= 3 * interval:
+                # 连续多个新帧均未检测到，提前退出
+                logger.warning(f"Label '{label}' not found for {MISS_DURATION:.1f}s of new frames, breaking out of loop.")
+                break
+            sleep(POLL)
+            WAIT_TIME += POLL
+            logger.debug(f"Label '{label}' not found, retrying... ({WAIT_TIME:.1f}/{timeout}s)")
         logger.warning(f"Timeout reached ({timeout}s): Label '{label}' not found.")
         return False
 

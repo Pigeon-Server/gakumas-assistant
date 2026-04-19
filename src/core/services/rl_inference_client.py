@@ -1,7 +1,7 @@
 """RL 推理服务 HTTP 客户端。
 
-与 ``train/gakumas_rl`` 的 FastAPI 推理服务通信，
-提供模型加载、预测和状态查询功能。
+与 ``train/gakumas_rl`` 的 FastAPI 推理服务通信。
+模型在服务端启动时固定加载，客户端只负责状态查询和预测调用。
 """
 
 from __future__ import annotations
@@ -19,8 +19,16 @@ _PREDICT_TIMEOUT = 10.0
 class RLInferenceClient:
     """RL 推理服务的 HTTP 客户端封装。"""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8100"):
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8100",
+        *,
+        info_timeout: float = _DEFAULT_TIMEOUT,
+        predict_timeout: float = _PREDICT_TIMEOUT,
+    ):
         self._base_url = base_url.rstrip("/")
+        self._info_timeout = float(info_timeout)
+        self._predict_timeout = float(predict_timeout)
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
 
@@ -35,7 +43,7 @@ class RLInferenceClient:
         try:
             resp = self._session.get(
                 f"{self._base_url}/api/inference/info",
-                timeout=_DEFAULT_TIMEOUT,
+                timeout=self._info_timeout,
             )
             return resp.status_code == 200
         except requests.RequestException:
@@ -46,35 +54,12 @@ class RLInferenceClient:
         try:
             resp = self._session.get(
                 f"{self._base_url}/api/inference/info",
-                timeout=_DEFAULT_TIMEOUT,
+                timeout=self._info_timeout,
             )
             resp.raise_for_status()
             return resp.json()
         except requests.RequestException as exc:
             logger.warning(f"[RL] 获取推理服务状态失败: {exc}")
-            return {"status": "error", "message": str(exc)}
-
-    def load_model(
-        self,
-        backend_type: str = "ppo",
-        checkpoint_path: str = "",
-    ) -> Dict[str, Any]:
-        """加载 RL 模型 checkpoint。"""
-        try:
-            resp = self._session.post(
-                f"{self._base_url}/api/inference/load_model",
-                json={
-                    "backend_type": backend_type,
-                    "checkpoint_path": checkpoint_path,
-                },
-                timeout=_DEFAULT_TIMEOUT * 6,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            logger.info(f"[RL] 模型加载成功: {result.get('message', '')}")
-            return result
-        except requests.RequestException as exc:
-            logger.error(f"[RL] 模型加载失败: {exc}")
             return {"status": "error", "message": str(exc)}
 
     def predict(
@@ -96,7 +81,7 @@ class RLInferenceClient:
 
         Returns
         -------
-        预测结果字典（含 ``action_index``, ``confidence``, ``value_estimate``），
+        预测结果字典（含 ``action_index``, ``action_id``, ``db_id`` 等字段），
         失败时返回 ``None``。
         """
         payload = {
@@ -108,7 +93,7 @@ class RLInferenceClient:
             resp = self._session.post(
                 f"{self._base_url}/api/inference/predict",
                 json=payload,
-                timeout=_PREDICT_TIMEOUT,
+                timeout=self._predict_timeout,
             )
             resp.raise_for_status()
             result = resp.json()
@@ -120,19 +105,6 @@ class RLInferenceClient:
         except requests.RequestException as exc:
             logger.warning(f"[RL] 推理请求失败: {exc}")
             return None
-
-    def unload_model(self) -> Dict[str, Any]:
-        """卸载当前模型。"""
-        try:
-            resp = self._session.post(
-                f"{self._base_url}/api/inference/unload",
-                timeout=_DEFAULT_TIMEOUT,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as exc:
-            logger.warning(f"[RL] 卸载模型失败: {exc}")
-            return {"status": "error", "message": str(exc)}
 
     def close(self) -> None:
         """关闭 HTTP 会话。"""

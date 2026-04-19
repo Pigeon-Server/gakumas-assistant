@@ -401,6 +401,24 @@ class DebugTools(metaclass=SingletonMeta):
         cv2.line(overlay, (0, h//2), (w, h//2), (0, 0, 255), 1)
         return cv2.addWeighted(overlay, 0.3, image, 0.7, 0)
 
+    @staticmethod
+    def _clip_box_bounds(
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        image_width: int,
+        image_height: int,
+    ) -> tuple[int, int, int, int] | None:
+        """将调试框裁剪到图像边界内，避免 ROI 和 tile 尺寸不一致。"""
+        clipped_x1 = max(0, min(image_width, int(x1)))
+        clipped_y1 = max(0, min(image_height, int(y1)))
+        clipped_x2 = max(0, min(image_width, int(x2)))
+        clipped_y2 = max(0, min(image_height, int(y2)))
+        if clipped_x2 <= clipped_x1 or clipped_y2 <= clipped_y1:
+            return None
+        return clipped_x1, clipped_y1, clipped_x2, clipped_y2
+
     def _rebuild_render_cache(self, img_shape: tuple):
         """重建图形缓存：预渲染不透明层（边框+文字）和填充 tile。
 
@@ -415,10 +433,11 @@ class DebugTools(metaclass=SingletonMeta):
         for el in self._elements:
             if isinstance(el, DebugBox):
                 # 预构建半透明填充 tile（纯色块，cv2.addWeighted 用）
-                fh, fw = el.h - el.y, el.w - el.x
-                if fh > 0 and fw > 0:
-                    tile = np.full((fh, fw, 3), el.color, dtype=np.uint8)
-                    fill_tiles.append(((el.y, el.x, el.h, el.w), tile))
+                clipped_bounds = self._clip_box_bounds(el.x, el.y, el.w, el.h, w, h)
+                if clipped_bounds is not None:
+                    x1, y1, x2, y2 = clipped_bounds
+                    tile = np.full((y2 - y1, x2 - x1, 3), el.color, dtype=np.uint8)
+                    fill_tiles.append(((y1, x1, y2, x2), tile))
                 # 边框画到不透明层
                 if el.thickness > 0:
                     cv2.rectangle(opaque, el.top_left, el.bottom_right,
@@ -495,8 +514,15 @@ class DebugTools(metaclass=SingletonMeta):
 
         # 2. 半透明矩形填充 — 逐区域 addWeighted + 预计算纯色 tile
         for (y1, x1, y2, x2), tile in self._cached_fill_tiles:
-            cv2.addWeighted(result[y1:y2, x1:x2], 0.5, tile, 0.5, 0,
-                            dst=result[y1:y2, x1:x2])
+            roi = result[y1:y2, x1:x2]
+            if roi.shape != tile.shape:
+                clipped_h = min(roi.shape[0], tile.shape[0])
+                clipped_w = min(roi.shape[1], tile.shape[1])
+                if clipped_h <= 0 or clipped_w <= 0:
+                    continue
+                roi = roi[:clipped_h, :clipped_w]
+                tile = tile[:clipped_h, :clipped_w]
+            cv2.addWeighted(roi, 0.5, tile, 0.5, 0, dst=roi)
 
         # 3. 不透明覆盖（边框 + 文字）— 坐标索引直接赋值
         if self._cached_stamp_indices is not None:

@@ -34,7 +34,7 @@ from src.constants.yolo.model_type import YoloModelType
 from src.core.inference.ocr_engine import OCRService
 from src.constants.game.producer_gameplay import GameplayPosition
 from src.core.tasks.producer_challenge.context import GameplayPhase
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.tasks.producer_challenge.shared.common import (
     click_relative_point,
     ocr_text,
 )
@@ -57,14 +57,14 @@ if TYPE_CHECKING:
 # フォト選択画面（记忆卡面照片选择）关键词
 _PHOTO_SELECT_KEYWORDS = (
     ProduceText.MEMORY_PHOTO_SELECT,  # メモリーにするフォトを選んでください
-    "フォトを選",
+    ProduceText.MEMORY_PHOTO_SELECT_SHORT,
 )
 
 # 需要 TAP 推进的画面关键词
 _TAP_SCREEN_KEYWORDS = (
     ProduceText.MEMORY_GENERATION_COMPLETE,  # メモリー生成完了
-    "TAP",
-    "プロデュース評価",                       # 培育评价得分
+    ProduceText.TAP,
+    ProduceText.PRODUCE_EVALUATION,          # 培育评价得分
 )
 
 # 结果链相关关键词（用于判断是否仍在结果流程中）
@@ -79,22 +79,22 @@ _RESULT_CHAIN_KEYWORDS = (
     ProduceText.FAILED,
     ProduceText.FINAL_PRODUCE_EVALUATION,
     ProduceText.REWARD_ITEMS,
-    "MEMORY",
-    "プロデュース",
-    "受取完了",
-    "報酬",
-    "完了する",
-    "イベント",
-    "最終試験",
-    "フォトを選",
+    ProduceText.MEMORY_OCR_VARIANTS[1],
+    ProduceText.PRODUCE,
+    ProduceText.RECEIVE_COMPLETE,
+    ProduceText.REWARD,
+    ButtonText.COMPLETE,
+    ProduceText.EVENT,
+    ProduceText.FINAL_EXAM,
+    ProduceText.MEMORY_PHOTO_SELECT_SHORT,
 )
 
 # 「完了する」页面的 OCR 标识
-_COMPLETE_PAGE_KEYWORDS = ("完了する",)
+_COMPLETE_PAGE_KEYWORDS = (ButtonText.COMPLETE,)
 # 「プロデュース履歴」页面的 OCR 标识
-_HISTORY_PAGE_KEYWORD = "プロデュース履歴"
+_HISTORY_PAGE_KEYWORD = ProduceText.PRODUCE_HISTORY
 
-_RESULT_DETAIL_KEYWORDS = ("戻す", "戻しました")
+_RESULT_DETAIL_KEYWORDS = (ButtonText.BACK, ProduceText.RESULT_RESTORED)
 _RESULT_DETAIL_LABELS = {
     ProducerLabels.PC_PROGRESS,
     ProducerLabels.PC_P_POINT,
@@ -109,6 +109,8 @@ _RESULT_OCR = OCRService()
 
 
 class HandleResultsStep(ProduceStep):
+    """处理培育结算链路，并在必要时恢复 gameplay 或最终回到主页。"""
+
     step_name = "handle_results"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
@@ -145,7 +147,7 @@ class HandleResultsStep(ProduceStep):
                     ctx.set_position(position)
                 else:
                     ctx.gameplay_position = position
-                from src.core.tasks.producer_challenge.steps.produce_gameplay_loop import (
+                from src.core.tasks.producer_challenge.steps.runtime.produce_gameplay_loop import (
                     ProduceGameplayLoopStep,
                 )
 
@@ -403,7 +405,8 @@ class HandleResultsStep(ProduceStep):
                 continue
 
             # ── 9. Loading 画面 ──
-            if "NOW LOADING" in frame_text.upper() or "LOADING" in frame_text.upper():
+            normalized_loading_text = frame_text.upper().replace(" ", "")
+            if any(token in normalized_loading_text for token in ProduceText.LOADING_TOKENS):
                 logger.debug("结果链: Loading 中，等待")
                 sleep(2.0)
                 consecutive_no_progress = 0
@@ -477,10 +480,12 @@ class HandleResultsStep(ProduceStep):
         特征：OCR 只有「生成」或「MEMORY」+「生成」，且无 YOLO 按钮标签。
         """
         text = frame_text.replace(" ", "").replace("\n", "")
-        has_generate = "生成" in text
-        has_memory = "MEMORY" in text.upper() or "メモリー" in text
+        has_generate = ButtonText.GENERATE in text
+        has_memory = any(token in text for token in ProduceText.MEMORY_OCR_VARIANTS)
         # 排除「メモリー生成完了」（那是 TAP 推进页）
-        if "生成完了" in text:
+        if ProduceText.MEMORY_GENERATION_COMPLETE in text:
+            return False
+        if ButtonText.REGENERATE in text:
             return False
         # 排除「再生成」按钮页（有其他按钮）
         has_any_button = any(
@@ -495,9 +500,9 @@ class HandleResultsStep(ProduceStep):
         特征：同时有「完了する」和「プロデュース履歴」或「メモリー変換」文本。
         """
         text = frame_text.replace(" ", "")
-        has_complete = "完了する" in text
+        has_complete = ButtonText.COMPLETE in text
         has_history = _HISTORY_PAGE_KEYWORD in text
-        has_memory_convert = "メモリー変換" in text
+        has_memory_convert = ProduceText.MEMORY_CONVERT in text
         return has_complete and (has_history or has_memory_convert)
 
     @staticmethod
@@ -509,10 +514,9 @@ class HandleResultsStep(ProduceStep):
         """
         text = frame_text.replace(" ", "")
         has_history = _HISTORY_PAGE_KEYWORD in text
-        has_complete = "完了する" in text
+        has_complete = ButtonText.COMPLETE in text
         # 详情页特有的关键词（区分完了する页面）
-        _detail_keywords = ("定期公演", "編成", "PLV", "編成詳細", "サポートカード")
-        has_detail = any(kw in text for kw in _detail_keywords)
+        has_detail = any(kw in text for kw in ProduceText.RESULT_HISTORY_DETAIL_TOKENS)
         return has_history and has_detail and not has_complete
 
     @staticmethod
@@ -637,24 +641,24 @@ class HandleResultsStep(ProduceStep):
         """
         # 特殊处理：如果 OCR 包含「完了する」，优先点击左侧按钮
         clean_text = frame_text.replace(" ", "")
-        if "完了する" in clean_text:
+        if ButtonText.COMPLETE in clean_text:
             complete_btn = find_button(app, ButtonText.COMPLETE, fuzz_threshold=50)
             if complete_btn:
                 app.device.click_element(complete_btn)
-                return "完了する(OCR)"
+                return f"{ButtonText.COMPLETE}(OCR)"
             # 兜底：取最左侧按钮
             btns = list(results.filter_by_label(ProducerLabels.BUTTON)) + \
                    list(results.filter_by_label(ProducerLabels.CONFIRM_BUTTON))
             if len(btns) >= 2:
                 leftmost = min(btns, key=lambda b: b.cx)
                 app.device.click_element(leftmost)
-                return "完了する(左侧兜底)"
+                return f"{ButtonText.COMPLETE}(左侧兜底)"
 
         # 尝试 OCR 匹配关键按钮文本
         for text_key, label in (
-            (ButtonText.CLOSE, "閉じる"),
-            (ButtonText.NEXT, "次へ"),
-            (ButtonText.CONFIRM, "確認"),
+            (ButtonText.CLOSE, ButtonText.CLOSE),
+            (ButtonText.NEXT, ButtonText.NEXT),
+            (ButtonText.CONFIRM, ButtonText.CONFIRM),
         ):
             btn = find_button(app, text_key, fuzz_threshold=50)
             if btn:
@@ -741,9 +745,16 @@ def _find_photo_grid(frame) -> tuple[list[tuple[int, int]], int, int]:
     btn_top = int(h * 0.85)
     for r in ocr_results:
         text = getattr(r, "text", "")
-        if "フォトを選" in text or "メモリーにする" in text:
+        if (
+            ProduceText.MEMORY_PHOTO_SELECT_SHORT in text
+            or ProduceText.MEMORY_PHOTO_SELECT_PREFIX in text
+        ):
             title_bottom = r.y + r.h + 5
-        elif "次へ" in text or "端末保存" in text or "アルバム保存" in text:
+        elif (
+            ButtonText.NEXT in text
+            or ProduceText.PHOTO_SAVE_TO_DEVICE in text
+            or ProduceText.PHOTO_SAVE_TO_ALBUM in text
+        ):
             btn_top = min(btn_top, r.y - 10)
 
     # 2) 在标题下方到按钮上方区域做逐行方差扫描，找照片行

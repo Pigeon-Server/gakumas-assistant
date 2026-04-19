@@ -342,7 +342,7 @@ def cmd_run_full(app, start_step=1, use_llm=False):
 def cmd_run_loop(app, use_llm=False):
     """仅运行 gameplay loop 步骤（假设已在 gameplay 中）。"""
     from src.constants.yolo.model_type import YoloModelType
-    from src.core.tasks.producer_challenge.steps.produce_gameplay_loop import (
+    from src.core.tasks.producer_challenge.steps.runtime.produce_gameplay_loop import (
         ProduceGameplayLoopStep,
     )
 
@@ -361,7 +361,7 @@ def cmd_run_loop(app, use_llm=False):
 
         # 自动衔接结果处理
         if result:
-            from src.core.tasks.producer_challenge.steps.handle_results import HandleResultsStep
+            from src.core.tasks.producer_challenge.steps.finalize.handle_results import HandleResultsStep
             logger.info("开始处理结果画面 ...")
             result_step = HandleResultsStep()
             result_ok = result_step.execute(app, ctx)

@@ -49,6 +49,8 @@ WEBUI_BUILD_INPUTS = (
 MODEL_FILES = [
     "base_ui.onnx",
     "base_ui_meta.json",
+    "contest_blocker.onnx",
+    "contest_blocker_meta.json",
     "producer.onnx",
     "producer_meta.json",
     "clip_visual.onnx",

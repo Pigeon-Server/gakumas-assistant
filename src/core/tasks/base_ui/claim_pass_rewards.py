@@ -9,13 +9,30 @@ from src.constants.game.text.modal_text import ModalText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.core.device.Android.app import Android_App
 from src.entity.Game.Components.Button import ButtonList
-from src.utils.game_tools import get_modal
 from src.utils.logger import logger
 from src.utils.opencv_tools import compute_ssim_score
 from src.utils.string_tools import string_match, MatchConfig
 
 if TYPE_CHECKING:
     from src.main import AppProcessor
+
+
+def _has_close_button(results) -> bool:
+    buttons = ButtonList(results)
+    return buttons.get_button_by_text(ButtonText.CLOSE, MatchConfig(fuzz_threshold=75)) is not None
+
+
+def _try_get_pass_reward_modal(app: "AppProcessor", no_body: bool = True):
+    results = app.latest_results
+    if results is None:
+        return None
+
+    has_header = results.exists_label(BaseUILabels.MODAL_HEADER)
+    if not has_header and not _has_close_button(results):
+        return None
+
+    return app.game_utils.try_get_modal(no_body=no_body, require_header=has_header)
+
 
 def claim_pass_rewards(app: "AppProcessor"):
     prev_page: Optional[np.ndarray] = None
@@ -40,13 +57,27 @@ def _process_modal(app: "AppProcessor"):
     :param app: app实例
     :return:
     """
-    while app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
-        modal = get_modal(app.latest_results, True)
-        if not modal:
+    while True:
+        modal = _try_get_pass_reward_modal(app, no_body=True)
+        if modal is None:
+            break
+
+        close_button = modal.cancel_button or modal.confirm_button
+        if string_match(modal.modal_title, ModalText.TITLE.MISSION_PASS_PT_ACQUIRED):
+            logger.debug(f"Close pass reward modal '{modal.modal_title}'.")
+            if close_button is None:
+                logger.warning("Mission pass point modal has no actionable button.")
+                break
+            app.device.click_element(close_button)
             continue
+
         if modal.cancel_button and not modal.confirm_button:
-            logger.debug(f"Close modal '{modal.modal_title}'.'")
+            logger.debug(f"Close modal '{modal.modal_title}'.")
             app.device.click_element(modal.cancel_button)
+            continue
+
+        logger.warning(f"Unsupported pass reward modal '{modal.modal_title}', stop modal loop.")
+        break
     app.game_utils.wait_frame_stable(0.9, 1)
 
 def _collect_visible_rewards(app: "AppProcessor"):
@@ -94,21 +125,24 @@ def _handle_collect_modal(app: "AppProcessor", max_wait: int = 5):
         if i > max_wait:
             raise TimeoutError("Timeout waiting for modal to appear.")
 
-        if app.latest_results.exists_all_labels(
-                [BaseUILabels.BUTTON, BaseUILabels.MODAL_HEADER]
-        ):
-            modal = get_modal(app.latest_results, True)
-            if modal is None:
+        modal = _try_get_pass_reward_modal(app, no_body=True)
+        if modal is not None:
+            close_button = modal.cancel_button or modal.confirm_button
+            if close_button is None:
                 sleep(1)
                 continue
             if string_match(modal.modal_title, ModalText.TITLE.RECEIPT_COMPLETED):
-                app.device.click_element(modal.cancel_button or modal.confirm_button)
+                app.device.click_element(close_button)
+                return
+
+            if string_match(modal.modal_title, ModalText.TITLE.MISSION_PASS_PT_ACQUIRED):
+                app.device.click_element(close_button)
                 return
 
             if string_match(modal.modal_title, ModalText.TITLE.CONNECTION_ERROR):
                 app.device.click_element(modal.confirm_button or modal.cancel_button)
             else:
-                app.device.click_element(modal.cancel_button or modal.confirm_button)
+                app.device.click_element(close_button)
 
         sleep(1)
 

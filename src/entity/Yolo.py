@@ -76,17 +76,19 @@ class Yolo_Results:
         # This protects against the caller mutating 'frame' later while adding
         # zero extra memory versus individual per-box copies.
         self.frame = frame.copy()
-        img_w, img_h = self.frame.shape[:2]
+        frame_height, frame_width = self.frame.shape[:2]
         for index, box in enumerate(yolo_results):
-            x, y, w, h = map(int, box)
-            # 规范化坐标，防止出现-1之类的问题
-            x = max(0, x)
-            y = max(0, y)
-            w = min(img_w, w)
-            h = min(img_h, h)
+            x, y, box_width, box_height = map(int, box)
+            # 规范化坐标，防止出现负值或越界。
+            x = max(0, min(frame_width, x))
+            y = max(0, min(frame_height, y))
+            box_width = max(0, box_width)
+            box_height = max(0, box_height)
+            x2 = min(frame_width, x + box_width)
+            y2 = min(frame_height, y + box_height)
             label_id = int(yolo_results.class_ids[index])
             label = yolo_results.model_mata.names[label_id]
-            self.boxes.append(Yolo_Box(x, y, w:=x+w, h:=y+h, label, self.frame[y:h, x:w]))
+            self.boxes.append(Yolo_Box(x, y, x2, y2, label, self.frame[y:y2, x:x2]))
         self.sort_boxes()
 
     def __bool__(self):

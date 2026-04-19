@@ -1,8 +1,8 @@
 {
-    "description": "Ultralytics YOLO11n model trained on data.yaml",
+    "description": "Ultralytics YOLO26n model trained on data.yaml",
     "author": "Ultralytics",
-    "date": "2025-12-01T09:14:15.471595",
-    "version": "8.3.152",
+    "date": "2026-04-17T23:49:30.987698",
+    "version": "8.4.38",
     "license": "AGPL-3.0 License (https://ultralytics.com/license)",
     "docs": "https://docs.ultralytics.com",
     "stride": "32",
@@ -11,5 +11,6 @@
     "imgsz": "[640, 640]",
     "names": "{0: 'Universal Options', 1: 'The Road To Idol: Selected', 2: 'Produce Card: Dance', 3: 'Close Button', 4: 'Universal button', 5: 'Universal Switch', 6: 'Skill Card: Trap', 7: 'Home: Gift Button', 8: 'Special Item', 9: 'Currency: Gem', 10: 'Support Card', 11: 'The Road To Idol: Incomplete', 12: 'Back Button', 13: 'Universal Avatar', 14: 'Tab Communicate', 15: 'Produce Card: Visual', 16: 'Blank Slot', 17: 'Universal Quantity Select', 18: 'Universal Tab Bar', 19: 'Current Location', 20: 'Home: Shop Button', 21: 'Universal Checkbox', 22: 'Product Card: Candidate', 23: 'Fast Forward Button', 24: 'Universal Modal Header', 25: 'General Loading 1', 26: 'Universal Quantity Select: Added', 27: 'The Road To Idol: Card', 28: 'Home: Produce Button', 29: 'Producer Challenge: Pro', 30: 'Tab: Idol', 31: 'Skip Button', 32: 'Producer Level', 33: 'Product Card: Recommendation Effect', 34: 'Skill Card', 35: 'Produce Card: Attribute', 36: 'Producer Challenge: Regular', 37: 'Tab: Contest', 38: 'Tab: Gacha', 39: 'Card: Commodity', 40: 'Producer Challenge: Master', 41: 'Produce Card: Vocal', 42: 'Universal Quantity Select: Reduced', 43: 'Product Card: Selected', 44: 'Home: Achievement Button', 45: 'Currency: Money', 46: 'General Item', 47: 'The Road To Idol: Pass', 48: 'General Loading 2', 49: 'Start Menu Logo', 50: 'Home: Daily Task Button', 51: 'Tab: Home', 52: 'Go Home Button', 53: 'Click Continue Flag', 54: 'Home: Dispatch Work Button', 55: 'Memory Card', 56: 'Card: Item Exchange', 57: 'Home: Get Expenditure Button', 58: 'Skill Card: Active', 59: 'Producer Challenge: NIA', 60: 'Stamina', 61: 'Skill Card: Mental'}",
     "args": "{'batch': 1, 'half': False, 'dynamic': True, 'simplify': True, 'opset': None, 'nms': False}",
-    "channels": "3"
+    "channels": "3",
+    "end2end": "True"
 }

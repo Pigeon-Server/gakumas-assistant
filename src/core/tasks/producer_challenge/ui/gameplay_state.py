@@ -1,353 +1,44 @@
 from __future__ import annotations
 
 import re
-from statistics import median
-from time import sleep, time
+import sys
 from typing import TYPE_CHECKING, Sequence
 
 from src.constants.game.producer_gameplay import (
     CONSULT_ENHANCEMENT_POSITION_PREFIX,
     CONSULT_POSITION_PREFIX,
-    GAMEPLAY_MODAL_POSITIONS,
     GameplayPhase,
     GameplayPosition,
     P_DRINK_SELECTION_POSITIONS,
-    SKILL_REWARD_SELECTION_POSITIONS,
 )
 from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
-from src.entity.Game.Components.Button import Button, ButtonList
-from src.core.tasks.producer_challenge.gameplay.common import (
-    invoke_decision_strategy,
+from src.core.tasks.producer_challenge.shared.common import (
     normalize_text,
     ocr_text,
-    resolve_candidate_index,
 )
 from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
 from src.utils.string_tools import MatchConfig, string_match
 
+from .common import is_final_confirm_page
+
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
-    from src.entity.Game.Components.Modal import Modal
     from src.main import AppProcessor
 
-_PRESET_INDEX_PATTERN = re.compile(r"(\d+)\s*/\s*(\d+)")
 _DIALOGUE_TEXT_CHAR_RE = re.compile(r"[ぁ-んァ-ヶ一-龯]")
 
 
-def get_buttons(app: "AppProcessor") -> ButtonList:
-    return ButtonList(app.latest_results)
-
-
-def parse_preset_index(text: str | None) -> tuple[int, int] | None:
-    normalized = str(text or "").replace(" ", "")
-    if not normalized:
-        return None
-    match = _PRESET_INDEX_PATTERN.search(normalized)
-    if match is None:
-        return None
-    return int(match.group(1)), int(match.group(2))
-
-
-def get_current_preset_index(app: "AppProcessor") -> tuple[int, int] | None:
-    for button in get_buttons(app):
-        if parsed := parse_preset_index(button.text):
-            return parsed
-    return None
-
-
-def build_preset_swipe_paths(
-    boxes: Sequence,
-    *,
-    frame_width: int,
-) -> list[tuple[int, int, int, int]]:
-    if not boxes:
-        return []
-
-    left = int(min(box.x for box in boxes))
-    right = int(max(box.w for box in boxes))
-    span = max(1, right - left)
-    margin = max(40, int(span * 0.15))
-    start_x = min(frame_width - 40, right - margin)
-    end_x = max(40, left + margin)
-    if start_x - end_x < 160:
-        start_x = max(end_x + 160, int(frame_width * 0.75))
-        end_x = int(frame_width * 0.25)
-
-    rows: list[list] = []
-    current_row: list = []
-    row_anchor_cy: int | None = None
-    for box in sorted(boxes, key=lambda item: item.cy):
-        if row_anchor_cy is None or abs(box.cy - row_anchor_cy) <= 120:
-            if not current_row:
-                row_anchor_cy = box.cy
-            current_row.append(box)
-        else:
-            rows.append(current_row)
-            current_row = [box]
-            row_anchor_cy = box.cy
-    if current_row:
-        rows.append(current_row)
-
-    return [
-        (start_x, int(round(median([box.cy for box in row]))), end_x, int(round(median([box.cy for box in row]))))
-        for row in rows
-    ]
-
-
-def get_preset_swipe_paths(
-    app: "AppProcessor",
-    *,
-    card_labels: Sequence[str],
-) -> list[tuple[int, int, int, int]]:
-    boxes = list(app.latest_results.filter_by_labels(list(card_labels)))
-    if not boxes:
-        boxes = list(app.latest_results.filter_by_label(BaseUILabels.BLANK_SLOT))
-    if not boxes:
-        raise TimeoutError("未识别到可切换编组的卡片区域")
-
-    frame_width = app.latest_frame.shape[1]
-    paths = build_preset_swipe_paths(boxes, frame_width=frame_width)
-    if not paths:
-        raise TimeoutError("未能计算编组横滑路径")
-    return paths
-
-
-def select_preset_by_horizontal_swipe(
-    app: "AppProcessor",
-    target_index: int,
-    *,
-    card_labels: Sequence[str],
-    description: str,
-    max_swipes: int | None = None,
-) -> bool:
-    current_info = get_current_preset_index(app)
-    if current_info is None:
-        raise TimeoutError(f"{description}页面未识别到编组编号")
-
-    current_index, total = current_info
-    if target_index < 1 or target_index > total:
-        raise ValueError(f"{description}预设编号超出范围: {target_index} (1-{total})")
-    if current_index == target_index:
-        logger.debug(f"{description}已在目标编组 {current_index}/{total}")
-        return True
-
-    left_swipe_increases = True
-    stuck_attempts = 0
-    swipe_limit = max_swipes or max(abs(target_index - current_index) * 2 + 4, 6)
-
-    for attempt in range(1, swipe_limit + 1):
-        paths = get_preset_swipe_paths(app, card_labels=card_labels)
-        start_x, start_y, end_x, end_y = paths[(attempt - 1) % len(paths)]
-        should_increase = target_index > current_index
-        swipe_left = should_increase if left_swipe_increases else not should_increase
-        if swipe_left:
-            inertial_swipe(app, start_x, start_y, end_x, end_y, duration=0.35, settle_timeout=4.5)
-        else:
-            inertial_swipe(app, end_x, start_y, start_x, end_y, duration=0.35, settle_timeout=4.5)
-
-        updated_info = get_current_preset_index(app)
-        if updated_info is None:
-            raise TimeoutError(f"{description}页面横滑后未识别到新的编组编号")
-
-        updated_index, updated_total = updated_info
-        total = updated_total
-        if updated_index == target_index:
-            logger.debug(f"{description}切换到目标编组 {updated_index}/{total}")
-            return True
-
-        if updated_index != current_index:
-            if swipe_left:
-                left_swipe_increases = updated_index > current_index
-            else:
-                left_swipe_increases = updated_index < current_index
-            logger.debug(
-                f"{description}横滑后编组变化: {current_index}/{total} -> {updated_index}/{total}, "
-                f"left_swipe_increases={left_swipe_increases}"
-            )
-            current_index = updated_index
-            stuck_attempts = 0
-            continue
-
-        stuck_attempts += 1
-        logger.debug(
-            f"{description}横滑后编组编号未变化: {current_index}/{total}, "
-            f"attempt={attempt}/{swipe_limit}, path_index={(attempt - 1) % len(paths)}"
-        )
-        if stuck_attempts >= len(paths):
-            left_swipe_increases = not left_swipe_increases
-            stuck_attempts = 0
-
-    raise TimeoutError(
-        f"{description}未能切换到目标编组 {target_index}/{total}，当前仍为 {current_index}/{total}"
-    )
-
-
-def find_button(
-    app: "AppProcessor",
-    text: str,
-    *,
-    fuzz_threshold: float = 70,
-    use_contains: bool = True,
-) -> Button | None:
-    return get_buttons(app).get_button_by_text(
-        text,
-        match_config=MatchConfig(fuzz_threshold=fuzz_threshold, use_contains=use_contains, normalize=True),
-    )
-
-
-def has_button(
-    app: "AppProcessor",
-    text: str,
-    *,
-    fuzz_threshold: float = 70,
-    use_contains: bool = True,
-) -> bool:
-    return find_button(app, text, fuzz_threshold=fuzz_threshold, use_contains=use_contains) is not None
-
-
-def wait_frame_stable(app: "AppProcessor", timeout: float = 4.0) -> None:
-    app.game_utils.wait_frame_stable(
-        threshold=0.985,
-        stable_count=2,
-        timeout=timeout,
-    )
-
-
-def inertial_swipe(
-    app: "AppProcessor",
-    start_x: int,
-    start_y: int,
-    end_x: int,
-    end_y: int,
-    *,
-    duration: float = 0.45,
-    settle_timeout: float = 4.0,
-    hold_end: float = 0.15,
-    ease: str | None = "out_quad",
-) -> None:
-    """执行带惯性抑制的滑动。
-
-    通过 ease="out_quad" 使手指到达终点前逐渐减速（缓出曲线），
-    再通过 hold_end 在终点短暂驻留后才松开手指，
-    让游戏物理引擎将触点速度归零，从而消除惯性滑过。
-    """
-    app.device.swipe(
-        start_x, start_y, end_x, end_y,
-        duration=duration, offset_y=0,
-        hold_end=hold_end, ease=ease,
-    )
-    sleep(0.1)
-    wait_frame_stable(app, timeout=settle_timeout)
-
-
-def is_final_confirm_page(app: "AppProcessor") -> bool:
-    if has_button(app, ButtonText.AUTO_SELECT, fuzz_threshold=75):
-        return False
-    if has_button(app, ButtonText.NEXT, fuzz_threshold=75):
-        return False
-    if has_button(app, ButtonText.RESET, fuzz_threshold=75):
-        return False
-
-    has_detail_button = has_button(app, ProduceText.FORMATION_DETAILS, fuzz_threshold=68)
-    has_start_button = has_button(app, ButtonText.PRODUCE_START, fuzz_threshold=65)
-    has_context = any(
-        app.latest_results.exists_label(label)
-        for label in (
-            BaseUILabels.SUPPORT_CARD,
-            BaseUILabels.MEMORY_CARD,
-            BaseUILabels.SPECIAL_ITEMS,
-        )
-    )
-    return bool(has_detail_button and has_start_button and has_context)
-
-
-def wait_for_final_confirm_page(app: "AppProcessor", timeout: float = 15.0) -> bool:
-    end_time = time() + timeout
-    while time() < end_time:
-        if is_final_confirm_page(app):
-            wait_frame_stable(app, timeout=3.0)
-            return True
-        sleep(0.4)
-    return False
-
-
-def is_memory_selection_page(app: "AppProcessor") -> bool:
-    if has_button(app, ButtonText.PRODUCE_START, fuzz_threshold=65):
-        return False
-    if not has_button(app, ButtonText.NEXT, fuzz_threshold=75):
-        return False
-    if not has_button(app, ButtonText.AUTO_SELECT, fuzz_threshold=75):
-        return False
-    if not has_button(app, ButtonText.RESET, fuzz_threshold=75):
-        return False
-    if not has_button(app, ProduceText.FORMATION_DETAILS, fuzz_threshold=68):
-        return False
-    return bool(app.latest_results.exists_label(BaseUILabels.MEMORY_CARD))
-
-
-def wait_for_memory_selection_page(app: "AppProcessor", timeout: float = 12.0) -> bool:
-    end_time = time() + timeout
-    while time() < end_time:
-        if is_memory_selection_page(app):
-            wait_frame_stable(app, timeout=3.0)
-            return True
-        sleep(0.4)
-    return False
-
-
-def click_modal_action_with_retry(
-    app: "AppProcessor",
-    modal: "Modal | None" = None,
-    *,
-    prefer_confirm: bool = True,
-    retries: int = 3,
-    timeout: float = 5.0,
-    action_name: str = "modal action",
-) -> bool:
-    current_modal = modal
-    for attempt in range(1, retries + 1):
-        if current_modal is None:
-            current_modal = app.game_utils.try_get_modal(no_body=True)
-        if current_modal is None:
-            return True
-
-        button = current_modal.confirm_button if prefer_confirm else current_modal.cancel_button
-        if button is None:
-            button = current_modal.cancel_button or current_modal.confirm_button
-        if button is None:
-            logger.warning(f"{action_name}: modal {current_modal.modal_title!r} has no actionable button")
-            return False
-
-        if app.game_utils.click_modal_button_and_wait_transition(
-            button,
-            previous_modal_title=current_modal.modal_title,
-            timeout=timeout,
-            interval=0.2,
-        ):
-            wait_frame_stable(app, timeout=min(timeout, 3.0))
-            return True
-
-        logger.warning(
-            f"{action_name}: modal {current_modal.modal_title!r} did not transition "
-            f"after attempt {attempt}/{retries}"
-        )
-        sleep(0.5)
-        current_modal = app.game_utils.try_get_modal(no_body=True)
-
-    return False
-
-
-def click_top_right_action(app: "AppProcessor", *, timeout: float = 6.0) -> bool:
-    buttons = get_buttons(app)
-    candidates = [button for button in buttons if button.cx >= 720 and button.cy <= 280]
-    candidates.sort(key=lambda button: (button.cy, -button.cx))
-    if not candidates:
-        return False
-    return app.game_utils.click_element_and_wait_trigger(candidates[0], timeout=timeout)
+def _call_ui_attr(name: str, fallback, *args, **kwargs):
+    ui_module = sys.modules.get("src.core.tasks.producer_challenge.ui")
+    if ui_module is not None:
+        candidate = getattr(ui_module, name, fallback)
+        if candidate is not fallback:
+            return candidate(*args, **kwargs)
+    return fallback(*args, **kwargs)
 
 
 def _button_like_boxes(results) -> list:
@@ -377,7 +68,7 @@ def collect_button_like_texts(results) -> list[str]:
     texts: list[str] = []
     debugger = DebugTools()
     for box in _button_like_boxes(results):
-        text = ocr_text(getattr(box, "frame", None))
+        text = _call_ui_attr("ocr_text", ocr_text, getattr(box, "frame", None))
         if text:
             texts.append(text)
             debugger.add_box(
@@ -397,7 +88,7 @@ def collect_button_like_texts(results) -> list[str]:
 def collect_frame_text(results) -> str:
     if results is None:
         return ""
-    return ocr_text(getattr(results, "frame", None))
+    return _call_ui_attr("ocr_text", ocr_text, getattr(results, "frame", None))
 
 
 def _contains_text(text: str, *tokens: str) -> bool:
@@ -434,7 +125,10 @@ def _looks_like_present_support_selection(frame_text: str, results) -> bool:
             MatchConfig(fuzz_threshold=60, normalize=True),
         )
     )
-    has_selection_hint = _contains_text(normalized, ProduceText.PRESENT_SELECTION) or "選択時" in normalized
+    has_selection_hint = (
+        _contains_text(normalized, ProduceText.PRESENT_SELECTION)
+        or ProduceText.PRESENT_SELECTION_SHORT in normalized
+    )
     bonus_count = len(re.findall(r"\+\d+", normalized))
     has_param_panel = sum(
         bool(results.exists_label(label))
@@ -473,7 +167,9 @@ def _looks_like_present_support_showcase(frame_text: str, results) -> bool:
     if frame is not None and getattr(frame, "size", 0) > 0:
         height, width = frame.shape[:2]
         header_crop = frame[:int(height * 0.12), :int(width * 0.32)]
-        header_text = normalize_text(ocr_text(header_crop))
+        header_text = normalize_text(
+            _call_ui_attr("ocr_text", ocr_text, header_crop)
+        )
 
     has_present = bool(
         string_match(
@@ -531,8 +227,8 @@ def _looks_like_loading_screen(results) -> bool:
     crop = frame[int(height * 0.78):height, int(width * 0.60):width]
     if crop.size <= 0:
         return False
-    text = ocr_text(crop).upper().replace(" ", "")
-    return "NOWLOADING" in text or "LOADING" in text
+    text = _call_ui_attr("ocr_text", ocr_text, crop).upper().replace(" ", "")
+    return any(token in text for token in ProduceText.LOADING_TOKENS)
 
 
 def _looks_like_exam_prep_screen(results) -> bool:
@@ -552,13 +248,17 @@ def _looks_like_exam_prep_screen(results) -> bool:
 
     # 审查条件区 OCR
     criteria_crop = frame[int(h * 0.55):int(h * 0.64), :]
-    criteria_text = fullwidth_to_halfwidth(ocr_text(criteria_crop))
+    criteria_text = fullwidth_to_halfwidth(
+        _call_ui_attr("ocr_text", ocr_text, criteria_crop)
+    )
     if ProduceText.EXAM_CRITERIA in criteria_text or ProduceText.PASS_CONDITION in criteria_text:
         return True
 
     # 底部提示区 OCR 备选
     tap_crop = frame[int(h * 0.83):int(h * 0.90), :]
-    tap_text = fullwidth_to_halfwidth(ocr_text(tap_crop))
+    tap_text = fullwidth_to_halfwidth(
+        _call_ui_attr("ocr_text", ocr_text, tap_crop)
+    )
     return ProduceText.TAP_TO_CONTINUE in tap_text
 
 
@@ -604,7 +304,9 @@ def _looks_like_resume_title_screen(frame_text: str, results) -> bool:
     if frame is not None and getattr(frame, "size", 0) > 0:
         height, width = frame.shape[:2]
         logo_crop = frame[int(height * 0.40):int(height * 0.63), int(width * 0.05):int(width * 0.95)]
-        logo_text = normalize_text(ocr_text(logo_crop))
+        logo_text = normalize_text(
+            _call_ui_attr("ocr_text", ocr_text, logo_crop)
+        )
         if logo_text:
             title_text = logo_text
 
@@ -710,19 +412,7 @@ def _looks_like_skill_reward_showcase(results, frame_text: str) -> bool:
     has_showcase_text = _contains_text(frame_text, *ProduceText.SKILL_REWARD_SHOWCASE_VERBS)
     has_skill_card_detail_text = bool(normalized) and any(
         token in normalized
-        for token in (
-            normalize_text(ProduceText.STAMINA),
-            normalize_text(ProduceText.LESSON),
-            "スキルカード",
-            "ターン",
-            "パラメータ",
-            "バラメータ",  # OCR 常见误读 パ→バ
-            "元気",
-            "複数不可",
-            "上昇",  # カード効果の共通動詞（パラメータ上昇 等）
-            "好印象",
-            "メモリー",  # メモリー効果展示ページ
-        )
+        for token in map(normalize_text, ProduceText.SKILL_CARD_DETAIL_HINT_TOKENS)
     )
     has_other_controls = any(
         results.exists_label(label)
@@ -764,9 +454,21 @@ def _looks_like_exam_result_summary_showcase(frame_text: str) -> bool:
     normalized = normalize_text(frame_text)
     if not normalized:
         return False
-    has_pass_condition = "合格条件" in normalized or ("合格" in normalized and "位以上" in normalized)
-    has_breakdown = normalized.count("%") >= 2 or normalized.count("pt") >= 2
-    has_praise = "すばらしい" in normalized or "すばら" in normalized
+    has_pass_condition = (
+        ProduceText.PASS_CONDITION in normalized
+        or (
+            ProduceText.PASS in normalized
+            and ProduceText.PASS_POSITION_SUFFIX in normalized
+        )
+    )
+    has_breakdown = (
+        normalized.count("%") >= 2
+        or normalized.count(ProduceText.RANKING_POINT_UNIT) >= 2
+    )
+    has_praise = any(
+        token in normalized
+        for token in ProduceText.PRAISE_EXCELLENT_OCR_VARIANTS
+    )
     return bool(has_pass_condition and (has_breakdown or has_praise))
 
 
@@ -788,10 +490,10 @@ def _looks_like_exam_result_ranking_summary(
     button_texts = list(button_texts or [])
     has_next = _button_text_matches(button_texts, ButtonText.NEXT)
     has_retry = _button_text_matches(button_texts, ButtonText.RETRY)
-    pt_count = normalized.count("pt")
+    pt_count = normalized.count(ProduceText.RANKING_POINT_UNIT)
     ordinal_count = sum(
         1
-        for marker in ("1st", "2nd", "3rd", "4th", "5th", "6th")
+        for marker in ProduceText.RANKING_ORDINAL_MARKERS
         if marker in normalized
     )
     return bool(
@@ -824,7 +526,7 @@ def _looks_like_result_chain(results) -> bool:
         return True
 
     button_texts = collect_button_like_texts(results)
-    frame_text = collect_frame_text(results)
+    frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
 
     if _button_text_matches(button_texts, ButtonText.REGENERATE, ButtonText.COMPLETE):
         return True
@@ -944,7 +646,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
     if not has_skill_card and has_bonus_indicator and not has_action and not has_training_score:
         return GameplayPhase.EXAM
     if not frame_text:
-        frame_text = collect_frame_text(results)
+        frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
     if (
         has_progress
         and not has_action
@@ -962,7 +664,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
     ):
         return GameplayPhase.SCHEDULE
     if not frame_text:
-        frame_text = collect_frame_text(results)
+        frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
     if _looks_like_skill_reward_showcase(results, frame_text):
         return GameplayPhase.SKILL_REWARD
     # 结果链检测：至少需要一个可交互元素（按钮/确认/跳过）才认定为结果画面，
@@ -971,7 +673,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
     if has_any_interactive and _looks_like_result_chain(results):
         return GameplayPhase.RESULT
     if not has_any_interactive:
-        frame_text = collect_frame_text(results)
+        frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
         if (
             _looks_like_exam_result_summary_showcase(frame_text)
             or _contains_text(frame_text, ProduceText.FINAL_PRODUCE_EVALUATION, ProduceText.FAILED, ProduceText.PRODUCE_RESULT)
@@ -1062,7 +764,12 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
 
 
 def detect_gameplay_phase(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str:
-    return classify_gameplay_phase(app.latest_results, ctx=ctx)
+    return _call_ui_attr(
+        "classify_gameplay_phase",
+        classify_gameplay_phase,
+        app.latest_results,
+        ctx=ctx,
+    )
 
 
 def classify_pipeline_position(
@@ -1076,7 +783,12 @@ def classify_pipeline_position(
     if final_confirm:
         return GameplayPosition.FINAL_CONFIRM
 
-    phase = phase or classify_gameplay_phase(results, ctx=ctx)
+    phase = phase or _call_ui_attr(
+        "classify_gameplay_phase",
+        classify_gameplay_phase,
+        results,
+        ctx=ctx,
+    )
     if phase == GameplayPhase.MODAL:
         modal_title = modal_title or ""
         if string_match(modal_title, ProduceText.VOICE_PLAYBACK_CONFIRM, MatchConfig(fuzz_threshold=65, normalize=True)):
@@ -1108,7 +820,7 @@ def classify_pipeline_position(
         return GameplayPosition.UNKNOWN
 
     if phase == GameplayPhase.SCHEDULE:
-        frame_text = collect_frame_text(results)
+        frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
         has_pc_action = results.exists_label(ProducerLabels.PC_ACTION)
         has_ff = results.exists_label(BaseUILabels.PLOT_FAST_FORWARD_BUTTON)
         has_opts = results.exists_label(ProducerLabels.UNIVERSAL_OPTIONS)
@@ -1160,7 +872,7 @@ def classify_pipeline_position(
         return GameplayPosition.P_DRINK_IDLE
 
     if phase == GameplayPhase.SKILL_REWARD:
-        frame_text = collect_frame_text(results)
+        frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
         if _looks_like_skill_reward_showcase(results, frame_text):
             return GameplayPosition.SKILL_REWARD_SHOWCASE
         if results.exists_label(ProducerLabels.CONFIRM_BUTTON):
@@ -1206,7 +918,7 @@ def classify_pipeline_position(
         return GameplayPosition.EXAM_IDLE
 
     if phase == GameplayPhase.RESULT:
-        frame_text = collect_frame_text(results)
+        frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
         button_texts = collect_button_like_texts(results)
         if _contains_text(frame_text, ProduceText.FAILED):
             return GameplayPosition.RESULT_EXAM_FAILURE
@@ -1219,7 +931,7 @@ def classify_pipeline_position(
         if _contains_text(frame_text, ProduceText.MEMORY_SELECT) or _button_text_matches(
             button_texts,
             ButtonText.REGENERATE,
-            "メモリー一覧",
+            ProduceText.MEMORY_LIST,
         ):
             return GameplayPosition.RESULT_MEMORY_PAGE
         if _contains_text(frame_text, ProduceText.ACHIEVEMENT_PROGRESS):
@@ -1239,7 +951,7 @@ def classify_pipeline_position(
     if not results:
         return GameplayPosition.TRANSITION_EMPTY
 
-    frame_text = collect_frame_text(results)
+    frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
     if _looks_like_resume_title_screen(frame_text, results):
         return GameplayPosition.TRANSITION_RESUME_TITLE
 
@@ -1273,8 +985,15 @@ def classify_gameplay_state(
     如果 phase / position 分别从两次 latest_results 读取，可能落在不同帧上，
     从而出现 phase=unknown 但 position=dialogue_options 之类的撕裂状态。
     """
-    phase = classify_gameplay_phase(results, ctx=ctx)
-    position = classify_pipeline_position(
+    phase = _call_ui_attr(
+        "classify_gameplay_phase",
+        classify_gameplay_phase,
+        results,
+        ctx=ctx,
+    )
+    position = _call_ui_attr(
+        "classify_pipeline_position",
+        classify_pipeline_position,
         results,
         modal_title=modal_title,
         final_confirm=final_confirm,
@@ -1298,7 +1017,9 @@ def detect_gameplay_state(
         if modal is not None:
             modal_title = modal.modal_title
     final_confirm = is_final_confirm_page(app) if include_final_confirm else False
-    return classify_gameplay_state(
+    return _call_ui_attr(
+        "classify_gameplay_state",
+        classify_gameplay_state,
         results,
         modal_title=modal_title,
         final_confirm=final_confirm,
@@ -1313,199 +1034,11 @@ def get_pipeline_position(app: "AppProcessor", ctx: "ProduceContext | None" = No
         modal = app.game_utils.try_get_modal(no_body=True)
         if modal is not None:
             modal_title = modal.modal_title
-    return classify_pipeline_position(
+    return _call_ui_attr(
+        "classify_pipeline_position",
+        classify_pipeline_position,
         results,
         modal_title=modal_title,
         final_confirm=is_final_confirm_page(app),
         ctx=ctx,
     )
-
-
-def click_recommend_action(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
-    if ctx is None:
-        return None
-    from src.core.tasks.producer_challenge.gameplay.schedule import execute_schedule_step
-
-    result = execute_schedule_step(app, ctx, position=get_pipeline_position(app))
-    return result.status if result else None
-
-
-def handle_skill_card_selection(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
-    if ctx is None:
-        return None
-    from src.core.tasks.producer_challenge.gameplay.lesson import execute_lesson_step
-
-    result = execute_lesson_step(app, ctx, position=get_pipeline_position(app))
-    return result.status if result else None
-
-
-def _click_preferred_confirmation(app: "AppProcessor") -> bool:
-    confirm_boxes = app.latest_results.filter_by_label(ProducerLabels.CONFIRM_BUTTON)
-    if confirm_boxes:
-        app.device.click_element(confirm_boxes.first())
-        return True
-
-    buttons = app.latest_results.filter_by_label(BaseUILabels.BUTTON)
-    if buttons:
-        app.device.click_element(max(buttons, key=lambda button: button.cy))
-        return True
-    return False
-
-
-def handle_p_drink_select(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
-    position = get_pipeline_position(app)
-    if position not in P_DRINK_SELECTION_POSITIONS:
-        return None
-
-    if position == GameplayPosition.P_DRINK_SELECTED:
-        if not _click_preferred_confirmation(app):
-            return None
-        if ctx is not None:
-            ctx.record_operation(
-                "confirm_p_drink",
-                target=ctx.pending_p_drink_label or "p_drink",
-                details={"index": ctx.pending_p_drink_index},
-            )
-            ctx.clear_p_drink_pending()
-        sleep(1.0)
-        return "confirmed"
-
-    drinks = sorted(app.latest_results.filter_by_label(ProducerLabels.P_DRINK), key=lambda item: item.cx)
-    if not drinks:
-        return None
-
-    target_index = 0
-    if ctx is not None:
-        decision = invoke_decision_strategy(ctx.p_drink_strategy, app, ctx, drinks)
-        target_index = resolve_candidate_index(decision, drinks, default_index=ctx.pending_p_drink_index or 0)
-
-    target = drinks[target_index]
-    app.device.click_element(target)
-    if ctx is not None:
-        ctx.pending_p_drink_index = target_index
-        ctx.pending_p_drink_label = ocr_text(target.frame) or f"p_drink_{target_index + 1}"
-        ctx.record_operation(
-            "select_p_drink",
-            target=ctx.pending_p_drink_label,
-            details={"index": target_index},
-        )
-    sleep(0.8)
-    return "selected"
-
-
-def handle_skill_reward_selection(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
-    position = get_pipeline_position(app)
-    if position not in SKILL_REWARD_SELECTION_POSITIONS:
-        return None
-
-    if position == GameplayPosition.SKILL_REWARD_SELECTED:
-        if not _click_preferred_confirmation(app):
-            return None
-        if ctx is not None:
-            ctx.record_operation(
-                "confirm_skill_reward",
-                target=ctx.pending_skill_reward_label or "skill_reward",
-                details={"index": ctx.pending_skill_reward_index},
-            )
-            ctx.clear_skill_reward_pending()
-        sleep(1.0)
-        return "confirmed"
-
-    candidates = []
-    for label in (
-        ProducerLabels.SKILL_CARD_ACTIVE,
-        ProducerLabels.SKILL_CARD_MENTAL,
-        ProducerLabels.SKILL_CARD_TRAP,
-        ProducerLabels.SKILL_CARD_INFO,
-    ):
-        candidates.extend(app.latest_results.filter_by_label(label))
-    candidates = sorted(candidates, key=lambda item: item.cx)
-    if not candidates:
-        return None
-
-    target_index = 0
-    if ctx is not None:
-        decision = invoke_decision_strategy(ctx.skill_reward_strategy, app, ctx, candidates)
-        target_index = resolve_candidate_index(decision, candidates, default_index=ctx.pending_skill_reward_index or 0)
-
-    target = candidates[target_index]
-    app.device.click_element(target)
-    if ctx is not None:
-        ctx.pending_skill_reward_index = target_index
-        ctx.pending_skill_reward_label = ocr_text(target.frame) or f"skill_reward_{target_index + 1}"
-        ctx.record_operation(
-            "select_skill_reward",
-            target=ctx.pending_skill_reward_label,
-            details={"index": target_index},
-        )
-    sleep(0.8)
-    return "selected"
-
-
-def go_back_in_gameplay(app: "AppProcessor") -> bool:
-    position = get_pipeline_position(app)
-    if position in GAMEPLAY_MODAL_POSITIONS:
-        modal = app.game_utils.try_get_modal(no_body=True)
-        if modal is not None:
-            prefer_confirm = position not in {
-                GameplayPosition.P_DRINK_DETAIL,
-                GameplayPosition.DETAIL_MODAL,
-            }
-            return click_modal_action_with_retry(
-                app,
-                modal,
-                prefer_confirm=prefer_confirm,
-                retries=2,
-                timeout=4.0,
-                action_name=f"go_back_in_gameplay[{position}]",
-            )
-
-    if close_buttons := app.latest_results.filter_by_label(BaseUILabels.CLOSE_BUTTON):
-        return app.game_utils.click_element_and_wait_trigger(close_buttons.first(), timeout=3.0)
-    if back_buttons := app.latest_results.filter_by_label(BaseUILabels.BACK_BTN):
-        return app.game_utils.click_element_and_wait_trigger(back_buttons.first(), timeout=3.0)
-
-    close_button = find_button(app, ButtonText.CLOSE, fuzz_threshold=60)
-    if close_button is not None:
-        return app.game_utils.click_element_and_wait_trigger(close_button, timeout=3.0)
-
-    cancel_button = (
-        find_button(app, ButtonText.CLOSE, fuzz_threshold=60)
-        or find_button(app, ButtonText.CANCEL, fuzz_threshold=60)
-    )
-    if cancel_button is not None:
-        return app.game_utils.click_element_and_wait_trigger(cancel_button, timeout=3.0)
-
-    return False
-
-
-def go_home_from_gameplay(app: "AppProcessor", *, max_try: int = 4) -> bool:
-    for _ in range(max_try):
-        if app.latest_results.exists_label(BaseUILabels.TAB_HOME):
-            return True
-
-        if home_buttons := app.latest_results.filter_by_label(BaseUILabels.GO_HOME_BTN):
-            if app.game_utils.click_element_and_wait_trigger(home_buttons.first(), timeout=3.0):
-                sleep(1.0)
-                continue
-
-        text_button = (
-            find_button(app, ButtonText.SAVE_AND_SUSPEND, fuzz_threshold=60)
-            or find_button(app, ButtonText.HOME, fuzz_threshold=60)
-            or find_button(app, ButtonText.RETIRE, fuzz_threshold=60)
-        )
-        if text_button is not None:
-            if app.game_utils.click_element_and_wait_trigger(text_button, timeout=3.0):
-                sleep(1.0)
-                continue
-
-        if go_back_in_gameplay(app):
-            sleep(0.8)
-            continue
-
-        if click_top_right_action(app, timeout=2.0):
-            sleep(1.0)
-            continue
-
-        break
-    return app.latest_results.exists_label(BaseUILabels.TAB_HOME)

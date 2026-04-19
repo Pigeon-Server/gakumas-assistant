@@ -40,7 +40,7 @@ const settingComponents = {
 const statusMap = {
   PENDING: {color: "orange", icon: "md:schedule", label: "等待中"},
   RUNNING: {color: "blue", icon: "md:cached", label: "运行中"},
-  SUSPENDED: {color: "yello", icon: "md:hourglass", label: "挂起中"},
+  SUSPENDED: {color: "blue-lighten-1", icon: "md:pause_circle", label: "挂起中"},
   SUCCESS: {color: "green", icon: "md:task_alt", label: "已完成"},
   FAILED: {color: "red", icon: "md:error", label: "执行错误"},
   CANCELED: {color: "grey", icon: "md:cancel", label: "已取消"},
@@ -177,7 +177,7 @@ async function toggleTask(taskName, enable) {
                 {{ statusMap[task.status]?.label }}
               </v-chip>
               <v-chip
-                v-if="app_store.current_task === task_name && app_store.status.task !== TaskStatus.PENDING"
+                v-if="app_store.status.current_task === task_name && app_store.status.task !== TaskStatus.PENDING"
                 size="small"
                 color="primary"
                 class="ml-2"

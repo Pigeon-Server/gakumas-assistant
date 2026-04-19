@@ -1,3 +1,4 @@
+from time import sleep
 from typing import TYPE_CHECKING
 
 from src.constants.game.text.button_text import ButtonText
@@ -5,6 +6,7 @@ from src.constants.game.text.modal_text import ModalText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Page.Types.index import GamePageTypes
+from src.utils.contest_overlay_tools import detect_contest_grade_up_splash, detect_contest_season_overlay
 from src.utils.game_tools import get_modal
 from src.utils.string_tools import MatchConfig
 from src.utils.task_debug_tools import record_task_step
@@ -15,12 +17,102 @@ if TYPE_CHECKING:
 
 _CONTEST_ENTRY_BUTTON_MATCH = MatchConfig(fuzz_threshold=80, normalize=True)
 
+def _dismiss_contest_season_overlay_if_present(app: "AppProcessor", reason: str) -> bool:
+    """
+    关闭竞技场“赛季排行”覆盖层。
+
+    该覆盖层没有标准按钮，因此通过整帧 OCR 识别后点击覆盖层中心，
+    并等待覆盖层消失。
+    """
+    overlay = detect_contest_season_overlay(app.latest_frame, add_debug_box=True)
+    if overlay is None:
+        return False
+
+    tap_points = [
+        (overlay.center_x, overlay.center_y),
+        (overlay.center_x, min(app.latest_frame.shape[0] - 1, overlay.bottom - max(20, (overlay.bottom - overlay.top) // 6))),
+    ]
+    for tap_index, (tap_x, tap_y) in enumerate(tap_points, start=1):
+        record_task_step(
+            app,
+            "goto_contest.dismiss_overlay_tap",
+            reason=reason,
+            tap_index=tap_index,
+            x=int(tap_x),
+            y=int(tap_y),
+            rank=overlay.rank_text,
+        )
+        app.device.click(int(tap_x), int(tap_y))
+        sleep(1)
+        if detect_contest_season_overlay(app.latest_frame, add_debug_box=True) is None:
+            record_task_step(app, "goto_contest.dismiss_overlay_done", reason=reason, tap_index=tap_index)
+            return True
+
+    record_task_step(app, "goto_contest.dismiss_overlay_failed", reason=reason, rank=overlay.rank_text)
+    return False
+
+
+def _dismiss_contest_grade_up_splash_if_present(app: "AppProcessor", reason: str) -> bool:
+    """
+    关闭竞技场「グレードUP」演出页。
+
+    真机验证结果表明：该页需要轻触上半屏标题区域，而不是点中间徽章。
+    """
+    splash = detect_contest_grade_up_splash(app.latest_frame, add_debug_box=True)
+    if splash is None:
+        return False
+
+    frame_height, frame_width = app.latest_frame.shape[:2]
+    tap_points = [
+        (splash.title_center_x, splash.title_center_y),
+        (frame_width // 2, max(40, int(frame_height * 0.27))),
+    ]
+    for tap_index, (tap_x, tap_y) in enumerate(tap_points, start=1):
+        record_task_step(
+            app,
+            "goto_contest.dismiss_grade_up_tap",
+            reason=reason,
+            tap_index=tap_index,
+            x=int(tap_x),
+            y=int(tap_y),
+            title=splash.title_text,
+        )
+        app.device.click(int(tap_x), int(tap_y))
+        sleep(1)
+        if detect_contest_grade_up_splash(app.latest_frame, add_debug_box=True) is None:
+            record_task_step(app, "goto_contest.dismiss_grade_up_done", reason=reason, tap_index=tap_index)
+            return True
+
+    record_task_step(app, "goto_contest.dismiss_grade_up_failed", reason=reason, title=splash.title_text)
+    return False
+
+
+def _settle_contest_blocking_layers(app: "AppProcessor", reason: str) -> bool:
+    """
+    清理进入竞技场后的阻塞层。
+
+    当前已确认的链路是：
+    1. シーズンランキング 覆盖层
+    2. グレードUP 演出页
+    """
+    handled = False
+    for _ in range(4):
+        if _dismiss_contest_season_overlay_if_present(app, reason):
+            handled = True
+            continue
+        if _dismiss_contest_grade_up_splash_if_present(app, reason):
+            handled = True
+            continue
+        break
+    return handled
+
+
 def _back_home(app: "AppProcessor"):
     if app.game_utils.update_current_location() != GamePageTypes.MAIN_MENU__HOME:
-        app.game_utils.go_home()
         try:
+            app.game_utils.go_home()
             app.game_utils.wait_location_update(GamePageTypes.MAIN_MENU__HOME)
-        except TimeoutError:
+        except (TimeoutError, RuntimeError):
             from src.core.tasks.base_ui.start_game import action__wait_enter_home
 
             action__wait_enter_home(app)
@@ -46,10 +138,17 @@ def _goto_tab_idol(app: "AppProcessor"):
 
 def goto__get_expenditure(app: "AppProcessor", candidate_index: int = 0):
     """ 进入“活动费”领取菜单，点击第 candidate_index 个候选按钮 """
+    from time import sleep
     _back_home(app)
     if not app.game_utils.wait_for_label(BaseUILabels.HOME_GET_EXPENDITURE):
         raise TimeoutError("Timeout waiting for [home:expenditure] to appear.")
-    candidates = app.latest_results.filter_by_label(BaseUILabels.HOME_GET_EXPENDITURE)
+    # wait_for_label 返回后 YOLO 可能已更新帧，用短暂重试避免竞态条件
+    candidates = None
+    for _ in range(10):
+        candidates = app.latest_results.filter_by_label(BaseUILabels.HOME_GET_EXPENDITURE)
+        if candidates:
+            break
+        sleep(0.2)
     if not candidates:
         raise TimeoutError("Failed to locate [home:expenditure] button after label wait.")
     idx = min(candidate_index, len(candidates) - 1)
@@ -84,11 +183,21 @@ def goto__shop_page(app: "AppProcessor"):
 def goto__contest_page(app: "AppProcessor"):
     """ 进入竞技场页面 """
     if app.game_utils.update_current_location() == GamePageTypes.CONTEST_TAB.ARENA:
+        _settle_contest_blocking_layers(app, "already_in_arena")
+        if detect_contest_season_overlay(app.latest_frame, add_debug_box=True) is not None:
+            raise TimeoutError("Contest season overlay detected but could not be dismissed.")
+        if detect_contest_grade_up_splash(app.latest_frame, add_debug_box=True) is not None:
+            raise TimeoutError("Contest grade-up splash detected but could not be dismissed.")
         record_task_step(app, "goto_contest.already_in_arena")
         return
     _goto_tab_contest(app)
     record_task_step(app, "goto_contest.enter_tab")
     if app.game_utils.update_current_location() == GamePageTypes.CONTEST_TAB.ARENA:
+        _settle_contest_blocking_layers(app, "entered_arena_from_tab")
+        if detect_contest_season_overlay(app.latest_frame, add_debug_box=True) is not None:
+            raise TimeoutError("Contest season overlay detected but could not be dismissed.")
+        if detect_contest_grade_up_splash(app.latest_frame, add_debug_box=True) is not None:
+            raise TimeoutError("Contest grade-up splash detected but could not be dismissed.")
         record_task_step(app, "goto_contest.entered_arena_from_tab")
         return
 
@@ -138,6 +247,14 @@ def goto__contest_page(app: "AppProcessor"):
                 attempt=attempt + 1,
                 error=str(exc),
             )
+            if _settle_contest_blocking_layers(app, f"attempt_{attempt + 1}_timeout"):
+                app.game_utils.update_current_location(GamePageTypes.CONTEST_TAB.ARENA)
+                record_task_step(app, "goto_contest.entered_arena_via_overlay", attempt=attempt + 1)
+                return
+            if detect_contest_season_overlay(app.latest_frame, add_debug_box=True) is not None:
+                raise TimeoutError("Contest season overlay detected but could not be dismissed.")
+            if detect_contest_grade_up_splash(app.latest_frame, add_debug_box=True) is not None:
+                raise TimeoutError("Contest grade-up splash detected but could not be dismissed.")
             if app.game_utils.update_current_location() != GamePageTypes.MAIN_MENU__CONTEST:
                 continue
 

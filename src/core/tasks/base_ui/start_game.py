@@ -22,6 +22,15 @@ def _handle__modal_boxes(app: "AppProcessor"):
     """处理模态框"""
     logger.debug("_handle__modal_boxes")
     modal = get_modal(app.latest_results)
+    if modal is None:
+        raise RuntimeError("Failed to parse modal box")
+
+    def _click_action_button():
+        action_button = modal.cancel_button or modal.confirm_button
+        if action_button is None:
+            raise RuntimeError(f"Modal '{modal.modal_title or '<empty>'}' has no actionable button")
+        app.device.click_element(action_button)
+
     if string_match(ModalText.TITLE.CONNECTION_ERROR, modal.modal_title):
         # Token失效
         if string_match(ModalText.BODY.CONNECTION_ERROR_ID.TOKEN_FAIL, modal.modal_body_text):
@@ -39,10 +48,20 @@ def _handle__modal_boxes(app: "AppProcessor"):
     elif string_match(ModalText.TITLE.DATA_DOWNLOAD, modal.modal_title):
         logger.warning("game requires downloading new data.")
         app.device.click_element(modal.confirm_button)
+    elif string_match(modal.modal_title, [ModalText.TITLE.DATA_UPDATE, ModalText.TITLE.DATE_UPDATE]):
+        logger.warning(f"Restarting start flow for modal: {modal.modal_title}")
+        _click_action_button()
+        sleep(1)
+        app.game_utils.wait_loading()
+        action__click_start_game(app)
+        return
     elif string_match(ModalText.TITLE.INIT_ERROR, modal.modal_title):
         logger.error("Game initialization failed.")
         app.device.click_element(modal.cancel_button)
         action__click_start_game(app)
+    elif string_match(ModalText.TITLE.INFO_FETCH_FAILED, modal.modal_title):
+        logger.warning("Information fetch failed, dismiss modal and retry waiting.")
+        _click_action_button()
     elif string_match(ModalText.TITLE.SKIP_CONFIRM, modal.modal_title):
         logger.warning("Skip the game story...")
         app.device.click_element(modal.confirm_button)
@@ -50,8 +69,11 @@ def _handle__modal_boxes(app: "AppProcessor"):
     # 游戏更新
     elif string_match(ModalText.TITLE.GAME_UPDATE, modal.modal_title):
         raise RuntimeWarning("Game requires an update from the App Store. Please update manually.")
+    elif modal.confirm_button is None and modal.cancel_button is not None:
+        logger.warning(f"Dismissing single-action startup modal: {modal.modal_title}")
+        app.device.click_element(modal.cancel_button)
     else:
-        raise RuntimeError("Unknown modal box")
+        raise RuntimeError(f"Unknown modal box: {modal.modal_title or '<empty>'}")
     sleep(1)
     app.game_utils.wait_loading()
 

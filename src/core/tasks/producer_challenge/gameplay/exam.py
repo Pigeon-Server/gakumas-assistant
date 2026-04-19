@@ -48,7 +48,7 @@ from src.core.tasks.producer_challenge.gameplay.lesson import (
     _try_resolve_empty_hand_action,
     execute_lesson_step,
 )
-from src.core.tasks.producer_challenge.gameplay.common import click_relative_point
+from src.core.tasks.producer_challenge.shared.common import click_relative_point
 from src.core.tasks.producer_challenge.gameplay.decision import is_produce_drink_action_id
 from src.utils.logger import logger
 
@@ -145,10 +145,11 @@ class ExamHandler(GameplayHandler):
     def _update_wheel_info(self, app: "AppProcessor", ctx: "ProduceContext") -> None:
         """每回合提取轮盘队列信息（色段、指针、参数、加成倍率）。"""
         frame = getattr(app.latest_results, "frame", None)
+        yolo_results = getattr(app, "latest_results", None)
         if frame is None:
             return
         try:
-            wheel_info = extract_exam_wheel_info(frame)
+            wheel_info = extract_exam_wheel_info(frame, yolo_results=yolo_results)
             if wheel_info and wheel_info.get("queue"):
                 store_exam_wheel_info(ctx, wheel_info)
                 logger.debug(

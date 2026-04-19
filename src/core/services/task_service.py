@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from queue import Queue
 from typing import Callable, Optional, TYPE_CHECKING, List
-from threading import Thread, Event, Lock
+from threading import Thread, Event, Lock, current_thread
 from time import time, sleep
 
 try:
@@ -181,10 +181,14 @@ class TaskService:
         if self._task_runner_thread is not None and self._task_runner_thread.is_alive():
             _raise_in_thread(self._task_runner_thread.ident, UserCancelTask)
         with self._task_queue.mutex:
-            for task in [t for t in self._task_list if t.status == TaskStatus.PENDING]:
-                task.update_status(TaskStatus.CANCELED)
             self._task_queue.queue.clear()
         return True
+
+    def _broadcast_runtime_snapshot(self):
+        try:
+            self._app.broadcast_app_status()
+        except Exception as exc:
+            logger.debug(f"Skip app status broadcast from task service: {exc}")
 
     def suspend_running_task(self, update_status: bool = True) -> Task:
         """挂起当前正在运行的任务"""
@@ -195,15 +199,37 @@ class TaskService:
             target = next((t for t in self._task_list if t.status == TaskStatus.RUNNING), None)
         if not target:
             raise RuntimeError("No running task to suspend")
-        self._suspend_target_task = target
-        self._suspended.set()
-        self._resume_event.clear()  # trace 中的 wait() 将阻塞任务线程
-        target.update_status(TaskStatus.SUSPENDED)
-        self._current_running_task = None
-        if update_status:
-            websocket_manager.broadcast_action_sync(WebsocketActions.TaskService.TaskQueueSuspend)
-        logger.debug(f"Suspend task: {target.task_name}({target.id})")
+
+        def _apply_suspend_state(applied_event: Optional[Event] = None):
+            try:
+                self._suspend_target_task = target
+                self._suspended.set()
+                self._resume_event.clear()  # trace 中的 wait() 将阻塞任务线程
+                target.update_status(TaskStatus.SUSPENDED)
+                self._current_running_task = None
+                if update_status:
+                    websocket_manager.broadcast_action_sync(WebsocketActions.TaskService.TaskQueueSuspend)
+                self._broadcast_runtime_snapshot()
+                logger.debug(f"Suspend task: {target.task_name}({target.id})")
+            finally:
+                if applied_event is not None:
+                    applied_event.set()
+
+        if self._task_runner_thread is not None and current_thread().ident == self._task_runner_thread.ident:
+            applied_event = Event()
+            Thread(target=_apply_suspend_state, args=(applied_event,), daemon=True).start()
+            applied_event.wait()
+        else:
+            _apply_suspend_state()
         return target
+
+    def request_suspend_running_task(self, update_status: bool = True) -> Task:
+        """
+        由任务代码主动请求挂起当前任务。
+        保留该接口兼容旧调用点，语义与 `suspend_running_task()` 相同：
+        当前执行流会在调用点原地挂起，恢复后继续向下执行。
+        """
+        return self.suspend_running_task(update_status=update_status)
 
     def resume_suspended_task(self):
         """恢复被挂起的任务"""
@@ -212,10 +238,14 @@ class TaskService:
         target = self._suspend_target_task
         self._suspended.clear()
         self._suspend_target_task = None
-        self._current_running_task = target
-        target.update_status(TaskStatus.RUNNING)
+        if self._task_runner_thread is not None and self._task_runner_thread.is_alive():
+            self._current_running_task = target
+            target.update_status(TaskStatus.RUNNING)
+        else:
+            self._current_running_task = None
         self._resume_event.set()  # 唤醒任务线程
         websocket_manager.broadcast_action_sync(WebsocketActions.TaskService.TaskQueueStart)
+        self._broadcast_runtime_snapshot()
         logger.debug(f"Resume task: {target.task_name}({target.id})")
 
     def insert_task_to_run_queue(self, task_id: str):
@@ -242,6 +272,7 @@ class TaskService:
                 self.resume_suspended_task()
 
         self._current_running_task = insert_task
+        self._broadcast_runtime_snapshot()
         Thread(target=_insert_runner, daemon=True).start()
         return True
 
@@ -459,6 +490,7 @@ class TaskService:
     def _processor_task_queue(self):
         """任务队列处理器"""
         websocket_manager.broadcast_action_sync(WebsocketActions.TaskService.TaskQueueStart)
+        self._broadcast_runtime_snapshot()
         try:
             for func in self._task_pre_function:
                 if func() is False:
@@ -468,6 +500,7 @@ class TaskService:
             websocket_manager.broadcast_action_sync(WebsocketActions.TaskService.TaskQueueStop)
             self._queue_status = False
             self._app.yolo_engine.pause()
+            self._broadcast_runtime_snapshot()
             return
 
         try:
@@ -476,10 +509,7 @@ class TaskService:
                     break
                 task = self._task_queue.get()
                 self._current_running_task = task
-                websocket_manager.broadcast_action_sync(
-                    WebsocketActions.TaskService.UpdateCurrentTask,
-                    WebSocketData(message={"task_id": task.id})
-                )
+                self._broadcast_runtime_snapshot()
                 logger.info(f"Run task: {task.task_name}({task.id})")
                 self._task_thread(task)
                 if task.status == TaskStatus.FAILED:
@@ -492,6 +522,7 @@ class TaskService:
             self._queue_status = False
             self._app.yolo_engine.pause()
             self._current_running_task = None
+            self._broadcast_runtime_snapshot()
             logger.debug("Task queue processor exited")
 
     def _task_thread(self, task: Task):

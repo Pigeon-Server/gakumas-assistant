@@ -32,6 +32,22 @@ function stop_task_queue() {
 }
 
 /**
+ * 挂起当前任务
+ * @return {Promise<AxiosResponse<any, any>>}
+ */
+function suspend_task() {
+  return axiosplus.get("/api/task/suspend");
+}
+
+/**
+ * 恢复当前挂起任务
+ * @return {Promise<AxiosResponse<any, any>>}
+ */
+function resume_task() {
+  return axiosplus.get("/api/task/resume");
+}
+
+/**
  * 执行指定任务
  * @param task_name 任务名
  * @return {Promise<axios.AxiosResponse<any>>}
@@ -238,6 +254,8 @@ function reset_config() {
 export default {
   start_task_queue,
   stop_task_queue,
+  suspend_task,
+  resume_task,
   run_task,
   get_status,
   shutdown_app,

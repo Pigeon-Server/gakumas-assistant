@@ -51,6 +51,7 @@ from src.core.tasks.producer_challenge.gameplay.modal import ModalHandler
 from src.core.tasks.producer_challenge.gameplay.effect_chain import EffectChainHandler
 from src.core.tasks.producer_challenge.gameplay.live_performance import LivePerformanceHandler
 from src.core.tasks.producer_challenge.gameplay.item_select import ItemSelectHandler
+from src.core.tasks.producer_challenge.gameplay.rl_strategy import RLStrategy, inject_rl_strategy
 
 
 def build_default_dispatcher() -> GameplayDispatcher:
@@ -144,4 +145,7 @@ __all__ = [
     "LivePerformanceHandler",
     # item_select
     "ItemSelectHandler",
+    # rl
+    "RLStrategy",
+    "inject_rl_strategy",
 ]

@@ -17,6 +17,7 @@ CLIP 未识别时的探查流程:
 
 from __future__ import annotations
 
+import re
 import os
 import time
 from dataclasses import dataclass, field
@@ -28,7 +29,8 @@ from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.inference.ocr_engine import OCRService
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.tasks.producer_challenge.shared.common import (
+    detect_bottom_white_modal_region,
     invoke_decision_strategy,
     ocr_text,
     resolve_candidate_index,
@@ -43,18 +45,25 @@ from src.core.tasks.producer_challenge.gameplay.handler_base import (
 )
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str
-from src.utils.string_tools import normalize_ocr_jp
+from src.utils.string_tools import fullwidth_to_halfwidth, normalize_ocr_jp
 
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
     from src.main import AppProcessor
 
 _ITEM_SELECT_SCREEN_OCR = OCRService()
-_ITEM_SELECT_NOISE_TOKENS = (
-    ProduceText.P_ITEM_SELECT,
-    "選んでください",
-    "受け取る",
+_ITEM_SELECT_NOISE_TOKENS = ProduceText.ITEM_SELECT_NOISE_TOKENS
+_ITEM_SELECT_TITLE_NOISE_TOKENS = tuple(dict.fromkeys((
+    *_ITEM_SELECT_NOISE_TOKENS,
+    ProduceText.GUIDE,
+    ProduceText.RECOMMEND,
+)))
+_ITEM_SELECT_NAME_NOISE_RE = re.compile(r'^[\|｜\[\]「」【】\s]+|[\|｜\[\]「」【】\s]+$')
+_ITEM_SELECT_EFFECT_PREFIXES = ("↑", "↓", "→", "←", "↗", "↘", "♥", "❤", "♡")
+_ITEM_SELECT_EFFECT_LINE_RE = re.compile(
+    rf"({'|'.join(map(re.escape, ProduceText.STATUS_VALUE_TOKENS))}|{re.escape(ProduceText.YARUKI)}|{re.escape(ProduceText.SCORE)}|{re.escape(ProduceText.STAMINA)}).*[+\-−]\d+"
 )
+_ITEM_SELECT_JP_CHAR_RE = re.compile(r"[ぁ-んァ-ヶー一-龯]")
 
 # ── 探查交互等待时间 ──
 _PROBE_TAP_WAIT = 0.4       # 点击后等待 UI 刷新
@@ -289,10 +298,7 @@ def decide_item_select(
 # ── P物品探查（点击识别）──────────────────────────────────────────
 
 
-def _extract_selected_item_name(
-    frame,
-    results,
-) -> str | None:
+def _extract_selected_item_name(app: "AppProcessor") -> str | None:
     """从已选中的P物品面板中 OCR 提取物品名称。
 
     选中物品后，面板上方会显示物品名称和效果描述。
@@ -309,45 +315,114 @@ def _extract_selected_item_name(
       │  [     受け取る     ]       │
       └─────────────────────────────┘
     """
-    items = sorted(
-        results.filter_by_label(ProducerLabels.SPECIAL_ITEM),
-        key=lambda b: b.cx,
-    )
+    frame = getattr(app, "latest_frame", None)
+    results = getattr(app, "latest_results", None)
+    if frame is None or getattr(frame, "size", 0) <= 0 or results is None:
+        return None
+
+    def _normalize_item_panel_name(text: str) -> str:
+        cleaned = normalize_ocr_jp(fullwidth_to_halfwidth(str(text or "")))
+        cleaned = _ITEM_SELECT_NAME_NOISE_RE.sub("", cleaned).strip()
+        return cleaned
+
+    def _looks_like_effect_text(text: str) -> bool:
+        normalized = fullwidth_to_halfwidth(str(text or "")).strip()
+        if not normalized:
+            return False
+        return normalized.startswith(_ITEM_SELECT_EFFECT_PREFIXES)
+
+    def _is_plausible_item_name(text: str) -> bool:
+        normalized = _normalize_item_panel_name(text)
+        if len(normalized) < 2:
+            return False
+        if _looks_like_effect_text(normalized):
+            return False
+        if _ITEM_SELECT_EFFECT_LINE_RE.search(normalized):
+            return False
+        if any(token in normalized for token in _ITEM_SELECT_TITLE_NOISE_TOKENS):
+            return False
+        return bool(_ITEM_SELECT_JP_CHAR_RE.search(normalized))
+
+    items = sorted(results.filter_by_label(ProducerLabels.SPECIAL_ITEM), key=lambda b: b.cx)
     if not items:
         return None
 
-    h, w = frame.shape[:2]
+    h = frame.shape[0]
+    debugger = getattr(app, "debug_tools", None)
 
-    # 以物品图标顶部为锚点
-    items_top_y = min(int(b.y) for b in items)
-    item_h = max(1, int(items[0].h - items[0].y))
-
-    # 名称区域：物品上方约 2.5 个图标高度 到 物品上方 0.3 个图标高度
-    name_y1 = max(0, items_top_y - int(item_h * 2.5))
-    name_y2 = max(0, items_top_y - int(item_h * 0.3))
-
-    if name_y2 <= name_y1 + 10:
-        return None
-
-    crop = frame[name_y1:name_y2, :]
-    if crop is None or crop.size == 0:
-        return None
-
-    # 结构化 OCR，按 y 坐标排序取最上面的有效文本
-    ocr_results = _ITEM_SELECT_SCREEN_OCR.ocr(crop)
-    sorted_results = sorted(ocr_results.results, key=lambda r: r.y)
-
-    for r in sorted_results:
-        text = _normalize_item_select_text(r.text)
-        if not text or len(text) < 2:
-            continue
-        # 排除提示语和按钮文字
-        if any(token in text for token in _ITEM_SELECT_NOISE_TOKENS):
-            continue
-        # 排除靠右边距的短字符（游戏UI装饰/角标）
-        if len(text) <= 3 and r.x > crop.shape[1] * 0.7:
-            continue
-        return normalize_ocr_jp(text)
+    panel_rect = detect_bottom_white_modal_region(
+        frame,
+        row_boxes=items,
+        debug_tools=debugger,
+        debug_label="item_select_white_panel",
+    )
+    if panel_rect is not None:
+        px1, py1, px2, py2 = panel_rect
+        if px2 > px1 + 20 and py2 > py1 + 20:
+            panel_crop = frame[py1:py2, px1:px2]
+            ocr_result_list = _ITEM_SELECT_SCREEN_OCR.ocr(panel_crop)
+            merged_lines = (
+                list(
+                    ocr_result_list.auto_merge_lines(
+                        cy_range=max(8, int(panel_crop.shape[0] * 0.02)),
+                        width_gap=max(12, int(panel_crop.shape[1] * 0.04)),
+                    )
+                )
+                if hasattr(ocr_result_list, "auto_merge_lines")
+                else list(ocr_result_list)
+            )
+            if merged_lines:
+                panel_h = max(1, py2 - py1)
+                panel_w = max(1, px2 - px1)
+                title_bottom = int(panel_h * 0.42)
+                item_top = min(int(getattr(box, "y", h)) for box in items)
+                boundary = int(item_top - py1 - panel_h * 0.05)
+                if boundary > int(panel_h * 0.15):
+                    title_bottom = min(title_bottom, boundary)
+                best_line: tuple[float, str, tuple[int, int, int, int]] | None = None
+                for line in merged_lines:
+                    line_text = _normalize_item_panel_name(str(getattr(line, "text", "") or ""))
+                    if not line_text:
+                        continue
+                    line_y = int(getattr(line, "y", 0))
+                    line_h = max(1, int(getattr(line, "h", 0)))
+                    line_cy = int(getattr(line, "cy", line_y + line_h // 2))
+                    if line_cy < 0 or line_cy > title_bottom:
+                        continue
+                    if not _is_plausible_item_name(line_text):
+                        continue
+                    line_x = int(getattr(line, "x", 0))
+                    line_w = max(1, int(getattr(line, "w", 0)))
+                    line_cx = int(getattr(line, "cx", line_x + line_w // 2))
+                    center_bias = 1.0 - min(1.0, abs(line_cx - panel_w / 2.0) / max(panel_w / 2.0, 1.0))
+                    width_score = min(1.0, line_w / max(panel_w * 0.35, 1.0))
+                    top_score = 1.0 - min(1.0, line_cy / max(title_bottom, 1))
+                    score = center_bias * 3.0 + width_score * 2.0 + top_score
+                    if best_line is None or score > best_line[0]:
+                        best_line = (
+                            score,
+                            line_text,
+                            (px1 + line_x, py1 + line_y, px1 + line_x + line_w, py1 + line_y + line_h),
+                        )
+                if best_line is not None:
+                    _, item_name, (bx1, by1, bx2, by2) = best_line
+                    if debugger is not None:
+                        debugger.add_box(
+                            bx1,
+                            by1,
+                            bx2,
+                            by2,
+                            label=f"item_select_title:{item_name[:24]}",
+                            color=(80, 220, 120),
+                            alpha=0.16,
+                            duration=2.5,
+                            font_size=14,
+                        )
+                    logger.debug(
+                        "item_select: 信息面板 OCR 物品名={!r} (panel y={}..{}, x={}..{})",
+                        item_name, py1, py2, px1, px2,
+                    )
+                    return item_name
 
     return None
 
@@ -421,7 +496,7 @@ def _probe_unresolved_items(
                 continue
 
             # 从选中面板 OCR 提取物品名
-            name = _extract_selected_item_name(frame, results)
+            name = _extract_selected_item_name(app)
             if not name:
                 logger.debug(
                     "item_select: P物品 #{} 点击后未提取到名称",
@@ -576,7 +651,7 @@ class ItemSelectHandler(GameplayHandler):
         # 无 Special Item 检测到 → 可能是过渡帧
         if streak >= 5:
             logger.warning("item_select: 连续无法选择物品，尝试点击屏幕推进")
-            from .common import click_relative_point
+            from src.core.tasks.producer_challenge.shared.common import click_relative_point
             click_relative_point(app, x_ratio=0.5, y_ratio=0.7, label="item_select_advance")
             ctx.handler_state["item_select_idle_streak"] = 0
             return HandlerResult.ok("item_select: 强制推进", sleep_after=1.0)

@@ -1,15 +1,32 @@
-from src.core.tasks.producer_challenge.steps.navigate_to_produce import NavigateToProduceStep
-from src.core.tasks.producer_challenge.steps.select_scenario import SelectScenarioStep
-from src.core.tasks.producer_challenge.steps.select_difficulty import SelectDifficultyStep
-from src.core.tasks.producer_challenge.steps.select_idol_card import SelectIdolCardStep
-from src.core.tasks.producer_challenge.steps.select_support_cards import SelectSupportCardsStep
-from src.core.tasks.producer_challenge.steps.select_memories import SelectMemoriesStep
-from src.core.tasks.producer_challenge.steps.collect_memory_attributes import CollectMemoryAttributesStep
-from src.core.tasks.producer_challenge.steps.collect_formation_details import CollectFormationDetailsStep
-from src.core.tasks.producer_challenge.steps.confirm_and_start import ConfirmAndStartStep
-from src.core.tasks.producer_challenge.steps.handle_startup_modals import HandleStartupModalsStep
-from src.core.tasks.producer_challenge.steps.produce_gameplay_loop import ProduceGameplayLoopStep
-from src.core.tasks.producer_challenge.steps.handle_results import HandleResultsStep
+# ── entry：进入培育前的页面导航与剧本/难度选择 ──
+from src.core.tasks.producer_challenge.steps.entry import (
+    NavigateToProduceStep,
+    SelectDifficultyStep,
+    SelectScenarioStep,
+)
+
+# ── setup：正式开跑前的编成与开始确认 ──
+from src.core.tasks.producer_challenge.steps.setup import (
+    ConfirmAndStartStep,
+    SelectIdolCardStep,
+    SelectMemoriesStep,
+    SelectSupportCardsStep,
+)
+
+# ── collect：开始前的详情采集 ──
+from src.core.tasks.producer_challenge.steps.collect import (
+    CollectFormationDetailsStep,
+    CollectMemoryAttributesStep,
+)
+
+# ── runtime：进入培育后的启动弹窗与主循环 ──
+from src.core.tasks.producer_challenge.steps.runtime import (
+    HandleStartupModalsStep,
+    ProduceGameplayLoopStep,
+)
+
+# ── finalize：培育结束后的结果链处理 ──
+from src.core.tasks.producer_challenge.steps.finalize import HandleResultsStep
 
 __all__ = [
     "NavigateToProduceStep",

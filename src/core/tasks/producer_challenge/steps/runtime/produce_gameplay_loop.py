@@ -23,7 +23,7 @@
 
 import re
 
-from time import sleep
+from time import monotonic, sleep
 from typing import TYPE_CHECKING
 
 from src.constants.game.producer_gameplay import GameplayPosition
@@ -34,11 +34,15 @@ from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.model_type import YoloModelType
 from src.core.tasks.base_ui.start_game import action__wait_enter_home
 from src.core.tasks.producer_challenge.context import GameplayPhase
-from src.core.tasks.producer_challenge.gameplay.common import click_relative_point, normalize_text
+from src.core.tasks.producer_challenge.shared.common import (
+    click_relative_point,
+    normalize_text,
+    probe_fast_forward_enabled_state,
+)
 from src.core.tasks.producer_challenge.gameplay.decision import sync_visible_planning_context
 from src.core.tasks.producer_challenge.gameplay import build_default_dispatcher
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
-from src.core.tasks.producer_challenge.steps.navigate_to_produce import (
+from src.core.tasks.producer_challenge.steps.entry.navigate_to_produce import (
     open_produce_entry_from_home,
     resume_resumable_produce,
 )
@@ -223,14 +227,15 @@ def _looks_like_story_dialogue_recovery_page(results, frame_text: str) -> bool:
 
     has_skip_button = bool(results and results.exists_label(BaseUILabels.SKIP_BUTTON))
     has_fast_forward = bool(results and results.exists_label(BaseUILabels.PLOT_FAST_FORWARD_BUTTON))
-    has_skip_text = "skip" in normalized
+    has_skip_text = normalize_text(ProduceText.SKIP) in normalized
     return (has_skip_button or has_fast_forward or has_skip_text) and any(
         token in normalized
         for token in (
             normalize_text(ProduceText.MESSAGE),
-            "見ました",
-            "話がある",
-            "って",
+            *(
+                normalize_text(token)
+                for token in ProduceText.STORY_DIALOGUE_RECOVERY_HINT_TOKENS
+            ),
         )
     )
 
@@ -243,8 +248,8 @@ def _looks_like_reward_receive_confirmation_page(results, frame_text: str) -> bo
 
     has_receive = normalize_text(ProduceText.RECEIVE) in normalized
     has_reward_detail = any(
-        token in normalized
-        for token in ("やる気", "元気", "パラメータ", "スキルカード")
+        normalize_text(token) in normalized
+        for token in ProduceText.REWARD_RECEIVE_DETAIL_TOKENS
     )
     return has_receive and has_reward_detail
 
@@ -255,22 +260,54 @@ def _try_story_dialogue_recovery(app: "AppProcessor", ctx: "ProduceContext", fra
     if not _looks_like_story_dialogue_recovery_page(results, frame_text):
         return False
 
+    ff_state_key = "dialogue_fast_forward_enabled"
+    ff_last_click_key = "dialogue_fast_forward_last_click_ts"
     skip_buttons = list(results.filter_by_label(BaseUILabels.SKIP_BUTTON)) if results else []
     fast_forward_buttons = (
         list(results.filter_by_label(BaseUILabels.PLOT_FAST_FORWARD_BUTTON))
         if results
         else []
     )
+    if not fast_forward_buttons:
+        ctx.handler_state.pop(ff_state_key, None)
+        ctx.handler_state.pop(ff_last_click_key, None)
 
     action = "advance"
     if skip_buttons:
         app.device.click_element(skip_buttons[0])
         action = "skip"
     elif fast_forward_buttons:
-        app.device.click_element(fast_forward_buttons[0])
-        action = "fast_forward"
+        ff_box = fast_forward_buttons[0]
+        enabled_state, orange_ratio = probe_fast_forward_enabled_state(
+            ff_box,
+            debug_tools=getattr(app, "debug_tools", None),
+            debug_label="story_recovery_fast_forward",
+        )
+        if enabled_state is True:
+            ctx.handler_state[ff_state_key] = True
+            click_relative_point(app, x_ratio=0.5, y_ratio=0.82, label="story-dialogue-recovery")
+            action = "advance"
+        elif (
+            ctx.handler_state.get(ff_state_key)
+            and enabled_state is not False
+        ):
+            click_relative_point(app, x_ratio=0.5, y_ratio=0.82, label="story-dialogue-recovery")
+            action = "advance"
+        else:
+            now = monotonic()
+            last_click = float(ctx.handler_state.get(ff_last_click_key, 0.0) or 0.0)
+            if now - last_click >= 0.9:
+                app.device.click_element(ff_box)
+                ctx.handler_state[ff_state_key] = True
+                ctx.handler_state[ff_last_click_key] = now
+                logger.debug("recovery: 剧情页开启快进（orange_ratio={:.3f}）", orange_ratio)
+                action = "fast_forward"
+            else:
+                click_relative_point(app, x_ratio=0.5, y_ratio=0.82, label="story-dialogue-recovery")
+                action = "advance"
     else:
         click_relative_point(app, x_ratio=0.5, y_ratio=0.82, label="story-dialogue-recovery")
+        action = "advance"
 
     logger.info("recovery: BASE_UI 复核命中剧情消息页，按 dialogue_continue 处理 ({})", action)
     ctx.handler_state["unknown_retry_override"] = {
@@ -364,9 +401,15 @@ def _looks_like_result_memory_generate_page(frame_text: str) -> bool:
     normalized = normalize_text(text)
     if not normalized:
         return False
-    has_generate = "生成" in text
-    has_memory = "memory" in normalized or "メモリー" in text
-    if "生成完了" in text or "再生成" in text:
+    has_generate = ButtonText.GENERATE in text
+    has_memory = any(
+        normalize_text(token) in normalized
+        for token in ProduceText.MEMORY_OCR_VARIANTS
+    )
+    if (
+        ProduceText.MEMORY_GENERATION_COMPLETE in text
+        or ButtonText.REGENERATE in text
+    ):
         return False
     return has_generate and (has_memory or len(normalized) <= 16)
 
@@ -405,7 +448,7 @@ def _looks_like_result_chain_tap_page(frame_text: str) -> bool:
     normalized = normalize_text(text)
     if not normalized:
         return False
-    has_tap = "tap" in normalized
+    has_tap = normalize_text(ProduceText.TAP) in normalized
     is_live_tap = any(
         normalize_text(token) in normalized
         for token in ProduceText.TAP_TO_START_OCR_VARIANTS
@@ -607,6 +650,8 @@ def _stabilize_unknown_state(
 
 
 class ProduceGameplayLoopStep(ProduceStep):
+    """驱动 gameplay 主循环，在各 phase handler 之间持续调度直到退出。"""
+
     step_name = "produce_gameplay_loop"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:

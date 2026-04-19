@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Optional
 import cv2
 import numpy as np
 
-from src.core.tasks.producer_challenge.gameplay.common import ocr_text
+from src.core.tasks.producer_challenge.shared.common import ocr_text
 from src.utils.logger import logger
 from src.utils.string_tools import fullwidth_to_halfwidth
 

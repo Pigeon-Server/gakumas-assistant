@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Iterable, Sequence
@@ -18,9 +17,7 @@ from src.utils.game_database_tools import (
     build_support_card_skill_descriptions,
     get_game_database,
 )
-from src.utils.string_tools import fullwidth_to_halfwidth, normalize_ocr_jp
-
-_LOOKUP_CLEANUP_RE = re.compile(r"[\s　・･/／|｜,，.。:：()\[\]{}<>「」『』【】'\"`]+")
+from src.core.tasks.producer_challenge.shared.common import normalize_lookup_text
 
 _PRODUCE_ROUTE_MAP: dict[tuple[str, str], tuple[str, str]] = {
     ("hajime", "regular"): ("produce_group-001", "produce-001"),
@@ -65,14 +62,6 @@ class CatalogEntry:
     metadata: dict[str, Any]
 
 
-def _normalize_lookup_text(text: str | None) -> str:
-    if not text:
-        return ""
-    normalized = normalize_ocr_jp(fullwidth_to_halfwidth(text))
-    normalized = _LOOKUP_CLEANUP_RE.sub("", normalized)
-    return normalized.lower().strip()
-
-
 def _score_lookup_match(source: str, candidate: str) -> float:
     if not source or not candidate:
         return 0.0
@@ -110,13 +99,13 @@ def _best_match_for_texts(
     normalized_entries = [
         (
             entry,
-            tuple(_normalize_lookup_text(candidate) for candidate in entry.lookup_texts if candidate),
+            tuple(normalize_lookup_text(candidate) for candidate in entry.lookup_texts if candidate),
         )
         for entry in entries
     ]
 
     for raw_text in texts:
-        normalized_text = _normalize_lookup_text(raw_text)
+        normalized_text = normalize_lookup_text(raw_text)
         if len(normalized_text) < 2:
             continue
         for entry, normalized_candidates in normalized_entries:
@@ -257,7 +246,7 @@ def get_memory_ability_catalog() -> tuple[CatalogEntry, ...]:
             continue
 
         primary = description_ja or description
-        normalized_description = _normalize_lookup_text(primary)
+        normalized_description = normalize_lookup_text(primary)
         bucket = by_description.setdefault(
             normalized_description,
             {
@@ -402,7 +391,7 @@ def get_support_ability_catalog() -> tuple[CatalogEntry, ...]:
                 if not description and not description_ja:
                     continue
                 primary = description_ja or description
-                normalized_description = _normalize_lookup_text(primary)
+                normalized_description = normalize_lookup_text(primary)
                 bucket = by_description.setdefault(
                     normalized_description,
                     {
@@ -431,7 +420,7 @@ def get_support_ability_catalog() -> tuple[CatalogEntry, ...]:
         entries.append(
             CatalogEntry(
                 kind="support_ability",
-                id=f"support_ability:{_normalize_lookup_text(bucket['display_name'])}",
+                id=f"support_ability:{normalize_lookup_text(bucket['display_name'])}",
                 display_name=bucket["display_name"],
                 lookup_texts=_dedupe_strings(bucket["lookup_texts"]),
                 metadata={
@@ -455,7 +444,7 @@ def get_support_event_catalog() -> tuple[CatalogEntry, ...]:
             if not title and not title_ja:
                 continue
             primary_title = title_ja or title
-            normalized_title = _normalize_lookup_text(primary_title)
+            normalized_title = normalize_lookup_text(primary_title)
             bucket = by_title.setdefault(
                 normalized_title,
                 {
@@ -485,7 +474,7 @@ def get_support_event_catalog() -> tuple[CatalogEntry, ...]:
         entries.append(
             CatalogEntry(
                 kind="support_event",
-                id=f"support_event:{_normalize_lookup_text(bucket['display_name'])}",
+                id=f"support_event:{normalize_lookup_text(bucket['display_name'])}",
                 display_name=bucket["display_name"],
                 lookup_texts=_dedupe_strings(bucket["lookup_texts"]),
                 metadata={

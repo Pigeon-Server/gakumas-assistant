@@ -1,15 +1,16 @@
 {
-    "description": "Ultralytics YOLO11n model trained on data.yaml",
+    "description": "Ultralytics YOLO26n model trained on data.yaml",
     "author": "Ultralytics",
-    "date": "2025-12-01T09:14:19.241686",
-    "version": "8.3.152",
+    "date": "2026-04-17T23:49:31.977072",
+    "version": "8.4.38",
     "license": "AGPL-3.0 License (https://ultralytics.com/license)",
     "docs": "https://docs.ultralytics.com",
     "stride": "32",
     "task": "detect",
     "batch": "1",
     "imgsz": "[640, 640]",
-    "names": "{0: 'Universal Options', 1: 'Dance', 2: 'Producer Challenge: Card Group', 3: 'Producer Challenge: P Manual', 4: 'Close Button', 5: 'Producer Challenge: Bonus Indicator', 6: 'Universal button', 7: 'Producer Challenge: Action Info', 8: 'Producer Challenge: Skip', 9: 'Universal Switch', 10: 'Skill Card: Trap', 11: 'Skill Card: Info', 12: 'Producer Challenge: Training: Score', 13: 'Special Item', 14: 'Producer Challenge: Vacation', 15: 'Back Button', 16: 'Visual', 17: 'Blank Slot', 18: 'Producer Challenge: Skill Card Enhancement', 19: 'Universal Tab Bar', 20: 'Current Location', 21: 'Universal Checkbox', 22: 'Fast Forward Button', 23: 'Universal Modal Header', 24: 'Universal Confirm button', 25: 'Producer Challenge: Target', 26: 'Producer Challenge: Stamina', 27: 'Universal Cancel button', 28: 'Producer Challenge: P Point', 29: 'P Drink', 30: 'Skip Button', 31: 'Producer Challenge: Recommend Action', 32: 'Vocal', 33: 'Universal Disable Button', 34: 'Producer Challenge: Progress', 35: 'General Item', 36: 'Producer Challenge: Skill Card Remove', 37: 'Card: Item Exchange', 38: 'Skill Card: Active', 39: 'Skill Card: Mental', 40: 'Producer Challenge: Action', 41: 'Producer Challenge: Training: Remaining Rounds'}",
+    "names": "{0: 'Card: Item Exchange', 1: 'Back Button', 2: 'General Item', 3: 'Skill Card: Mental', 4: 'Blank Slot', 5: 'Universal button', 6: 'Producer Challenge: Stamina', 7: 'Dance', 8: 'Producer Challenge: P Manual', 9: 'Producer Challenge: Progress', 10: 'Producer Challenge: Skip', 11: 'Universal Options', 12: 'P Drink', 13: 'Producer Challenge: Target', 14: 'Producer Challenge: Skill Card Remove', 15: 'Fast Forward Button', 16: 'Producer Challenge: Skill Card Enhancement', 17: 'Producer Challenge: P Point', 18: 'Universal Tab Bar', 19: 'Skill Card: Info', 20: 'Producer Challenge: Bonus Indicator', 21: 'Special Item', 22: 'Producer Challenge: Action Info', 23: 'Close Button', 24: 'Universal Confirm button', 25: 'Producer Challenge: Training: Score', 26: 'Universal Checkbox', 27: 'Producer Challenge: Card Group', 28: 'Producer Challenge: Action', 29: 'Skip Button', 30: 'Universal Disable Button', 31: 'Vocal', 32: 'Skill Card: Active', 33: 'Skill Card: Trap', 34: 'Universal Modal Header', 35: 'Producer Challenge: Vacation', 36: 'Universal Switch', 37: 'Producer Challenge: Training: Remaining Rounds', 38: 'Producer Challenge: Recommend Action', 39: 'Current Location', 40: 'Universal Cancel button', 41: 'Visual', 42: 'Producer Challenge: Card Library', 43: 'Producer Challenge: Menu'}",
     "args": "{'batch': 1, 'half': False, 'dynamic': True, 'simplify': True, 'opset': None, 'nms': False}",
-    "channels": "3"
+    "channels": "3",
+    "end2end": "True"
 }

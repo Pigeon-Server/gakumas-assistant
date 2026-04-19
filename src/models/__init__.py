@@ -8,9 +8,11 @@ from .clip import (
     CLIPayload_SkillCard,
     CLIPayload_SupportCard,
 )
+from .auto_purchase import AutoPurchaseExchangeRecord
 from .config import ConfigModel
 
 all_models = [
+    AutoPurchaseExchangeRecord,
     CLIPMemory,
     CLIPayload_IdolCard,
     CLIPayload_Item,

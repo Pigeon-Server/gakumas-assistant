@@ -15,7 +15,6 @@ import {ResourceUpdateStatus} from "@/scripts/entity/resourceUpdate";
 export interface AppState {
   status: AppStatus
   task_list: Record<string, TaskItem>
-  current_task: string | undefined
   config: Record<string, Record<string, ConfigItem>>
   resource_update_status: ResourceUpdateStatus | null
   resource_update_latest_event: string
@@ -32,7 +31,9 @@ export const useAppStore = defineStore('app', {
       status: {
         platform: '',
         yolo: false,
-        task: false,
+        task: TaskStatus.PENDING,
+        current_task: "",
+        suspended_task: "",
         device: {
           available: false,
           code: "initializing",
@@ -48,7 +49,6 @@ export const useAppStore = defineStore('app', {
       }
     },
     task_list: {},
-    current_task: "",
     config: {},
     resource_update_status: null,
     resource_update_latest_event: "",
@@ -68,19 +68,6 @@ export const useAppStore = defineStore('app', {
         }
         console.log(`Update task '${data.id}' status: ${task.status} -> ${data.target_status}`)
         task.status = data.target_status
-      })
-      wsService.on(WS_ACTION.TaskQueueStart, () => {
-        this.status.task = TaskStatus.RUNNING
-      })
-      wsService.on(WS_ACTION.TaskQueueStop, () => {
-        this.status.task = TaskStatus.PENDING
-        this.current_task = ""
-      })
-      wsService.on(WS_ACTION.TaskQueueSuspend, () => {
-        this.status.task = TaskStatus.SUSPENDED
-      })
-      wsService.on(WS_ACTION.UpdateCurrentTask, (data) => {
-        this.current_task = data.task_id
       })
       wsService.on(WS_ACTION.ResourceUpdateStatusChanged, (data) => {
         this.handle_resource_update_status(data)
@@ -124,7 +111,8 @@ export const useAppStore = defineStore('app', {
       const taskLabel = task?.description || task_name
       await apis.run_task(task_name)
       this.status.task = TaskStatus.RUNNING
-      this.current_task = task_name
+      this.status.current_task = task_name
+      this.status.suspended_task = ""
       if (task) {
         task.status = TaskStatus.RUNNING
       }
@@ -188,9 +176,6 @@ export const useAppStore = defineStore('app', {
     },
     apply_app_status(status: AppStatus) {
       const previousDevice = this.status?.device
-      if (status.current_task !== undefined) {
-        this.current_task = status.current_task
-      }
       this.status = status
       this.notify_device_status_change(previousDevice, status?.device)
     },
@@ -417,7 +402,10 @@ export const useAppStore = defineStore('app', {
       return task
     },
     get_current_task(): TaskItem | undefined {
-      return this.get_task_by_id(this.current_task)
+      return this.get_task_by_id(this.status?.current_task || "")
+    },
+    get_suspended_task(): TaskItem | undefined {
+      return this.get_task_by_id(this.status?.suspended_task || "")
     }
   }
 })

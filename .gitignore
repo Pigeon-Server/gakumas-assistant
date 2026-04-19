@@ -32,3 +32,5 @@ E:\\Projects\\gkmas-auto\\.git\\hooks/
 .DS_Store
 /tests/produce_gameplay_captures/*
 _debug*
+/train/gakumas_rl/gakumas_rl/webapp/skill_card/*.png
+/train/gakumas_rl/gakumas_rl/test_*.py

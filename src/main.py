@@ -273,11 +273,13 @@ class AppProcessor:
     def build_app_status(self) -> dict:
         """构建前端状态栏需要的应用状态快照。"""
         current_task = self.task_queue.get_current_running_task()
+        suspended_task = self.task_queue.get_current_suspend_task()
         return {
             'platform': self.config_service().base.run_mode.value.lower(),
             'yolo': self.yolo_engine.running,
             'task': self.task_queue.queue_status(),
             'current_task': current_task.id if current_task else '',
+            'suspended_task': suspended_task.id if suspended_task else '',
             'device': self.get_device_status(),
             'game': {
                 'current_location': self.game_status_manager.current_location,
@@ -357,13 +359,14 @@ class AppProcessor:
 
         def update_device(key, old, new):
             logger.warning(f"Reinitialize device......")
-            suspend_task = self.task_queue.get_current_suspend_task()
-            if suspend_task:
+            running_task = self.task_queue.get_current_running_task()
+            if running_task:
                 self.task_queue.suspend_running_task()
             status = self.yolo_engine.running
             self.yolo_engine.stop()
             self.ensure_device_ready(force=True, restart_inference=status)
-            if suspend_task: self.task_queue.resume_suspended_task()
+            if running_task:
+                self.task_queue.resume_suspended_task()
             return
 
         self.config_service.add_listener([
@@ -460,10 +463,10 @@ class AppProcessor:
                 except Exception as e:
                     logger.warning(f"Failed to annotate inference result, fallback to raw frame: {e}")
         annotated_frame = self.debug_tools.draw_boxes(annotated_frame)
-        # 本地预览直接使用 BMP，无损且编码开销比 JPEG 更低。
         _, encoded_frame = cv2.imencode(
-            '.bmp',
+            '.jpg',
             annotated_frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 90],
         )
         frame_bytes = encoded_frame.tobytes()
         self.ws_manager.broadcast_sync(WebSocketData(None, f"{width},{height}".encode('utf-8') + b"," + frame_bytes))

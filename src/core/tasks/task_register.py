@@ -279,6 +279,7 @@ def register_tasks(processor: "AppProcessor"):
         from src.core.tasks.producer_challenge import build_produce_pipeline
         from src.core.tasks.producer_challenge.context import ProduceContext
         from src.core.tasks.producer_challenge.gameplay.llm_strategy import inject_llm_strategy
+        from src.core.tasks.producer_challenge.gameplay.rl_strategy import inject_rl_strategy
 
         cfg = app.config_service().task__auto_producer
         # NIA 使用独立的 nia_difficulty 配置
@@ -299,16 +300,24 @@ def register_tasks(processor: "AppProcessor"):
             resume_interrupted=cfg.resume_interrupted.value,
         )
         base = app.config_service().base
-        inject_llm_strategy(
-            ctx,
-            base_url=str(base.llm_base_url),
-            model=str(base.llm_model),
-            api_key=str(base.llm_api_key),
-            timeout=float(base.llm_timeout),
-            max_tokens=int(base.llm_max_tokens),
-            num_ctx=int(base.llm_num_ctx),
-            temperature=float(base.llm_temperature),
-        )
+        decision_backend = str(getattr(base, "producer_decision_backend", "llm") or "llm")
+        if decision_backend == "rl_battle":
+            inject_rl_strategy(
+                ctx,
+                base_url=str(base.rl_inference_base_url),
+                predict_timeout=float(base.rl_inference_timeout),
+            )
+        else:
+            inject_llm_strategy(
+                ctx,
+                base_url=str(base.llm_base_url),
+                model=str(base.llm_model),
+                api_key=str(base.llm_api_key),
+                timeout=float(base.llm_timeout),
+                max_tokens=int(base.llm_max_tokens),
+                num_ctx=int(base.llm_num_ctx),
+                temperature=float(base.llm_temperature),
+            )
 
         pipeline = build_produce_pipeline()
         pipeline.run(app, ctx)

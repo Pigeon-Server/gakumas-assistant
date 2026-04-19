@@ -61,3 +61,5 @@ class BaseUILabels:
     BLANK_SLOT = "Blank Slot"
     PRODUCE_CARD_ATTRIBUTE = "Produce Card: Attribute"
     PRODUCT_CARD_RECOMMENDATION_EFFECT = "Product Card: Recommendation Effect"
+    CONTEST_SEASON_RANKING_OVERLAY = "Contest: Season Ranking Overlay"
+    CONTEST_GRADE_UP_SPLASH = "Contest: Grade Up Splash"

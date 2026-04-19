@@ -133,23 +133,17 @@ class CLIPTools(abc.ABC):
         if image_features is None:
             raise RuntimeError("Image features is None")
 
-        # 获取目标 payload 的标识（用于交叉验证比对）
+        # 获取目标 payload 的标识（用于类内偏差验证）
         target_payload_id = str(getattr(payload, "id", "") or "")
 
-        # 查询同类型向量并比对相似度
-        # 同时做交叉验证：确保图像不与其他已知实体更相似（防止误学习）
-        best_other_similarity = -1.0
-        best_other_payload_id: str | None = None
+        # 与同类（相同 payload id）已有样本的最高相似度，用于类内偏差检测
+        best_inclass_similarity = -1.0
         # 缓存 _payload_id(UUID) → domain id 的映射，避免重复查询
         _uuid_to_domain_id: dict[str, str] = {}
         for memory in CLIPMemory.select().where(CLIPMemory.clip_name == self._clip_name):
             existing_features = pickle.loads(memory.features)
             similarity = self._cosine_similarity(image_features, existing_features)
-            if similarity > similarity_threshold:
-                logger.debug(f"Image already exists with similarity: {similarity:.4f}")
-                return False
-            # 记录与最相似的"其他实体"的相似度
-            # _payload_id 存储的是 CLIPayload 的 UUID，需要解析到领域 id 才能与 target 比较
+            # 记录与同类样本的最高相似度
             raw_payload_id = str(getattr(memory, "_payload_id", "") or "")
             if target_payload_id and raw_payload_id:
                 if raw_payload_id not in _uuid_to_domain_id:
@@ -159,20 +153,18 @@ class CLIPTools(abc.ABC):
                     except Exception:
                         _uuid_to_domain_id[raw_payload_id] = raw_payload_id
                 mem_domain_id = _uuid_to_domain_id[raw_payload_id]
-                if mem_domain_id != target_payload_id:
-                    if similarity > best_other_similarity:
-                        best_other_similarity = similarity
-                        best_other_payload_id = mem_domain_id
+                if mem_domain_id == target_payload_id:
+                    if similarity > best_inclass_similarity:
+                        best_inclass_similarity = similarity
 
-        # 交叉验证：如果图像与其他实体的相似度高于安全阈值，拒绝学习
-        # 阈值基于 similarity_threshold 动态计算：在检索阈值下方留出 0.03 的安全余量，
-        # 避免同风格缩略图（卡框、徽章等共享元素导致 ~0.88-0.91 的基底相似度）被误拦
-        _CROSS_VALIDATION_THRESHOLD = max(0.88, similarity_threshold - 0.03)
-        if best_other_similarity > _CROSS_VALIDATION_THRESHOLD and best_other_payload_id:
+        # 类内偏差验证：若已有同类样本，但新图像与同类样本相似度过低，说明图像与目标类不相关，拒绝学习
+        # 下限阈值基于 similarity_threshold 动态计算，留出足够余量避免误拒合法变体
+        _INCLASS_MIN_SIMILARITY = max(0.72, similarity_threshold - 0.18)
+        if best_inclass_similarity >= 0 and best_inclass_similarity < _INCLASS_MIN_SIMILARITY:
             logger.warning(
-                f"CLIP '{self._clip_name}' 交叉验证失败：图像与其他实体 "
-                f"{best_other_payload_id} 相似度 {best_other_similarity:.3f} 过高，"
-                f"拒绝学习到目标 {target_payload_id}"
+                f"CLIP '{self._clip_name}' 类内偏差验证失败：图像与目标类 "
+                f"{target_payload_id} 最高相似度仅 {best_inclass_similarity:.3f}，"
+                f"低于下限 {_INCLASS_MIN_SIMILARITY:.3f}，拒绝学习"
             )
             return False
 

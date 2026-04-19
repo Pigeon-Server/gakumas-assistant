@@ -43,10 +43,10 @@ if TYPE_CHECKING:
 ocr_service = OCRService()
 
 _STAT_LABELS = {
-    "vocal": ("ボーカル", "ホーカル", "ボ一カル"),
-    "dance": ("ダンス", "タンス"),
-    "visual": ("ビジュアル", "ヒジュアル"),
-    "stamina": ("体力", "体カ", "体カ"),
+    "vocal": ProduceText.VOCAL_OCR_VARIANTS,
+    "dance": ProduceText.DANCE_OCR_VARIANTS,
+    "visual": ProduceText.VISUAL_OCR_VARIANTS,
+    "stamina": ProduceText.STAMINA_OCR_VARIANTS,
 }
 _PAGE_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
 
@@ -60,6 +60,8 @@ class MemorySlotTarget:
 
 
 class CollectMemoryAttributesStep(ProduceStep):
+    """采集已选记忆的属性信息，补齐后续决策所需的基础上下文。"""
+
     step_name = "collect_memory_attributes"
     skip_on_resume = True
 
@@ -569,7 +571,11 @@ class CollectMemoryAttributesStep(ProduceStep):
             return None
 
         lines = CollectMemoryAttributesStep._extract_detail_lines(frame)
-        skill_header = CollectMemoryAttributesStep._find_line(lines, "獲得可能スキルカード", fuzz_threshold=60)
+        skill_header = CollectMemoryAttributesStep._find_line(
+            lines,
+            ProduceText.AVAILABLE_SKILL_CARD,
+            fuzz_threshold=60,
+        )
         if skill_header is None:
             return None
 

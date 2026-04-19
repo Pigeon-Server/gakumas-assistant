@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from src.constants.game.producer_gameplay import GameplayPhase, GameplayPosition
 from src.constants.game.text.produce_text import ProduceText
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.tasks.producer_challenge.shared.common import (
     click_relative_point,
     ocr_text,
 )

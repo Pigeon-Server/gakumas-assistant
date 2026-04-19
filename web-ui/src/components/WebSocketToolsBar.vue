@@ -7,6 +7,9 @@ import {TaskStatus} from "@/scripts/constants.ts";
 
 const store = useAppStore();
 const startingTaskQueue = ref(false)
+const stoppingTaskQueue = ref(false)
+const suspendingTask = ref(false)
+const resumingTask = ref(false)
 
 const canStartTaskQueue = computed(() => {
   if (store.status.task !== TaskStatus.PENDING || startingTaskQueue.value) {
@@ -18,6 +21,24 @@ const canStartTaskQueue = computed(() => {
   return store.status.device.available
 })
 
+const canSuspendTask = computed(() => (
+  store.status.task === TaskStatus.RUNNING
+  && Boolean(store.get_current_task()?.allow_manual_suspend)
+  && !suspendingTask.value
+))
+
+const canStopTaskQueue = computed(() => (
+  store.status.task !== TaskStatus.PENDING
+  && !stoppingTaskQueue.value
+))
+
+const canResumeTask = computed(() => (
+  store.status.task === TaskStatus.SUSPENDED
+  && !store.status.current_task
+  && Boolean(store.get_suspended_task()?.allow_manual_resume)
+  && !resumingTask.value
+))
+
 async function startTaskQueue() {
   if (!canStartTaskQueue.value) {
     return
@@ -28,6 +49,45 @@ async function startTaskQueue() {
     message.showSuccess("任务正在运行")
   } finally {
     startingTaskQueue.value = false
+  }
+}
+
+async function suspendTask() {
+  if (!canSuspendTask.value) {
+    return
+  }
+  suspendingTask.value = true
+  try {
+    await api.suspend_task()
+    message.showSuccess("任务已挂起")
+  } finally {
+    suspendingTask.value = false
+  }
+}
+
+async function stopTaskQueue() {
+  if (!canStopTaskQueue.value) {
+    return
+  }
+  stoppingTaskQueue.value = true
+  try {
+    await api.stop_task_queue()
+    message.showSuccess("任务正在停止")
+  } finally {
+    stoppingTaskQueue.value = false
+  }
+}
+
+async function resumeTask() {
+  if (!canResumeTask.value) {
+    return
+  }
+  resumingTask.value = true
+  try {
+    await api.resume_task()
+    message.showSuccess("任务已恢复")
+  } finally {
+    resumingTask.value = false
   }
 }
 </script>
@@ -64,13 +124,13 @@ async function startTaskQueue() {
         <v-btn @click="startTaskQueue" color="green" :disabled="!canStartTaskQueue" :loading="startingTaskQueue" v-if="store.status.task === TaskStatus.PENDING">
           开始执行
         </v-btn>
-        <v-btn color="red" @click="api.stop_task_queue().then(() => {message.showSuccess('任务正在停止')})" v-else-if="store.status.task === TaskStatus.RUNNING">
+        <v-btn color="red" @click="stopTaskQueue" :disabled="!canStopTaskQueue" :loading="stoppingTaskQueue" v-else>
           停止任务
         </v-btn>
-        <v-btn color="warning" v-if="store.status.task === TaskStatus.RUNNING && store.get_current_task()?.allow_manual_suspend">
+        <v-btn color="warning" @click="suspendTask" :disabled="!canSuspendTask" :loading="suspendingTask" v-if="store.status.task === TaskStatus.RUNNING && store.get_current_task()?.allow_manual_suspend">
           挂起任务
         </v-btn>
-        <v-btn color="green" v-if="store.status.task === TaskStatus.SUSPENDED && store.get_current_task()?.allow_manual_resume">
+        <v-btn color="green" @click="resumeTask" :disabled="!canResumeTask" :loading="resumingTask" v-if="store.status.task === TaskStatus.SUSPENDED && !store.status.current_task && store.get_suspended_task()?.allow_manual_resume">
           恢复任务
         </v-btn>
       </div>

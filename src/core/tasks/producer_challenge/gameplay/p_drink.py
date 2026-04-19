@@ -11,6 +11,7 @@ P饮料可在以下场景选择:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, List
@@ -18,7 +19,8 @@ from typing import TYPE_CHECKING, Any, List
 from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.tasks.producer_challenge.shared.common import (
+    detect_bottom_white_modal_region,
     invoke_decision_strategy,
     ocr_text,
     resolve_candidate_index,
@@ -36,6 +38,7 @@ from src.core.tasks.producer_challenge.gameplay.handler_base import (
 )
 from src.core.inference.ocr_engine import OCRService
 from src.utils.logger import logger
+from src.utils.string_tools import fullwidth_to_halfwidth, normalize_ocr_jp
 
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
@@ -197,39 +200,179 @@ def _annotate_p_drink_limit_preference(
 # ────────────────────────────────────────────────────────────
 
 # 说明文本关键词——出现时表示面板尚无选中饮料
-_INSTRUCTION_KEYWORDS = ("選んでください", "受け取るPドリンク")
-_LIMIT_KEYWORDS = ("受け取らない", "所持上限")
+_INSTRUCTION_KEYWORDS = (
+    ProduceText.SELECT_PROMPT,
+    ProduceText.P_DRINK_SELECT,
+)
+_P_DRINK_HEADER_NOISE_TOKENS = tuple(dict.fromkeys((
+    ProduceText.P_DRINK_SELECT,
+    ProduceText.SELECT_PROMPT,
+    ProduceText.RECEIVE,
+    ProduceText.P_DRINK_DETAIL,
+    ProduceText.P_DRINK_DISCARD,
+)))
+_P_DRINK_NAME_NOISE_RE = re.compile(r'^[\|｜\[\]「」【】\s]+|[\|｜\[\]「」【】\s]+$')
+_P_DRINK_EFFECT_PREFIXES = ("↑", "↓", "→", "←", "↗", "↘", "♥", "❤", "♡")
+_P_DRINK_EFFECT_LINE_RE = re.compile(
+    rf"({'|'.join(map(re.escape, ProduceText.STATUS_VALUE_TOKENS))}|{re.escape(ProduceText.YARUKI)}|{re.escape(ProduceText.SCORE)}|{re.escape(ProduceText.STAMINA)}).*[+\-−]\d+"
+)
+_P_DRINK_JP_CHAR_RE = re.compile(r"[ぁ-んァ-ヶー一-龯]")
+_LIMIT_KEYWORDS = (
+    ProduceText.P_DRINK_LIMIT_NO_RECEIVE,
+    ProduceText.POSSESSION_LIMIT,
+)
 _PENDING_NEW_P_DRINK_STATE_KEY = "pending_new_p_drink"
 
 
-def _ocr_p_drink_header(frame) -> tuple[str, str]:
+def _ocr_p_drink_header(
+    frame,
+    *,
+    app: "AppProcessor" | None = None,
+    drink_boxes: list[Any] | None = None,
+) -> tuple[str, str]:
     """OCR P饮料面板的头部区域，获取当前选中饮料的名称和效果。
 
     Returns:
         (name, effect) 饮料名称和效果描述。无选中时返回 ("", "")。
     """
+    def _normalize_header_text(text: str) -> str:
+        cleaned = normalize_ocr_jp(fullwidth_to_halfwidth(str(text or "")))
+        cleaned = _P_DRINK_NAME_NOISE_RE.sub("", cleaned).strip()
+        return cleaned
+
+    def _looks_like_effect_line(text: str) -> bool:
+        normalized = fullwidth_to_halfwidth(str(text or "")).strip()
+        if not normalized:
+            return False
+        if normalized.startswith(_P_DRINK_EFFECT_PREFIXES):
+            return True
+        return bool(_P_DRINK_EFFECT_LINE_RE.search(normalized))
+
+    def _is_plausible_drink_name(text: str) -> bool:
+        normalized = _normalize_header_text(text)
+        if len(normalized) < 2:
+            return False
+        if _looks_like_effect_line(normalized):
+            return False
+        if any(token in normalized for token in _P_DRINK_HEADER_NOISE_TOKENS):
+            return False
+        return bool(_P_DRINK_JP_CHAR_RE.search(normalized))
+
+    if frame is None and app is not None:
+        frame = getattr(app, "latest_frame", None)
     if frame is None:
         return "", ""
-    h, w = frame.shape[:2]
-    # 头部区域: 约 y=42%-48%（对于 2340px → 980-1120px）
-    y1 = int(h * 0.42)
-    y2 = int(h * 0.48)
-    header_crop = frame[y1:y2, 0:w]
 
-    result = _ocr.ocr(header_crop)
-    texts = [item.text for item in result]
-    full_text = " ".join(texts)
+    h = frame.shape[0]
+    debugger = getattr(app, "debug_tools", None) if app is not None else None
+    if drink_boxes is None and app is not None:
+        drink_boxes = _detect_central_drinks(app)
+    drink_boxes = list(drink_boxes or [])
 
-    # 检测说明文本，说明尚无选中饮料
-    if any(kw in full_text for kw in _INSTRUCTION_KEYWORDS):
-        logger.debug(f"p_drink header OCR: 检测到说明文本，跳过: {full_text!r}")
-        return "", ""
+    panel_rect = detect_bottom_white_modal_region(
+        frame,
+        row_boxes=drink_boxes,
+        debug_tools=debugger,
+        debug_label="p_drink_white_panel",
+    )
+    if panel_rect is not None:
+        px1, py1, px2, py2 = panel_rect
+        if px2 > px1 + 20 and py2 > py1 + 20:
+            panel_crop = frame[py1:py2, px1:px2]
+            ocr_result_list = _ocr.ocr(panel_crop)
+            merged_lines = (
+                list(
+                    ocr_result_list.auto_merge_lines(
+                        cy_range=max(8, int(panel_crop.shape[0] * 0.02)),
+                        width_gap=max(12, int(panel_crop.shape[1] * 0.04)),
+                    )
+                )
+                if hasattr(ocr_result_list, "auto_merge_lines")
+                else list(ocr_result_list)
+            )
+            if merged_lines:
+                panel_h = max(1, py2 - py1)
+                panel_w = max(1, px2 - px1)
+                title_bottom = int(panel_h * 0.42)
+                if drink_boxes:
+                    drink_top = min(int(getattr(box, "y", h)) for box in drink_boxes)
+                    boundary = int(drink_top - py1 - panel_h * 0.05)
+                    if boundary > int(panel_h * 0.15):
+                        title_bottom = min(title_bottom, boundary)
 
-    name = texts[0].strip() if len(texts) > 0 else ""
-    effect = texts[1].strip() if len(texts) > 1 else ""
-    if not name:
-        logger.debug(f"p_drink header OCR: 文本为空 (原始: {full_text!r}, 区域 y={y1}..{y2})")
-    return name, effect
+                normalized_lines = [
+                    _normalize_header_text(str(getattr(line, "text", "") or ""))
+                    for line in merged_lines
+                ]
+                full_text = " ".join(normalized_lines)
+                if any(kw in full_text for kw in _INSTRUCTION_KEYWORDS):
+                    return "", ""
+
+                best_name: tuple[float, str, int, tuple[int, int, int, int]] | None = None
+                for line in merged_lines:
+                    line_text = _normalize_header_text(str(getattr(line, "text", "") or ""))
+                    if not line_text:
+                        continue
+                    line_y = int(getattr(line, "y", 0))
+                    line_h = max(1, int(getattr(line, "h", 0)))
+                    line_cy = int(getattr(line, "cy", line_y + line_h // 2))
+                    if line_cy < 0 or line_cy > title_bottom:
+                        continue
+                    if not _is_plausible_drink_name(line_text):
+                        continue
+                    line_x = int(getattr(line, "x", 0))
+                    line_w = max(1, int(getattr(line, "w", 0)))
+                    line_cx = int(getattr(line, "cx", line_x + line_w // 2))
+                    center_bias = 1.0 - min(1.0, abs(line_cx - panel_w / 2.0) / max(panel_w / 2.0, 1.0))
+                    width_score = min(1.0, line_w / max(panel_w * 0.35, 1.0))
+                    top_score = 1.0 - min(1.0, line_cy / max(title_bottom, 1))
+                    score = center_bias * 3.0 + width_score * 2.0 + top_score
+                    if best_name is None or score > best_name[0]:
+                        best_name = (
+                            score,
+                            line_text,
+                            line_cy,
+                            (px1 + line_x, py1 + line_y, px1 + line_x + line_w, py1 + line_y + line_h),
+                        )
+                if best_name is not None:
+                    _, drink_name, name_cy, (bx1, by1, bx2, by2) = best_name
+                    effect_text = ""
+                    for line in merged_lines:
+                        line_text = _normalize_header_text(str(getattr(line, "text", "") or ""))
+                        if not line_text:
+                            continue
+                        line_y = int(getattr(line, "y", 0))
+                        line_h = max(1, int(getattr(line, "h", 0)))
+                        line_cy = int(getattr(line, "cy", line_y + line_h // 2))
+                        if line_cy <= name_cy:
+                            continue
+                        if _looks_like_effect_line(line_text):
+                            effect_text = line_text
+                            break
+
+                    if debugger is not None:
+                        debugger.add_box(
+                            bx1,
+                            by1,
+                            bx2,
+                            by2,
+                            label=f"p_drink_title:{drink_name[:24]}",
+                            color=(80, 220, 120),
+                            alpha=0.16,
+                            duration=2.5,
+                            font_size=14,
+                        )
+                    logger.debug(
+                        "p_drink header OCR: 信息面板名称={!r}, effect={!r} (panel y={}..{}, x={}..{})",
+                        drink_name,
+                        effect_text,
+                        py1,
+                        py2,
+                        px1,
+                        px2,
+                    )
+                    return drink_name, effect_text
+    return "", ""
 
 
 def _detect_central_drinks(app: "AppProcessor"):
@@ -263,12 +406,12 @@ def _scan_drink_names(
         wait = settle_time * 1.5 if idx == 0 else settle_time
         time.sleep(wait)
         frame = app.latest_frame
-        name, effect = _ocr_p_drink_header(frame)
+        name, effect = _ocr_p_drink_header(frame, app=app, drink_boxes=drink_boxes)
         # OCR 失败时重试一次（可能动画还没刷新完）
         if not name:
             time.sleep(0.4)
             frame = app.latest_frame
-            name, effect = _ocr_p_drink_header(frame)
+            name, effect = _ocr_p_drink_header(frame, app=app, drink_boxes=drink_boxes)
         names.append(name)
         logger.debug(f"p_drink: 扫描第{idx}个饮料: {name!r} (效果: {effect!r})")
     return names
@@ -466,6 +609,9 @@ def _scan_and_learn_inventory_drinks(
     unresolved = [c for c in candidates if c.kind == "discard_existing_drink" and not c.db_id]
     if not unresolved:
         return
+    if not hasattr(app, "device"):
+        logger.debug("p_drink: 当前上下文无 device，跳过底栏饮料补扫描")
+        return
 
     logger.info(f"p_drink: 底栏有 {len(unresolved)} 瓶饮料未识别，开始逐个点击扫描")
 
@@ -621,8 +767,8 @@ def collect_p_drink_limit_action_candidates(
 ) -> list[PDrinkLimitActionCandidate]:
     """收集 P饮料所持上限页的动作候选。"""
     rows = _ocr_limit_controls(app.latest_frame)
-    skip_row = _find_limit_row(rows, "受け取らない")
-    confirm_row = _find_limit_row(rows, "受け取る", "残す", "獲得せず")
+    skip_row = _find_limit_row(rows, ProduceText.P_DRINK_LIMIT_NO_RECEIVE)
+    confirm_row = _find_limit_row(rows, *ProduceText.P_DRINK_LIMIT_SKIP_ALTS[1:])
     candidates: list[PDrinkLimitActionCandidate] = []
     pending_new = _get_pending_new_p_drink(ctx)
     new_drink_name = _drink_display_name(pending_new) or "新饮料"
@@ -850,7 +996,7 @@ def collect_p_drink_candidates(
 
     # 如果没有预扫描名称，尝试从头部 OCR 获取当前选中饮料名
     if scanned_names is None:
-        header_name, _ = _ocr_p_drink_header(app.latest_frame)
+        header_name, _ = _ocr_p_drink_header(app.latest_frame, app=app, drink_boxes=drinks)
         scanned_names = []
         for idx, _box in enumerate(drinks):
             if pending == idx and header_name:
@@ -877,11 +1023,11 @@ def collect_p_drink_candidates(
             app.device.click_element(c.box)
             time.sleep(0.8)
             frame = app.latest_frame
-            name, effect = _ocr_p_drink_header(frame)
+            name, effect = _ocr_p_drink_header(frame, app=app, drink_boxes=drinks)
             if not name:
                 time.sleep(0.5)
                 frame = app.latest_frame
-                name, effect = _ocr_p_drink_header(frame)
+                name, effect = _ocr_p_drink_header(frame, app=app, drink_boxes=drinks)
             if name:
                 logger.info(f"p_drink: 回扫第{c.index}个饮料成功: {name!r}")
                 c.title = name
@@ -960,9 +1106,13 @@ def _handle_reward_skip_confirmation(app: "AppProcessor", timeout: float = 2.0) 
     Returns:
         True 表示检测到并处理了弹窗，False 表示未出现弹窗。
     """
+    if not hasattr(app, "latest_results"):
+        logger.debug("p_drink: 当前上下文无 latest_results，跳过報酬スキップ确认")
+        return False
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        results = app.latest_results
+        results = getattr(app, "latest_results", None)
         if results is None:
             time.sleep(0.3)
             continue

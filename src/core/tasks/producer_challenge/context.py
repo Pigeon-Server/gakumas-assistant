@@ -253,6 +253,7 @@ class ProduceContext:
     def clear_schedule_pending(self) -> None:
         self.pending_schedule_index = None
         self.pending_schedule_label = ""
+        self.handler_state.pop("pending_schedule_action_id", None)
 
     def clear_dialogue_pending(self) -> None:
         self.pending_dialogue_option_index = None

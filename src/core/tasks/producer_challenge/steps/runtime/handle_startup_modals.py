@@ -26,7 +26,7 @@ from src.constants.game.text.button_text import ButtonText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.constants.yolo.model_type import YoloModelType
-from src.core.tasks.producer_challenge.gameplay.common import click_relative_point
+from src.core.tasks.producer_challenge.shared.common import click_relative_point
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.ui import (
     click_modal_action_with_retry,
@@ -43,6 +43,8 @@ if TYPE_CHECKING:
 
 
 class HandleStartupModalsStep(ProduceStep):
+    """处理开局设置弹窗，并把模型切换到 gameplay 可识别状态。"""
+
     step_name = "handle_startup_modals"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:

@@ -11,6 +11,7 @@ from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.logger import logger
 from src.core.inference.ONNX import YoloModelFromONNX
 from src.core.inference.ocr_engine import OCRService
+from src.utils.contest_overlay_tools import detect_contest_grade_up_splash, detect_contest_season_overlay
 from src.utils.opencv_tools import check_status_detection, get_mask_contours, extract_roi_from_mask, check_color, \
     filter_by_rectangle_shape, get_max_contour
 from src.utils.performance_tools import timeit
@@ -93,6 +94,13 @@ def get_current_location(boxes: Yolo_Results) -> str | None:
     
     # Priority 4: Check for loading indicators (lowest priority)
     # Only return LOADING if no other location could be determined
+    if detect_contest_season_overlay(boxes.frame):
+        logger.debug("Contest season overlay detected, returning ARENA")
+        return GamePageTypes.CONTEST_TAB.ARENA
+    if detect_contest_grade_up_splash(boxes.frame):
+        logger.debug("Contest grade-up splash detected, returning ARENA")
+        return GamePageTypes.CONTEST_TAB.ARENA
+
     if boxes.exists_label(BaseUILabels.GENERAL_LOADING1) or boxes.exists_label(BaseUILabels.GENERAL_LOADING2):
         logger.debug("Loading indicators detected, returning LOADING")
         return GamePageTypes.LOADING

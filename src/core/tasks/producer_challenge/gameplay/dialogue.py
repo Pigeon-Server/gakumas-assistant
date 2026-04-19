@@ -28,10 +28,11 @@ from typing import TYPE_CHECKING, Any, List
 
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
-from src.core.tasks.producer_challenge.gameplay.common import (
+from src.core.tasks.producer_challenge.shared.common import (
     click_relative_point,
     invoke_decision_strategy,
     ocr_text,
+    probe_fast_forward_enabled_state,
     resolve_candidate_index,
 )
 from src.core.tasks.producer_challenge.gameplay.decision import (
@@ -90,6 +91,8 @@ _OUTING_PROBE_INFER_WAIT = 0.3
 # Debug 可視化
 from src.utils.debug_tools import DebugTools
 _debugger = DebugTools()
+_DIALOGUE_FAST_FORWARD_ENABLED_KEY = "dialogue_fast_forward_enabled"
+_DIALOGUE_FAST_FORWARD_LAST_CLICK_TS_KEY = "dialogue_fast_forward_last_click_ts"
 
 
 # ────────────────────────────────────────────────────────────
@@ -103,7 +106,19 @@ def _is_outing_context(app: "AppProcessor", position: str) -> bool:
       - position 为 schedule_event_options（行程事件対話選項）
       - YOLO 検出到 Action Info 区域
     """
-    if position != "schedule_event_options":
+    if position not in {"schedule_event_options", "dialogue_options"}:
+        return False
+    info_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_ACTION_INFO)
+    if not info_boxes:
+        return False
+    # 仅在出现 P 点消耗模式时判定为おでかけ，避免把普通周事件误判成外出。
+    option_boxes = list(app.latest_results.filter_by_label(ProducerLabels.UNIVERSAL_OPTIONS))
+    return any(_extract_p_cost(ocr_text(getattr(box, "frame", None))) is not None for box in option_boxes)
+
+
+def _is_dialogue_option_info_context(app: "AppProcessor", position: str) -> bool:
+    """判断当前是否可通过 Action Info 面板读取周事件选项效果。"""
+    if position not in {"schedule_event_options", "dialogue_options"}:
         return False
     info_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_ACTION_INFO)
     return bool(info_boxes)
@@ -226,6 +241,40 @@ def _probe_outing_options(
     )
 
 
+def _probe_dialogue_option_effects(
+    app: "AppProcessor",
+    candidates: List[DialogueOptionCandidate],
+) -> None:
+    """逐个点击周事件选项，读取 Action Info 面板效果描述。"""
+    if not candidates:
+        return
+    logger.info("dialogue: 周事件选项探査開始 — {} 個選項", len(candidates))
+
+    first_desc = _extract_action_info_description(app)
+    if first_desc:
+        candidates[0].metadata["option_effect"] = first_desc
+
+    for candidate in candidates:
+        if candidate.metadata.get("option_effect"):
+            continue
+        try:
+            app.device.click_element(candidate.box)
+            time.sleep(_OUTING_PROBE_TAP_WAIT)
+            time.sleep(_OUTING_PROBE_INFER_WAIT)
+            desc = _extract_action_info_description(app)
+            if desc:
+                candidate.metadata["option_effect"] = desc
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dialogue: 周事件选项 #{} 探査异常: {}", candidate.index, exc)
+
+    probed = [candidate for candidate in candidates if candidate.metadata.get("option_effect")]
+    logger.info(
+        "dialogue: 周事件选项探査完了 — {}/{} 個取得効果描述",
+        len(probed),
+        len(candidates),
+    )
+
+
 def _enrich_outing_descriptions(candidates: List[DialogueOptionCandidate]) -> None:
     """将おでかけ探査结果注入候選項的 title / metadata，供 LLM 決策。
 
@@ -244,6 +293,26 @@ def _enrich_outing_descriptions(candidates: List[DialogueOptionCandidate]) -> No
         effect = candidate.metadata.get("outing_effect", "")
         if effect:
             parts.append(f"効果: {effect}")
+        if parts:
+            candidate.metadata["description"] = " | ".join(parts)
+
+
+def _enrich_dialogue_option_descriptions(candidates: List[DialogueOptionCandidate]) -> None:
+    """将周事件选项效果描述注入 metadata.description，供 LLM 决策使用。"""
+    for candidate in candidates:
+        p_cost = candidate.metadata.get("p_cost")
+        option_effect = str(
+            candidate.metadata.get("dialogue_db_description")
+            or candidate.metadata.get("outing_db_description")
+            or candidate.metadata.get("outing_effect")
+            or candidate.metadata.get("option_effect")
+            or ""
+        ).strip()
+        parts: list[str] = []
+        if p_cost is not None:
+            parts.append(f"消耗{int(p_cost)}Pポイント")
+        if option_effect:
+            parts.append(f"効果: {option_effect}")
         if parts:
             candidate.metadata["description"] = " | ".join(parts)
 
@@ -339,6 +408,54 @@ def _reset_dialogue_stuck(ctx: "ProduceContext") -> None:
     ctx.handler_state.pop("dialogue_skip_indices", None)
 
 
+def _get_fast_forward_buttons(app: "AppProcessor") -> list[Any]:
+    results = getattr(app, "latest_results", None)
+    if results is None:
+        return []
+    buttons = list(results.filter_by_label(ProducerLabels.PLOT_FAST_FORWARD_BUTTON))
+    if buttons:
+        return buttons
+    return list(results.filter_by_label(BaseUILabels.PLOT_FAST_FORWARD_BUTTON))
+
+
+def _try_enable_story_fast_forward(
+    app: "AppProcessor",
+    ctx: "ProduceContext",
+) -> bool:
+    """剧情页按颜色判定快进状态，仅在未开启时点击。"""
+    ff_buttons = _get_fast_forward_buttons(app)
+    if not ff_buttons:
+        ctx.handler_state.pop(_DIALOGUE_FAST_FORWARD_ENABLED_KEY, None)
+        ctx.handler_state.pop(_DIALOGUE_FAST_FORWARD_LAST_CLICK_TS_KEY, None)
+        return False
+
+    ff_box = ff_buttons[0]
+    enabled_state, orange_ratio = probe_fast_forward_enabled_state(
+        ff_box,
+        debug_tools=getattr(app, "debug_tools", None),
+        debug_label="dialogue_fast_forward",
+    )
+    if enabled_state is True:
+        ctx.handler_state[_DIALOGUE_FAST_FORWARD_ENABLED_KEY] = True
+        return False
+    if (
+        ctx.handler_state.get(_DIALOGUE_FAST_FORWARD_ENABLED_KEY)
+        and enabled_state is not False
+    ):
+        # 无法稳定判定时，若此前已开启则保持不点，避免开关抖动。
+        return False
+
+    now = time.monotonic()
+    last_click = float(ctx.handler_state.get(_DIALOGUE_FAST_FORWARD_LAST_CLICK_TS_KEY, 0.0) or 0.0)
+    if now - last_click < 0.9:
+        return False
+    app.device.click_element(ff_box)
+    ctx.handler_state[_DIALOGUE_FAST_FORWARD_ENABLED_KEY] = True
+    ctx.handler_state[_DIALOGUE_FAST_FORWARD_LAST_CLICK_TS_KEY] = now
+    logger.debug("dialogue: 开启快进（orange_ratio={:.3f}）", orange_ratio)
+    return True
+
+
 def _set_dialogue_transition_retry_override(
     ctx: "ProduceContext",
     *,
@@ -394,13 +511,24 @@ def execute_dialogue_step(
         # ── おでかけ探査: 在第一次選択前采集效果描述 ──
         if (
             ctx.pending_dialogue_option_index is None
-            and _is_outing_context(app, position)
-            and not any(c.metadata.get("outing_effect") for c in candidates)
+            and _is_dialogue_option_info_context(app, position)
+            and not any(
+                c.metadata.get("description")
+                or c.metadata.get("outing_effect")
+                or c.metadata.get("option_effect")
+                for c in candidates
+            )
         ):
-            _probe_outing_options(app, candidates)
-            _enrich_outing_descriptions(candidates)
-            # おでかけ DB マッチング: 効果描述 + P 成本 → 安定的 DB ID
-            hydrate_outing_candidates(candidates)
+            if _is_outing_context(app, position):
+                _probe_outing_options(app, candidates)
+                _enrich_outing_descriptions(candidates)
+                # おでかけ DB マッチング: 効果描述 + P 成本 → 安定的 DB ID
+                hydrate_outing_candidates(candidates)
+            else:
+                _probe_dialogue_option_effects(app, candidates)
+            _enrich_dialogue_option_descriptions(candidates)
+            # 周事件选项在拿到效果描述后再做一次主库匹配，避免只透传 OCR 文本。
+            hydrate_dialogue_candidates(candidates)
 
         # ── 第二次点击: 确认已选中选项 ──
         if ctx.pending_dialogue_option_index is not None:
@@ -467,18 +595,20 @@ def execute_dialogue_step(
     ctx.handler_state.pop("dialogue_just_confirmed", None)
     ctx.handler_state.pop("dialogue_confirm_grace", None)
 
-    # 纯剧情对话（非行程上下文）— 可以使用快进
-    ff_buttons = app.latest_results.filter_by_label(BaseUILabels.PLOT_FAST_FORWARD_BUTTON)
-    if ff_buttons:
-        app.device.click_element(ff_buttons.first())
-        logger.debug("dialogue: fast forward")
-        return DialogueStepResult(status="fast_forward")
     # Skip 按钮（おでかけ剧情等未读コミュ）— 直接跳过
     skip_buttons = app.latest_results.filter_by_label(BaseUILabels.SKIP_BUTTON)
     if skip_buttons:
         app.device.click_element(skip_buttons.first())
         logger.debug("dialogue: skip button")
         return DialogueStepResult(status="skipped")
+
+    if _try_enable_story_fast_forward(app, ctx):
+        return DialogueStepResult(status="fast_forward")
+
+    # 快进已开启时点击正文推进。
+    if _get_fast_forward_buttons(app):
+        click_relative_point(app, x_ratio=0.5, y_ratio=0.82, label="dialogue-advance")
+        return DialogueStepResult(status="advanced")
     click_relative_point(app, x_ratio=0.5, y_ratio=0.82, label="dialogue-advance")
     return DialogueStepResult(status="advanced")
 

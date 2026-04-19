@@ -324,6 +324,17 @@ class LLMStrategy:
         response = None
         for attempt in range(1 + self._EMPTY_CONTENT_MAX_RETRIES):
             kwargs = {**base_kwargs, "messages": list(messages)}
+            if attempt > 0:
+                # 二次重试时强制进入“短输出直答”模式，避免继续长链思考。
+                kwargs["temperature"] = 0.0
+                kwargs["max_tokens"] = min(int(self.max_tokens or 64), 64)
+                extra_body = dict(kwargs.get("extra_body") or {})
+                # 关闭 think，让模型直接给最终编号。
+                extra_body.pop("think", None)
+                if extra_body:
+                    kwargs["extra_body"] = extra_body
+                else:
+                    kwargs.pop("extra_body", None)
             try:
                 response = client.chat.completions.create(**kwargs)
             except Exception as exc:
@@ -347,6 +358,9 @@ class LLMStrategy:
                 logger.info("[LLM] content({} 字符): {}", len(details.raw_content), repr(details.raw_content[:300]))
                 if details.raw_reasoning:
                     logger.info("[LLM] reasoning({} 字符): {}", len(details.raw_reasoning), repr(details.raw_reasoning[:300]))
+                finish_reason = str(getattr(response.choices[0], "finish_reason", "") or "")
+                if finish_reason:
+                    logger.debug("[LLM] finish_reason={}", finish_reason)
 
             final_text = self._extract_final_text(response)
             if final_text:
@@ -373,12 +387,19 @@ class LLMStrategy:
                 attempt + 1,
                 len(details.raw_reasoning),
             )
-            # 将上次的 reasoning 作为 assistant 回复，再追加一条 user 消息催促输出
-            messages.append({"role": "assistant", "content": details.raw_reasoning[:2000]})
-            messages.append({
-                "role": "user",
-                "content": "请直接输出你选择的动作编号（纯数字），不要再进行额外思考。",
-            })
+            # 不把 reasoning 回灌给模型，避免它沿着思考链继续“只思考不作答”。
+            legal_hint = ", ".join(str(x) for x in legal) if legal else "无"
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        "你上次没有给出最终答案。现在只输出一个合法动作编号（纯数字）。"
+                        f"合法动作: {legal_hint}。禁止解释，禁止输出思考过程。"
+                    ),
+                },
+            ]
 
         details.elapsed_sec = time.monotonic() - t0
 

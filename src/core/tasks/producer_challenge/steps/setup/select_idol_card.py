@@ -42,6 +42,8 @@ idol_card_db = GakumasDatabase_IdolCardDataUtils()
 
 
 class SelectIdolCardStep(ProduceStep):
+    """在偶像卡列表中定位目标卡，并处理滑动中的误识别与回退。"""
+
     step_name = "select_idol_card"
     skip_on_resume = True
 

@@ -502,6 +502,44 @@ class _Base(_BaseConfigGroup):
         )
     )
 
+    # --- 自动培育决策后端配置 ---
+    producer_decision_backend = ConfigItem(
+        default_value="llm",
+        data_type=str,
+        verify=r"llm|rl_battle",
+        use_verify=True,
+        ui=ConfigItemUI(
+            label="自动培育决策后端",
+            hint="llm：所有阶段走大模型；rl_battle：仅 lesson / exam 走 RL 推理服务",
+            component="select",
+            options=[
+                {"title": "LLM（默认）", "value": "llm"},
+                {"title": "RL Battle（lesson / exam）", "value": "rl_battle"},
+            ],
+            order=290,
+        ),
+    )
+    rl_inference_base_url = ConfigItem(
+        default_value="http://127.0.0.1:8001",
+        data_type=str,
+        ui=ConfigItemUI(
+            label="RL 推理服务地址",
+            hint="无状态 RL 推理服务地址；模型在服务启动时固定加载",
+            visible_if={"base.producer_decision_backend": "rl_battle"},
+            order=295,
+        ),
+    )
+    rl_inference_timeout = ConfigItem(
+        default_value=10.0,
+        data_type=float,
+        ui=ConfigItemUI(
+            label="RL 推理超时(秒)",
+            hint="lesson / exam 请求 RL 服务的超时时间",
+            visible_if={"base.producer_decision_backend": "rl_battle"},
+            order=296,
+        ),
+    )
+
     # --- LLM 决策配置 ---
     llm_base_url = ConfigItem(
         default_value="http://127.0.0.1:11434/v1/",

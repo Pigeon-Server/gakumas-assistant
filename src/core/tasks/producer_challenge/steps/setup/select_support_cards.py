@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 
 class SelectSupportCardsStep(ProduceStep):
+    """完成支援卡编成，并把流程稳定推进到记忆编成页。"""
+
     step_name = "select_support_cards"
     skip_on_resume = True
 
