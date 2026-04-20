@@ -18,6 +18,11 @@ from src.utils.adb_tools import start_DroidCast, ADBShell
 from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
 from src.utils.performance_tools import timeit
+from src.utils.task_debug_tools import (
+    record_task_click,
+    record_task_scroll,
+    record_task_swipe,
+)
 
 
 debugger = DebugTools()
@@ -337,6 +342,23 @@ class Android_App(BaseDevice):
             return self.__adb_device.window_size()
         return self.__u2_device.window_size()
 
+    def get_diagnostics(self) -> dict:
+        return {
+            "device_type": "android",
+            "connect_mode": self.__connect_mode,
+            "serial": getattr(self.__adb_device, "serial", ""),
+            "package_name": self.__package_name,
+            "capture_service": self.__screen_capture_service,
+            "touch_service": self.__screen_touch_service,
+            "android": {
+                "model": self._adb_shell("getprop ro.product.model").strip(),
+                "brand": self._adb_shell("getprop ro.product.brand").strip(),
+                "device": self._adb_shell("getprop ro.product.device").strip(),
+                "android_release": self._adb_shell("getprop ro.build.version.release").strip(),
+                "sdk_int": self._adb_shell("getprop ro.build.version.sdk").strip(),
+            },
+        }
+
     def __get_touch_service(self):
         match self.__screen_touch_service:
             case ADBOperation.TouchService.uiautomator2:
@@ -435,6 +457,14 @@ class Android_App(BaseDevice):
                 safe_end_y,
                 actual_duration,
             )
+        record_task_swipe(
+            safe_start_x + offset_x,
+            safe_start_y + offset_y,
+            safe_end_x,
+            safe_end_y,
+            duration=round(float(actual_duration), 3),
+            source=f"android.{self.__screen_touch_service}",
+        )
         # 增加随机短暂停顿 (模拟人类自然停顿)
         time.sleep(random.uniform(0.05, 0.1))
 
@@ -442,6 +472,13 @@ class Android_App(BaseDevice):
         """
         通用滚动方法，调用提取出的 swipe
         """
+        record_task_scroll(
+            x,
+            y,
+            direction=str(direction),
+            delta=int(scroll_delta),
+            source="android",
+        )
         width, height = self.get_window_size()
         scroll_distance = int(height * 0.05)
         scroll_sign = 1 if scroll_delta > 0 else -1
@@ -489,6 +526,7 @@ class Android_App(BaseDevice):
             thickness=1
         )
         self.__get_touch_service().click(x, y)
+        record_task_click(x, y, label=el_label, source="android")
 
     def capture(self) -> Optional[np.ndarray]:
         if not self.__bool__():

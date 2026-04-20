@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 last_card_name = ""
 last_modal = False
+last_modal_title = ""
 
 def register_middlewares(processor: "AppProcessor"):
 
@@ -24,58 +25,47 @@ def register_middlewares(processor: "AppProcessor"):
     @processor.task_queue.register_task_middleware()
     @logger.catch
     def _handle_unexpected_modal(app: "AppProcessor"):
-        global last_modal
-        if app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
-            if last_modal:
-                return True
-            modal = get_modal(app.latest_results, True, quiet=True)
-            if modal is None:
-                return True
-            if string_match(modal.modal_title, [ModalText.TITLE.DATA_UPDATE, ModalText.TITLE.DATE_UPDATE], MatchConfig(fuzz_threshold=90)):
-                logger.warning("Restart game...")
-                app.device.click_element(modal.cancel_button)
-                app.game_utils.wait_loading()
-                app.game_utils.wait_for_label(BaseUILabels.START_MENU_LOGO)
-                app.task_queue.insert_task_to_run_queue("start_game")
-            elif string_match(modal.modal_title, [ModalText.TITLE.CONNECTION_ERROR, ModalText.TITLE.INFO_FETCH_FAILED]):
-                logger.warning("Network connection error...")
-                app.device.click_element(modal.confirm_button)
-                app.game_utils.wait_loading()
-            last_modal = True
-        else:
+        global last_modal, last_modal_title
+        if not app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
             last_modal = False
-        return True
+            last_modal_title = ""
+            return True
 
-    # @processor.register_middleware()
-    # @logger.catch
-    # def _add_skill(device: "AppProcessor"):
-    #     global last_card_name
-    #     if device.game_status_manager.current_location == GamePageTypes.SUB_MENU.PRODUCER_ILLUSTRATED:
-    #         if device.game_utils.update_current_location() != GamePageTypes.SUB_MENU.PRODUCER_ILLUSTRATED:
-    #             return
-    #         roi , skill_card, card_info = extract_skill_card_and_info(device.latest_frame)
-    #         if skill_card is None or card_info is None:
-    #             return
-    #         ocr_service = OCRService()
-    #         ocr_result = ocr_service.ocr(card_info)
-    #         if ocr_result is None:
-    #             return
-    #         ocr_result.auto_merge_lines(width_gap=100)
-    #         card_title = ocr_result.get_y_min().text
-    #         if card_title != last_card_name:
-    #             last_card_name = card_title
-    #             return
-    #         card_info = ocr_result.exclude([ocr_result.get_y_min()])
-    #         card_info = OCR_ResultList([item for item in card_info if len(item.text) > 2])
-    #         skill_card_types = [base_labels.skill_card, base_labels.skill_card__mental, base_labels.skill_card__active, base_labels.skill_card__trap]
-    #
-    #         if not device.clip_manager.skill_card_clip.add_to_memory(
-    #                 skill_card,
-    #                 SkillCardInfo(
-    #                     card_title,
-    #                     device.latest_results.filter_by_labels(
-    #                     skill_card_types).get_y_min_element().first().label.replace("Skill Card: ", ""),
-    #                     [item.text for item in card_info]
-    #                 ), 0.97
-    #         ):
-    #             logger.debug(device.clip_manager.skill_card_clip.retrieve(skill_card))
+        if last_modal and not string_match(
+            last_modal_title,
+            [ModalText.TITLE.CONNECTION_ERROR, ModalText.TITLE.INFO_FETCH_FAILED],
+        ):
+            return True
+
+        modal = get_modal(app.latest_results, True, quiet=True)
+        if modal is None:
+            return True
+
+        # 网络/信息获取失败弹窗需要允许重复处理：即使同一弹窗持续存在，也要继续尝试重试按钮。
+        if string_match(modal.modal_title, [ModalText.TITLE.CONNECTION_ERROR, ModalText.TITLE.INFO_FETCH_FAILED]):
+            logger.warning("Network connection error...")
+            action_button = modal.confirm_button or modal.cancel_button
+            if action_button is not None:
+                app.device.click_element(action_button)
+                app.game_utils.wait_loading()
+            else:
+                logger.warning("Connection modal has no actionable button.")
+            last_modal = False
+            last_modal_title = modal.modal_title or ""
+            return True
+
+        if last_modal:
+            return True
+
+        if string_match(modal.modal_title, [ModalText.TITLE.DATA_UPDATE, ModalText.TITLE.DATE_UPDATE], MatchConfig(fuzz_threshold=90)):
+            logger.warning("Restart game...")
+            if modal.cancel_button is not None:
+                app.device.click_element(modal.cancel_button)
+            elif modal.confirm_button is not None:
+                app.device.click_element(modal.confirm_button)
+            app.game_utils.wait_loading()
+            app.game_utils.wait_for_label(BaseUILabels.START_MENU_LOGO)
+            app.task_queue.insert_task_to_run_queue("start_game")
+        last_modal = True
+        last_modal_title = modal.modal_title or ""
+        return True

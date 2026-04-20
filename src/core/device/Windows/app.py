@@ -21,6 +21,7 @@ from src.entity.BaseDevice import BaseDevice
 from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
 from src.utils.system_tools import is_compiled
+from src.utils.task_debug_tools import record_task_click, record_task_scroll
 
 
 debugger = DebugTools()
@@ -155,6 +156,15 @@ class Windows_App(BaseDevice):
         hwnd = win32gui.FindWindow(None, self.__window_name)
         return hwnd != 0
 
+    def get_diagnostics(self) -> dict:
+        return {
+            "device_type": "windows_pc",
+            "window_name": self.__window_name,
+            "capture_method": "pyautogui.screenshot",
+            "touch_method": "pyautogui.click",
+            "scroll_method": "win32api.mouse_event",
+        }
+
     @logger.catch
     def capture(self):
         """
@@ -195,6 +205,7 @@ class Windows_App(BaseDevice):
         )
         abs_x, abs_y = self._xy_abs_conversion(x, y)
         pyautogui.click(abs_x, abs_y, button='left')
+        record_task_click(x, y, label=el_label, source="windows")
         logger.debug(f"click {el_label}: {abs_x, abs_y}" if el_label else f"click: {abs_x, abs_y}")
         return True
 
@@ -202,6 +213,13 @@ class Windows_App(BaseDevice):
         if scroll_delta == 0:
             logger.warning("scroll delta is 0, skipping scroll")
             return
+        record_task_scroll(
+            x,
+            y,
+            direction="vertical",
+            delta=int(scroll_delta),
+            source="windows",
+        )
         abs_x, abs_y = self._xy_abs_conversion(x, y)
         pyautogui.moveTo(abs_x, abs_y)
         for _ in range(abs(scroll_delta)):

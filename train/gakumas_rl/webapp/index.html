@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Gakumas RL Exam Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- File Picker -->
+<div id="picker" class="file-picker">
+  <h1>Gakumas RL Exam Viewer</h1>
+  <p>加载 demo_exam 生成的 JSON trace 文件进行可视化回放</p>
+  <div id="dropZone" class="drop-zone">
+    <div class="icon">📂</div>
+    <div>拖拽 JSON 文件到此处<br>或点击选择文件</div>
+  </div>
+  <input type="file" id="fileInput" accept=".json" hidden>
+</div>
+
+<!-- App -->
+<div id="app" class="app">
+  <div id="summaryBar" class="summary-bar"></div>
+  <div class="nav-bar">
+    <button id="btnPrev" class="nav-btn" aria-label="上一回合">◀</button>
+    <div id="navIndicator" class="nav-indicator"></div>
+    <button id="btnNext" class="nav-btn" aria-label="下一回合">▶</button>
+  </div>
+  <div id="phoneFrame" class="phone-frame"></div>
+  <div class="keyboard-hint">← → 方向键切换回合</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

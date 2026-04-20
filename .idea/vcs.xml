@@ -4,5 +4,8 @@
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/assets/GakumasTranslationData" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/assets/gakumasu-diff" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/train/gakumas_rl/assets/GakumasTranslationData" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/train/gakumas_rl/assets/gakumasu-diff" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/vendor/GkmasObjectManager" vcs="Git" />
   </component>
 </project>

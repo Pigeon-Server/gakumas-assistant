@@ -11,6 +11,11 @@ from src.core.services.config_service import ConfigService
 from src.entity.BaseDevice import BaseDevice
 from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
+from src.utils.task_debug_tools import (
+    record_task_click,
+    record_task_scroll,
+    record_task_swipe,
+)
 
 debugger = DebugTools()
 
@@ -127,6 +132,18 @@ class MacOS_App(BaseDevice):
             logger.warning("MacPlayTools 屏幕尺寸未知")
         return w, h
 
+    def get_diagnostics(self) -> dict:
+        adapter = self._adapter
+        bundle_id = adapter.get_bundle_id() if adapter is not None else ""
+        return {
+            "device_type": "mac_playtools",
+            "host": self._host,
+            "port": self._port,
+            "bundle_id": bundle_id,
+            "capture_method": "playtools.screencap_bgr/rgbx",
+            "touch_method": "playtools.click/swipe",
+        }
+
     # ── 截屏 ──────────────────────────────────────────────────
 
     def capture(self) -> Optional[np.ndarray]:
@@ -151,6 +168,7 @@ class MacOS_App(BaseDevice):
             thickness=1
         )
         self._adapter.click(int(x), int(y))
+        record_task_click(x, y, label=el_label, source="mac_playtools")
 
     def swipe(self, start_x, start_y, end_x, end_y, duration=0.8,
               offset_x=10, offset_y=10, safe_margin=50, hold_end=0.0, ease=None):
@@ -184,9 +202,24 @@ class MacOS_App(BaseDevice):
             safe_end_x, safe_end_y, actual_duration,
             hold_end=hold_end, ease=ease,
         )
+        record_task_swipe(
+            safe_start_x + offset_x,
+            safe_start_y + offset_y,
+            safe_end_x,
+            safe_end_y,
+            duration=round(float(actual_duration), 3),
+            source="mac_playtools",
+        )
         time.sleep(random.uniform(0.05, 0.1))
 
     def _scroll(self, x, y, direction, scroll_delta):
+        record_task_scroll(
+            x,
+            y,
+            direction=str(direction),
+            delta=int(scroll_delta),
+            source="mac_playtools",
+        )
         width, height = self.get_window_size()
         scroll_distance = int(height * 0.05) if height > 0 else 50
         scroll_sign = 1 if scroll_delta > 0 else -1

@@ -27,8 +27,19 @@ from src.entity.WebSocketData import WebSocketData
 from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_runtime_str
-from src.utils.task_debug_tools import record_task_step, reset_task_debug_trace
+from src.utils.task_debug_tools import (
+    bind_task_debug_context,
+    clear_task_debug_context,
+    record_task_step,
+    reset_task_debug_trace,
+)
 from src.utils.task_dumper import dump_task_failure
+from src.utils.task_failure_package import (
+    GITHUB_ISSUE_URL,
+    QQ_GROUP_NUMBER,
+    build_task_failure_package,
+    register_task_failure_package_download,
+)
 
 if TYPE_CHECKING:
     from src.main import AppProcessor
@@ -547,9 +558,63 @@ class TaskService:
         runner.join()
         self._task_runner_thread = None
 
+    def _broadcast_task_execution_error(
+        self,
+        task: Task,
+        exception: BaseException,
+        dump_dir: str | None,
+        package_path: str | None,
+        package_download: dict | None = None,
+    ):
+        package_download = package_download or {}
+        websocket_manager.broadcast_action_sync(
+            WebsocketActions.TaskService.TaskExecutionError,
+            WebSocketData(message={
+                "task_id": task.id,
+                "task_name": task.task_name,
+                "status": task.status,
+                "error_type": type(exception).__name__,
+                "error_message": str(exception),
+                "dump_dir": dump_dir or "",
+                "package_path": package_path or "",
+                "package_id": package_download.get("package_id", ""),
+                "package_download_url": package_download.get("download_url", ""),
+                "feedback": {
+                    "github_issues": GITHUB_ISSUE_URL,
+                    "qq_group": QQ_GROUP_NUMBER,
+                },
+            }),
+        )
+
+    def _handle_task_failure(self, task: Task, exception: BaseException):
+        dump_dir = dump_task_failure(self._app, task, exception)
+        package_path = build_task_failure_package(self._app, task, dump_dir, exception)
+        package_download = register_task_failure_package_download(package_path) if package_path else None
+        self._broadcast_task_execution_error(
+            task,
+            exception,
+            dump_dir,
+            package_path,
+            package_download=package_download,
+        )
+
+    def _handle_task_failure_with_cancel_guard(self, task: Task, exception: BaseException) -> bool:
+        """
+        处理失败收尾，并兜底拦截用户在收尾阶段触发的取消信号。
+
+        返回 True 表示失败收尾完整执行；
+        返回 False 表示收尾过程中被取消，调用方应将任务状态改为 CANCELED。
+        """
+        try:
+            self._handle_task_failure(task, exception)
+            return True
+        except (UserCancelTask, FailSafeException):
+            return False
+
     def _run_task_inner(self, task: Task, timeout_event: Event):
         """任务实际执行（在独立线程中，供 PyThreadState_SetAsyncExc 定位）"""
         import sys
+        bind_task_debug_context(self._app, task.id, task.task_name)
         try:
             sys.settrace(self._make_trace(task, timeout_event))
             func = task.function
@@ -581,7 +646,10 @@ class TaskService:
                 error=str(e),
             )
             logger.error(f"Task '{task.task_name}({task.id})' timed out")
-            dump_task_failure(self._app, task, e)
+            if not self._handle_task_failure_with_cancel_guard(task, e):
+                task.update_status(TaskStatus.CANCELED)
+                record_task_step(self._app, "task.run.canceled", task_id=task.id)
+                logger.warning(f"Task '{task.task_name}({task.id})' cancelled")
         except Exception as e:
             sys.settrace(None)
             task.update_status(TaskStatus.FAILED)
@@ -594,7 +662,10 @@ class TaskService:
             )
             tb_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
             logger.error(f"Task '{task.task_name}({task.id})' failed:\n{tb_str}")
-            dump_task_failure(self._app, task, e)
+            if not self._handle_task_failure_with_cancel_guard(task, e):
+                task.update_status(TaskStatus.CANCELED)
+                record_task_step(self._app, "task.run.canceled", task_id=task.id)
+                logger.warning(f"Task '{task.task_name}({task.id})' cancelled")
         finally:
             task.update_end_time()
             record_task_step(
@@ -604,6 +675,7 @@ class TaskService:
                 status=task.status,
             )
             sys.settrace(None)
+            clear_task_debug_context()
             logger.info(f"Task '{task.task_name}({task.id})' status: {task.status}")
 
     # ========== 查询方法 ==========

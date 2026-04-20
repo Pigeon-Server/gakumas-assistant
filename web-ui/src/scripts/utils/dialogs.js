@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import inputDialog from '@/components/dialogs/inputDialogV2.vue'
+import taskErrorReportDialog from '@/components/dialogs/taskErrorReportDialog.vue'
 import vuetify from '@/plugins/vuetify'
 import confirmDialog from "@/components/dialogs/confirmDialog.vue";
 
@@ -66,9 +67,14 @@ async function confirm (
   })
 }
 
+async function showTaskErrorReportDialog(payload = {}) {
+  return init_Dialog(taskErrorReportDialog, payload)
+}
+
 export default {
   init_Dialog,
   confirm,
   inputDialog,
   showInput_Dialog,
+  showTaskErrorReportDialog,
 }

@@ -62,6 +62,17 @@ def _handle__modal_boxes(app: "AppProcessor"):
     elif string_match(ModalText.TITLE.INFO_FETCH_FAILED, modal.modal_title):
         logger.warning("Information fetch failed, dismiss modal and retry waiting.")
         _click_action_button()
+    elif string_match(
+        modal.modal_title,
+        [
+            ModalText.TITLE.EXCHANGE_CONFIRMATION,
+            ModalText.TITLE.PURCHASE_CONFIRMATION,
+            ModalText.TITLE.WORK_START_CONFIRMATION,
+        ],
+    ):
+        # 启动流程中若残留业务弹窗，优先走取消，避免误确认导致状态漂移
+        logger.warning(f"Dismissing non-startup modal during start flow: {modal.modal_title}")
+        _click_action_button()
     elif string_match(ModalText.TITLE.SKIP_CONFIRM, modal.modal_title):
         logger.warning("Skip the game story...")
         app.device.click_element(modal.confirm_button)
@@ -81,6 +92,13 @@ def action__wait_enter_home(app: "AppProcessor"):
     """动作：检查主界面标识是否存在"""
     COUNT:int = 0
     REQUIRED_COUNT:int = 3
+    non_blocking_locations = {
+        GamePageTypes.UNKNOWN,
+        GamePageTypes.LOADING,
+        GamePageTypes.DOWNLOADING,
+        GamePageTypes.START_GAME,
+        GamePageTypes.MAIN_MENU__HOME,
+    }
     while True:
         current_location = app.game_utils.update_current_location()
         if current_location in {
@@ -106,6 +124,15 @@ def action__wait_enter_home(app: "AppProcessor"):
                 logger.warning(f"Failed to leave producer page while waiting for home: {current_location} ({exc})")
             sleep(1)
             continue
+        if current_location not in non_blocking_locations:
+            # 已知处于非主页功能页时，优先主动回主页，避免停在商店/活动页空转
+            logger.debug(f"Leaving non-home page while waiting for home: {current_location}")
+            try:
+                app.game_utils.go_home(max_try=2)
+            except Exception as exc:
+                logger.warning(f"Failed to leave non-home page while waiting for home: {current_location} ({exc})")
+            sleep(1)
+            continue
         if close_btn := app.latest_results.filter_by_label(BaseUILabels.CLOSE_BUTTON):
             app.device.click_element(close_btn.first())
             sleep(1)
@@ -115,9 +142,22 @@ def action__wait_enter_home(app: "AppProcessor"):
         elif app.latest_results.filter_by_label(BaseUILabels.MODAL_HEADER):
             _handle__modal_boxes(app)
         elif app.latest_results.filter_by_label(BaseUILabels.TAB_HOME):
-            for i in range(REQUIRED_COUNT):
+            if current_location != GamePageTypes.MAIN_MENU__HOME:
+                logger.debug(f"Home tab detected on {current_location}, clicking home tab")
+                try:
+                    app.game_utils.click_on_label(BaseUILabels.TAB_HOME)
+                    app.game_utils.wait_loading()
+                except Exception as exc:
+                    logger.warning(f"Failed to click home tab while waiting for home: {current_location} ({exc})")
                 sleep(1)
-                if app.latest_results.filter_by_label(BaseUILabels.TAB_HOME):
+                continue
+            COUNT = 0
+            for _ in range(REQUIRED_COUNT):
+                sleep(1)
+                if (
+                    app.latest_results.filter_by_label(BaseUILabels.TAB_HOME)
+                    and app.game_utils.update_current_location() == GamePageTypes.MAIN_MENU__HOME
+                ):
                     COUNT += 1
                     continue
                 COUNT = 0

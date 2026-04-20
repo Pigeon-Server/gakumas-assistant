@@ -21,6 +21,21 @@ export interface WsEventPayloads {
   [WS_ACTION.TaskQueueStart]: void
   [WS_ACTION.TaskQueueStop]: void
   [WS_ACTION.TaskQueueSuspend]: void
+  [WS_ACTION.TaskExecutionError]: {
+    task_id: string
+    task_name: string
+    status: string
+    error_type: string
+    error_message: string
+    dump_dir: string
+    package_path: string
+    package_id: string
+    package_download_url: string
+    feedback: {
+      github_issues: string
+      qq_group: string
+    }
+  }
   [WS_ACTION.BroadcastLog]: {
     time: string
     level: string

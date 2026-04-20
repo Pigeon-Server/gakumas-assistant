@@ -34,6 +34,12 @@
             color="white"
             @click="openSection('settings')"
           />
+          <v-btn
+            icon="md:info"
+            variant="text"
+            color="white"
+            @click="openSection('about_project')"
+          />
         </div>
         <PyWebviewWindowControls />
       </div>
@@ -54,6 +60,12 @@
           value="settings"
           @click="openSection('settings')"
         />
+        <v-list-item
+          prepend-icon="md:info"
+          title="关于项目"
+          value="about_project"
+          @click="openSection('about_project')"
+        />
       </v-list>
     </v-navigation-drawer>
     <TaskList
@@ -65,6 +77,13 @@
     />
     <SettingsPanel
       v-else-if="activeSection === 'settings'"
+      v-model="sidePanelOpen"
+      :temporary="showOverlayPanel"
+      :disable-transition="sidePanelInstantSwap"
+      :width="sidePanelWidth"
+    />
+    <About
+      v-else-if="activeSection === 'about_project'"
       v-model="sidePanelOpen"
       :temporary="showOverlayPanel"
       :disable-transition="sidePanelInstantSwap"
@@ -142,6 +161,7 @@
     syncWindowHostShellClass,
   } from "@/scripts/utils/windowHost.js";
   import app from "@/main.js";
+  import About from "@/components/about.vue";
 
   const display = useDisplay();
   const appStore = useAppStore();

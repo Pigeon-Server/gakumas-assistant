@@ -589,7 +589,8 @@ def _handle_unknown_item(app, item_box, item_inner, commodity_target, index):
     # 点击打开模态
     modal = None
     for _ in range(3):
-        app.device.click_element(item_box)
+        # 始终点击卡片主体区域，避免 group 外框误触到 TabBar/页签切换区域
+        app.device.click_element(item_inner)
         sleep(0.5)
         app.game_utils.wait_loading()
         app.game_utils.wait_frame_stable()

@@ -34,3 +34,9 @@ E:\\Projects\\gkmas-auto\\.git\\hooks/
 _debug*
 /train/gakumas_rl/gakumas_rl/webapp/skill_card/*.png
 /train/gakumas_rl/gakumas_rl/test_*.py
+/.github/mcp.json
+/train/gakumas_rl/docs
+/train/gakumas_rl/webapp/skill_card
+*ANALYSIS.md
+*plan.md
+*test_*.json

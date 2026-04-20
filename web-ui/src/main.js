@@ -24,6 +24,7 @@ import {wsService} from '@/scripts/utils/websocket.ts'
 import {getWsUrl} from "@/scripts/utils/wsURL.js";
 import {WS_ACTION} from "@/scripts/constants.ts";
 import message from "@/scripts/utils/message.js";
+import dialogs from "@/scripts/utils/dialogs.js";
 
 const app = createApp(App)
 
@@ -44,6 +45,9 @@ wsService.on(WS_ACTION.ShowMessage_Error, data => {
 })
 wsService.on(WS_ACTION.ShowMessage_Success, data => {
   message.showSuccess(data.message, data?.close_delay ? data.close_delay * 1000 : 3000)
+})
+wsService.on(WS_ACTION.TaskExecutionError, data => {
+  dialogs.showTaskErrorReportDialog(data).catch(() => ({ reason: "dismissed" }))
 })
 wsService.onEvent("disconnect", () => {
   message.showWarning("连接已断开")

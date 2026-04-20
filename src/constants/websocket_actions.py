@@ -15,6 +15,7 @@ class WebsocketActions:
         TaskQueueStart = "task:start"
         TaskQueueStop = "task:stop"
         TaskQueueSuspend = "task:suspend"
+        TaskExecutionError = "task:execution_error"
 
     class ResourceUpdate:
         StatusChanged = "resource_update:status_changed"

@@ -77,3 +77,10 @@ class BaseDevice(abc.ABC):
 
     def bring_to_front(self):
         pass
+
+    def get_diagnostics(self) -> dict:
+        """
+        返回设备层诊断信息（用于任务失败 dump）。
+        子类可按设备类型扩展字段。
+        """
+        return {}

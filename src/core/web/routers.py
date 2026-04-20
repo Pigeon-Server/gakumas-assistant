@@ -28,6 +28,7 @@ from src.utils.game_database_tools import (
 )
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str, resolve_runtime_str
+from src.utils.task_failure_package import resolve_task_failure_package_download
 
 if TYPE_CHECKING:
     from src.main import AppProcessor
@@ -151,6 +152,18 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         """停止任务队列"""
         processor.task_queue.stop()
         return _api_return(True, "OK")
+
+    @app.get("/api/task/failure_package/download/{package_id}")
+    def download_task_failure_package(package_id: str):
+        """下载任务失败日志压缩包（重启前有效）。"""
+        package_path = resolve_task_failure_package_download(package_id)
+        if package_path is None:
+            return _api_return(False, "日志压缩包不存在或已失效，请重试任务后重新下载。")
+        return FileResponse(
+            str(package_path),
+            media_type="application/zip",
+            filename=package_path.name,
+        )
 
     @app.get("/api/status")
     def get_status():

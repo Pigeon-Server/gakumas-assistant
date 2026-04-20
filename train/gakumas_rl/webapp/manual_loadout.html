@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Gakumas RL Manual Exam Setup Builder</title>
+<link rel="stylesheet" href="manual_loadout.css">
+<script src="manual_loadout_catalog.js" defer></script>
+<script src="manual_loadout_app.js" defer></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+</head>
+<body>
+<div class="page-shell" x-data="manualLoadoutApp()" x-init="init()">
+  <header class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">Manual Exam Setup</p>
+      <h1>把游戏里的真实手牌、P饮料、P物品整理成训练用 JSONL</h1>
+      <p class="hero-text">导出的每一行都是一条 exam 配置记录，可直接配合 `--manual-exam-setup` 投入 `train.py / llm_player.py / demo_exam.py`。不提供该参数时，环境仍保持原来的随机牌组。</p>
+    </div>
+    <div class="hero-actions">
+      <button class="primary-btn" type="button" @click="saveCurrentRecord()">保存当前记录</button>
+      <button class="secondary-btn" type="button" @click="exportRecords()">导出 JSONL</button>
+      <label class="ghost-btn">
+        导入 JSONL
+        <input type="file" accept=".jsonl,.txt" hidden @change="importJsonl($event)">
+      </label>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>当前记录</h2>
+        <button class="text-btn" type="button" @click="resetCurrent()">清空草稿</button>
+      </div>
+      <div class="form-grid">
+        <label>
+          <span>标签</span>
+          <input type="text" x-model="current.label" placeholder="例如：佑芽 mid1 实战牌组">
+        </label>
+        <label>
+          <span>Scenario</span>
+          <select x-model="current.scenario" @change="ensureStageValid()">
+            <template x-for="scenario in catalog.scenarios" :key="scenario.alias">
+              <option :value="scenario.alias" x-text="`${scenario.alias} · ${scenario.name}`"></option>
+            </template>
+          </select>
+        </label>
+        <label class="wide">
+          <span>Idol Card</span>
+          <input type="text" x-model="filters.idolSearch" placeholder="先搜索偶像卡 ID / 名称">
+          <select x-model="current.idol_card_id">
+            <option value="">未指定</option>
+            <template x-for="idol in idolChoices()" :key="idol.id">
+              <option :value="idol.id" x-text="`${idol.name} · ${idol.id} · ${idol.rarity} · ${idol.plan_type}`"></option>
+            </template>
+          </select>
+        </label>
+        <label>
+          <span>Stage Type</span>
+          <select x-model="current.stage_type">
+            <template x-for="stage in stageChoices()" :key="stage || 'empty-stage'">
+              <option :value="stage" x-text="stageLabel(stage)"></option>
+            </template>
+          </select>
+        </label>
+        <label class="wide">
+          <span>备注</span>
+          <textarea x-model="current.notes" rows="3" placeholder="记录来源、局外条件、是否是保留局等"></textarea>
+        </label>
+      </div>
+      <div class="summary-strip">
+        <div>
+          <span class="summary-label">卡牌总数</span>
+          <strong x-text="currentDeckCount()"></strong>
+        </div>
+        <div>
+          <span class="summary-label">P饮料</span>
+          <strong x-text="currentDrinkCount()"></strong>
+        </div>
+        <div>
+          <span class="summary-label">P物品</span>
+          <strong x-text="currentItemCount()"></strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>手牌列表</h2>
+        <span class="panel-note">支持重复计数与升级卡面</span>
+      </div>
+      <div class="toolbar">
+        <input type="text" x-model="filters.cardSearch" placeholder="搜索卡名 / ID / 轴 / 描述">
+        <select x-model="filters.cardEffect">
+          <option value="">全部效果轴</option>
+          <template x-for="effectType in availableEffectTypes()" :key="effectType">
+            <option :value="effectType" x-text="effectLabel(effectType)"></option>
+          </template>
+        </select>
+      </div>
+      <div class="catalog-list">
+        <template x-for="group in filteredCards()" :key="group.key">
+          <article class="catalog-card">
+            <div class="card-art">
+              <img :src="(selectedCardVariant(group) || {}).image_path" :alt="group.name" loading="lazy" @error="$el.style.display='none'">
+            </div>
+            <div class="catalog-body">
+              <div class="catalog-title-row">
+                <h3 x-text="group.name"></h3>
+                <span class="muted-id" x-text="group.card_id"></span>
+              </div>
+              <p class="catalog-meta" x-text="[group.rarity, group.category, group.plan_type].filter(Boolean).join(' · ')"></p>
+              <p class="catalog-desc" x-text="group.description || group.raw_name"></p>
+              <div class="tag-row">
+                <template x-for="effectType in group.effect_types" :key="`${group.key}-${effectType}`">
+                  <span class="tag" x-text="effectLabel(effectType)"></span>
+                </template>
+              </div>
+              <div class="variant-row">
+                <label>
+                  <span>升级</span>
+                  <select x-model.number="selectedCardUpgrades[group.card_id]">
+                    <template x-for="variant in group.variants" :key="variant.key">
+                      <option :value="Number(variant.upgrade_count || 0)" x-text="cardDisplayName(variant)"></option>
+                    </template>
+                  </select>
+                </label>
+                <p class="variant-note" x-text="((selectedCardVariant(group) || {}).raw_name) || group.raw_name"></p>
+              </div>
+            </div>
+            <div class="catalog-actions">
+              <button type="button" class="mini-btn" @click="addDeckCardGroup(group, 1)">+1</button>
+              <button type="button" class="mini-btn" @click="addDeckCardGroup(group, 2)">+2</button>
+            </div>
+          </article>
+        </template>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>当前内容</h2>
+        <span class="panel-note">这些内容会写进当前 JSONL 记录</span>
+      </div>
+      <div class="selected-columns">
+        <div class="selected-block">
+          <h3>手牌</h3>
+          <template x-if="!current.deck.length">
+            <p class="empty-state">还没有加入手牌。</p>
+          </template>
+          <template x-for="(entry, index) in current.deck" :key="`${entry.card_id}@${entry.upgrade_count}`">
+            <div class="selected-row deck-row">
+              <img class="selected-art" :src="entry.image_path" :alt="entry.name" loading="lazy" @error="$el.style.display='none'">
+              <div class="selected-body">
+                <strong x-text="cardDisplayName(entry)"></strong>
+                <span class="muted-id" x-text="entry.card_id"></span>
+                <div class="tag-row">
+                  <template x-for="effectType in entry.effect_types" :key="`${entry.card_id}-${effectType}`">
+                    <span class="tag" x-text="effectLabel(effectType)"></span>
+                  </template>
+                </div>
+              </div>
+              <div class="counter">
+                <button type="button" class="counter-btn" @click="changeDeckCount(entry, -1)">-</button>
+                <span x-text="entry.count"></span>
+                <button type="button" class="counter-btn" @click="changeDeckCount(entry, 1)">+</button>
+              </div>
+              <button type="button" class="icon-btn" @click="removeDeckEntry(index)">移除</button>
+            </div>
+          </template>
+        </div>
+
+        <div class="selected-block">
+          <h3>P饮料</h3>
+          <template x-if="!current.drinks.length">
+            <p class="empty-state">还没有加入 P饮料。</p>
+          </template>
+          <template x-for="(drink, index) in current.drinks" :key="`${drink.id}-${index}`">
+            <div class="selected-row">
+              <div class="selected-body">
+                <strong x-text="drink.name"></strong>
+                <span class="muted-id" x-text="drink.id"></span>
+                <div class="tag-row">
+                  <template x-for="effectType in drink.effect_types" :key="`${drink.id}-${effectType}-${index}`">
+                    <span class="tag" x-text="effectLabel(effectType)"></span>
+                  </template>
+                </div>
+              </div>
+              <button type="button" class="icon-btn" @click="removeListEntry('drinks', index)">移除</button>
+            </div>
+          </template>
+        </div>
+
+        <div class="selected-block">
+          <h3>P物品</h3>
+          <template x-if="!current.produce_items.length">
+            <p class="empty-state">还没有加入 P物品。</p>
+          </template>
+          <template x-for="(item, index) in current.produce_items" :key="`${item.id}-${index}`">
+            <div class="selected-row">
+              <div class="selected-body">
+                <strong x-text="item.name"></strong>
+                <span class="muted-id" x-text="item.id"></span>
+                <span class="status-chip" x-show="item.is_exam_effect">Exam Effect</span>
+              </div>
+              <button type="button" class="icon-btn" @click="removeListEntry('produce_items', index)">移除</button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>P饮料与 P物品检索</h2>
+        <span class="panel-note">饮料与物品按加入顺序写入记录</span>
+      </div>
+      <div class="picker-columns">
+        <div>
+          <div class="toolbar">
+            <input type="text" x-model="filters.drinkSearch" placeholder="搜索 P饮料">
+          </div>
+          <div class="simple-list">
+            <template x-for="drink in filteredDrinks()" :key="drink.id">
+              <article class="simple-card">
+                <div class="catalog-body">
+                  <h3 x-text="drink.name"></h3>
+                  <p class="muted-id" x-text="drink.id"></p>
+                  <p class="catalog-desc" x-text="drink.description || drink.raw_name"></p>
+                  <div class="tag-row">
+                    <template x-for="effectType in drink.effect_types" :key="`${drink.id}-${effectType}`">
+                      <span class="tag" x-text="effectLabel(effectType)"></span>
+                    </template>
+                  </div>
+                </div>
+                <button type="button" class="mini-btn" @click="addDrink(drink)">加入</button>
+              </article>
+            </template>
+          </div>
+        </div>
+        <div>
+          <div class="toolbar">
+            <input type="text" x-model="filters.itemSearch" placeholder="搜索 P物品">
+          </div>
+          <div class="simple-list">
+            <template x-for="item in filteredItems()" :key="item.id">
+              <article class="simple-card">
+                <div class="catalog-body">
+                  <h3 x-text="item.name"></h3>
+                  <p class="muted-id" x-text="item.id"></p>
+                  <p class="catalog-desc" x-text="item.description || item.raw_name"></p>
+                  <div class="tag-row">
+                    <span class="status-chip" x-show="item.is_exam_effect">Exam Effect</span>
+                    <span class="status-chip challenge-chip" x-show="item.is_challenge">Challenge</span>
+                  </div>
+                </div>
+                <button type="button" class="mini-btn" @click="addProduceItem(item)">加入</button>
+              </article>
+            </template>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel wide-panel">
+      <div class="panel-head">
+        <h2>记录集与 JSONL 预览</h2>
+        <span class="panel-note">如果已经保存多条记录，导出时会按当前顺序逐行写出</span>
+      </div>
+      <div class="dataset-layout">
+        <div class="record-list">
+          <template x-if="!records.length">
+            <p class="empty-state">还没有保存任何记录。你也可以直接导出当前草稿。</p>
+          </template>
+          <template x-for="(record, index) in records" :key="`${record.label}-${index}`">
+            <article class="record-card">
+              <div class="record-head">
+                <strong x-text="record.label || `record-${index + 1}`"></strong>
+                <span class="muted-id" x-text="record.idol_card_id || '未指定偶像卡'"></span>
+              </div>
+              <p class="record-meta" x-text="`${record.scenario} · ${stageLabel(record.stage_type)}`"></p>
+              <p class="record-meta" x-text="`卡牌 ${record.deck.reduce((sum, entry) => sum + Number(entry.count || 1), 0)} 张 · 饮料 ${record.drinks.length} · 物品 ${record.produce_items.length}`"></p>
+              <div class="record-actions">
+                <button type="button" class="text-btn" @click="loadRecord(index)">编辑</button>
+                <button type="button" class="text-btn" @click="duplicateRecord(index)">复制</button>
+                <button type="button" class="text-btn danger-btn" @click="deleteRecord(index)">删除</button>
+              </div>
+            </article>
+          </template>
+        </div>
+        <div class="preview-block">
+          <textarea readonly :value="previewJsonl()" rows="18"></textarea>
+          <p class="import-error" x-show="importError" x-text="importError"></p>
+          <div class="command-box">
+            <code>python -m gakumas_rl.train --mode exam --scenario nia_master --manual-exam-setup your_file.jsonl</code>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>

@@ -65,9 +65,29 @@ def action__dispatch_all_available_work(app: "AppProcessor"):
         if _is_work_already_dispatched(app, group, width):
             continue
         app.device.click_element(group)
-        _dispatch_single_work(app)
+        dispatched = _dispatch_single_work(app)
+        if not dispatched:
+            logger.warning("dispatch_work: 当前派遣组未完成派遣，已跳过并继续后续流程。")
         sleep(3)
-        app.game_utils.wait_for_label(BaseUILabels.AVATAR, 10)
+        app.game_utils.wait_for_label(BaseUILabels.ITEM, 5)
+
+
+def _dismiss_connection_error_modal_if_present(app: "AppProcessor") -> bool:
+    """若出现通信错误弹窗，点击重试并等待过场。"""
+    modal = app.game_utils.try_get_modal(no_body=True)
+    if modal is None:
+        return False
+    if not string_match(modal.modal_title, [ModalText.TITLE.CONNECTION_ERROR, ModalText.TITLE.INFO_FETCH_FAILED]):
+        return False
+    action_button = modal.confirm_button or modal.cancel_button
+    if action_button is None:
+        logger.warning("dispatch_work: connection modal has no actionable button.")
+        return False
+    logger.warning(f"dispatch_work: 检测到网络错误弹窗 '{modal.modal_title}'，点击重试。")
+    app.device.click_element(action_button)
+    sleep(1)
+    app.game_utils.wait_loading()
+    return True
 
 def _is_work_already_dispatched(app: "AppProcessor", group, width):
     """判断该任务是否已派遣"""
@@ -155,14 +175,20 @@ def _select_work_duration(app: "AppProcessor"):
     )
     FLAG__Reconfigure_work_hour = True
 
-def _dispatch_single_work(app: "AppProcessor"):
+def _dispatch_single_work(app: "AppProcessor") -> bool:
     """
     派遣单个任务
     :param app:
     :return:
     """
     app.game_utils.wait_loading()
-    app.game_utils.wait_for_label(BaseUILabels.AVATAR)
+    if not app.game_utils.wait_for_label(BaseUILabels.AVATAR):
+        recovered = _dismiss_connection_error_modal_if_present(app)
+        if recovered and app.game_utils.wait_for_label(BaseUILabels.AVATAR, timeout=8):
+            logger.warning("dispatch_work: 网络弹窗恢复后继续派遣流程。")
+        else:
+            logger.warning("dispatch_work: 未找到可选头像，跳过当前派遣组。")
+            return False
     rejected_avatars: set[Yolo_Box] = set()
 
     def _get_dispatch_avatars() -> Yolo_Results:
@@ -217,12 +243,16 @@ def _dispatch_single_work(app: "AppProcessor"):
             app.debug_tools.add_box(avatar.x, avatar.y, avatar.w, avatar.h, label="非优选")
         app.debug_tools.clear_all()
         return False
-    avatar_group = app.latest_results.filter_by_label(BaseUILabels.AVATAR)
+    avatar_group = _get_dispatch_avatars()
+    if not avatar_group:
+        logger.warning("dispatch_work: 头像列表为空，无法继续当前派遣组。")
+        app.debug_tools.clear_all()
+        return False
     avatar_group_x, avatar_group_y = avatar_group.get_COL()
     prev_frame: Optional[np.ndarray] = None
     while True:
         if __try_dispatch_work__():
-            return
+            return True
         if isinstance(app.device, Android_App):
             app.device.swipe(avatar_group.w, avatar_group_y, avatar_group.x, avatar_group_y, 1)
         else:
@@ -231,13 +261,16 @@ def _dispatch_single_work(app: "AppProcessor"):
         if prev_frame is not None and not check_frame_change(prev_frame, app.latest_frame):
             rejected_avatars.clear()
         avatar_groups = app.latest_results.filter_by_label(BaseUILabels.AVATAR).group_yolo_boxes_by_position(None, avatar_group_x//6)
+        if not avatar_groups:
+            logger.warning("dispatch_work: 滚动后未检测到头像分组。")
+            break
         max_x_group = max(
             avatar_groups,
             key=lambda g: max(box.w for box in g.boxes),
         )
         if len(max_x_group) < 2:
             if __try_dispatch_work__():
-                return
+                return True
             break
 
         if prev_frame is not None and check_frame_change(prev_frame, app.latest_frame):
@@ -248,6 +281,7 @@ def _dispatch_single_work(app: "AppProcessor"):
     if fallback_avatar is None:
         logger.warning("No fallback avatar available after dispatch selection was rejected.")
         app.debug_tools.clear_all()
-        return
-    _assign_avatar_to_work(app, fallback_avatar)
+        return False
+    assigned = _assign_avatar_to_work(app, fallback_avatar)
     app.debug_tools.clear_all()
+    return bool(assigned)
