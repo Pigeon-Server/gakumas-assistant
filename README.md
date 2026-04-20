@@ -11,7 +11,7 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white">
-  <img alt="Yolo" src="https://img.shields.io/badge/Yolo-v11-blue">
+  <img alt="Yolo" src="https://img.shields.io/badge/Yolo-v26-blue">
   <br>
   <img alt="license" src="https://img.shields.io/github/license/Pigeon-Server/gakumas-assistant">
   <img alt="commit" src="https://img.shields.io/github/commit-activity/m/Pigeon-Server/gakumas-assistant">
@@ -58,7 +58,7 @@
 
 > 汉化插件暂不支持，请手动关闭汉化插件后使用
 
-> 本项目使用 `Yolov11n` 模型进行图像识别。Windows 会优先尝试 `DirectML`，macOS 会优先尝试 `CoreML`，其余平台会自动回退到 `CPUExecutionProvider`。
+> 本项目使用 `Yolov26n` 模型进行图像识别。Windows 会优先尝试 `DirectML`，macOS 会优先尝试 `CoreML`，其余平台会自动回退到 `CPUExecutionProvider`。
 
 ## 安装
 ### Plan1: 以打包的方式安装
@@ -155,7 +155,7 @@ git submodule update --init
 ```
 ### **YOLO检测模型训练:**  
 #### 训练：
-该项目基于 YOLO v11，并训练两个独立模型，分别负责主界面识别与训练界面识别。训练脚本位于 train/<model_name>/train.py。
+该项目基于 YOLO v26 Nano，并训练两个独立模型，分别负责主界面识别与训练界面识别。训练脚本位于 train/<model_name>/train.py。
 
 - BaseUI 模型：使用约 4.1K 张有效样本训练，用于主 UI 的目标检测。
 - Producer 模型：使用约 2K 张样本训练，用于训练界面的检测任务。
