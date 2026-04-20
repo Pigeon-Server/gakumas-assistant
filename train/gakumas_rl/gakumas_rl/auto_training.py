@@ -37,6 +37,15 @@ class AutoTrainingConfig:
     lr_decay_patience: int = 5
 
 
+@dataclass(frozen=True)
+class ExamRandomizationCurriculumConfig:
+    """按训练进度逐步放开考试随机化轴。"""
+
+    enabled: bool = False
+    stage_type_start_ratio: float = 0.10
+    use_after_item_start_ratio: float = 0.25
+
+
 class EarlyStoppingCallback:
     """早停回调，类似 YOLO 的训练策略。"""
 
@@ -282,11 +291,11 @@ def estimate_total_timesteps(
 
     base_timesteps = {
         'exam': {
-            'score': 500_000,
-            'clear': 300_000,
+            'score': 600_000,
+            'clear': 360_000,
         },
         'lesson': {
-            'default': 250_000,
+            'default': 300_000,
         },
         'planning': {
             'default': 1_000_000,

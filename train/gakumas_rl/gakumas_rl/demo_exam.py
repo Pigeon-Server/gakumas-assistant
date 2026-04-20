@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from .data import RUNS_DIR
+from .model import tensorize_observation
 from .service import LoadoutConfig, build_env_from_config
 
 _RESOURCE_KEYS = (
@@ -120,21 +122,38 @@ class RLlibPolicyRunner(PolicyRunner):
 
         env_name = f"gakumas_rl_demo_{hashlib.sha1(json.dumps(env_config, sort_keys=True).encode('utf-8')).hexdigest()[:12]}"
         register_env(env_name, lambda config: build_env_from_config(config))
-        model_name = register_rllib_model()
-        config = (
-            PPOConfig()
-            .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
-            .environment(env=env_name, env_config=env_config, disable_env_checking=True)
-            .framework('torch')
-            .training(
-                model={
-                    'custom_model': model_name,
-                    'custom_model_config': {'hidden_dim': 128},
-                },
+        self._api_stack = _resolve_rllib_api_stack(checkpoint_path)
+        self._torch = None
+        if self._api_stack == 'new':
+            from .rllib_model import build_rllib_module_spec
+
+            self._torch = __import__('torch')
+            config = (
+                PPOConfig()
+                .api_stack(enable_rl_module_and_learner=True, enable_env_runner_and_connector_v2=True)
+                .environment(env=env_name, env_config=env_config, disable_env_checking=True)
+                .framework('torch')
+                .rl_module(
+                    rl_module_spec=build_rllib_module_spec(_resolve_rllib_custom_model_config(checkpoint_path))
+                )
+                .env_runners(num_env_runners=0)
             )
-            .resources(num_gpus=0.0)
-            .env_runners(num_env_runners=0)
-        )
+        else:
+            model_name = register_rllib_model()
+            config = (
+                PPOConfig()
+                .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
+                .environment(env=env_name, env_config=env_config, disable_env_checking=True)
+                .framework('torch')
+                .training(
+                    model={
+                        'custom_model': model_name,
+                        'custom_model_config': _resolve_rllib_custom_model_config(checkpoint_path),
+                    },
+                )
+                .resources(num_gpus=0.0)
+                .env_runners(num_env_runners=0)
+            )
         try:
             self.algo = config.build_algo()
         except AttributeError:  # pragma: no cover - 兼容旧版 RLlib
@@ -142,6 +161,23 @@ class RLlibPolicyRunner(PolicyRunner):
         self.algo.restore(str(checkpoint_path))
 
     def predict(self, obs: dict[str, np.ndarray], deterministic: bool = True) -> int:
+        if self._api_stack == 'new':
+            from ray.rllib.core.columns import Columns
+
+            module = self.algo.get_module()
+            if module is None:
+                raise RuntimeError('RLlib new API checkpoint 缺少可用 RLModule。')
+            device = next(module.parameters()).device
+            batched_obs = tensorize_observation(obs, device)
+            with self._torch.no_grad():
+                output = module.forward_inference({Columns.OBS: batched_obs})
+                dist_cls = module.get_inference_action_dist_cls()
+                dist = dist_cls.from_logits(output[Columns.ACTION_DIST_INPUTS])
+                if deterministic:
+                    dist = dist.to_deterministic()
+                action = dist.sample()
+            return int(action.reshape(-1)[0].item())
+
         action = self.algo.compute_single_action(obs, explore=not deterministic)
         if isinstance(action, tuple):
             action = action[0]
@@ -152,6 +188,92 @@ class RLlibPolicyRunner(PolicyRunner):
             self.algo.stop()
         if self._started_ray:
             self._ray.shutdown()
+
+
+def _load_rllib_ctor_config(checkpoint_path: Path) -> dict[str, Any] | None:
+    """从 RLlib checkpoint 的构造参数中恢复算法配置。"""
+
+    ctor_args_path = checkpoint_path / 'class_and_ctor_args.pkl'
+    if not ctor_args_path.exists():
+        return None
+    try:
+        payload = pickle.loads(ctor_args_path.read_bytes())
+        args, kwargs = payload.get('ctor_args_and_kwargs', ((), {}))
+        if args and isinstance(args[0], dict):
+            return args[0]
+        config = kwargs.get('config') if isinstance(kwargs, dict) else None
+        if isinstance(config, dict):
+            return config
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_rllib_custom_model_config(checkpoint_path: Path) -> dict[str, Any]:
+    """优先从训练元数据或 checkpoint 中恢复 RLlib 自定义模型配置。"""
+
+    metadata_path = checkpoint_path.parent.parent / 'training_metadata.json'
+    if metadata_path.exists():
+        try:
+            payload = json.loads(metadata_path.read_text(encoding='utf-8'))
+            model_config = payload.get('config', {}).get('custom_model_config')
+            if isinstance(model_config, dict) and model_config:
+                return model_config
+        except Exception:
+            pass
+
+    algorithm_state_path = checkpoint_path / 'algorithm_state.pkl'
+    if algorithm_state_path.exists():
+        try:
+            payload = pickle.loads(algorithm_state_path.read_bytes())
+            model_config = payload.get('config', {}).get('model', {}).get('custom_model_config')
+            if isinstance(model_config, dict) and model_config:
+                return model_config
+        except Exception:
+            pass
+
+    ctor_config = _load_rllib_ctor_config(checkpoint_path)
+    if ctor_config:
+        model_config = ctor_config.get('model', {}).get('custom_model_config')
+        if isinstance(model_config, dict) and model_config:
+            return model_config
+        rl_module_spec = ctor_config.get('_rl_module_spec')
+        model_config = getattr(rl_module_spec, 'model_config', None)
+        if isinstance(model_config, dict) and model_config:
+            return model_config
+
+    return {'hidden_dim': 256}
+
+
+def _resolve_rllib_api_stack(checkpoint_path: Path) -> str:
+    """优先从训练元数据推断 RLlib checkpoint 属于 old 还是 new API stack。"""
+
+    metadata_path = checkpoint_path.parent.parent / 'training_metadata.json'
+    if metadata_path.exists():
+        try:
+            payload = json.loads(metadata_path.read_text(encoding='utf-8'))
+            api_stack = str(payload.get('config', {}).get('api_stack') or '').strip().lower()
+            if api_stack in {'old', 'new'}:
+                return api_stack
+        except Exception:
+            pass
+
+    algorithm_state_path = checkpoint_path / 'algorithm_state.pkl'
+    if algorithm_state_path.exists():
+        try:
+            payload = pickle.loads(algorithm_state_path.read_bytes())
+            config = payload.get('config', {})
+            if bool(config.get('enable_rl_module_and_learner')) and bool(config.get('enable_env_runner_and_connector_v2')):
+                return 'new'
+        except Exception:
+            pass
+
+    ctor_config = _load_rllib_ctor_config(checkpoint_path)
+    if ctor_config:
+        if bool(ctor_config.get('enable_rl_module_and_learner')) and bool(ctor_config.get('enable_env_runner_and_connector_v2')):
+            return 'new'
+
+    return 'old'
 
 
 class TorchPolicyRunner(PolicyRunner):

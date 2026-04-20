@@ -33,6 +33,15 @@ _ALLOWED_COMMON_PLAN_TYPES = {
     'ProducePlanType_Plan3',
 }
 
+_RARITY_BIAS_MAP = {
+    'IdolCardRarity_N': 1.00,
+    'IdolCardRarity_R': 0.96,
+    'IdolCardRarity_Sr': 0.88,
+    'IdolCardRarity_SSR': 0.78,
+    'IdolCardRarity_Ssr': 0.78,
+    'IdolCardRarity_Legend': 0.70,
+}
+
 
 def _rank_value(raw_rank: str | None) -> int:
     """把 rank 字段末尾的数字解析成可比较的整数。"""
@@ -46,21 +55,13 @@ def _rank_value(raw_rank: str | None) -> int:
 def _canonical_card_row(repository: MasterDataRepository, card_id: str) -> dict[str, Any] | None:
     """返回卡片的基础版本，避免把强化版当作卡池基准。"""
 
-    rows = repository.produce_cards.all(card_id)
-    if not rows:
-        return None
-    rows = sorted(rows, key=lambda row: int(row.get('upgradeCount') or 0))
-    return rows[0]
+    return repository.canonical_card_row(card_id)
 
 
 def _card_row_by_upgrade(repository: MasterDataRepository, card_id: str, upgrade_count: int) -> dict[str, Any] | None:
     """按卡 id 和强化次数解析具体卡面。"""
 
-    rows = repository.produce_cards.all(card_id)
-    for row in rows:
-        if int(row.get('upgradeCount') or 0) == upgrade_count:
-            return row
-    return _canonical_card_row(repository, card_id)
+    return repository.card_row_by_upgrade(card_id, upgrade_count)
 
 
 def _load_exam_initial_deck_rows(repository: MasterDataRepository, deck_id: str) -> list[dict[str, Any]]:
@@ -585,14 +586,6 @@ def sample_card_from_weighted_pool(
     sample_counts = sample_counts or Counter()
     preferred_ids = preferred_ids or set()
     pool_size = max(len(weighted_pool), 1)
-    rarity_bias_map = {
-        'IdolCardRarity_N': 1.00,
-        'IdolCardRarity_R': 0.96,
-        'IdolCardRarity_Sr': 0.88,
-        'IdolCardRarity_SSR': 0.78,
-        'IdolCardRarity_Ssr': 0.78,
-        'IdolCardRarity_Legend': 0.70,
-    }
     weights: list[float] = []
     for index, card in enumerate(weighted_pool):
         card_id = str(card.get('id') or '')
@@ -601,7 +594,7 @@ def sample_card_from_weighted_pool(
         sample_bias = min(float(sample_counts.get(card_id, 0)), 3.0) * 0.22
         preferred_bias = 0.12 if card_id in preferred_ids else 0.0
         evaluation_bias = float(card.get('evaluation') or 0) / 4000.0
-        rarity_bias = rarity_bias_map.get(str(card.get('rarity') or ''), 0.90)
+        rarity_bias = _RARITY_BIAS_MAP.get(str(card.get('rarity') or ''), 0.90)
         weights.append(max(0.08, (rank_bias + sample_bias + preferred_bias + evaluation_bias) * rarity_bias))
     probabilities = np.array(weights, dtype=np.float64)
     probabilities = probabilities / max(probabilities.sum(), 1e-8)
@@ -891,19 +884,20 @@ def build_initial_exam_deck(
         if loadout.deck_archetype is not None
         else set()
     )
+    card_limit_by_id = {
+        str(card.get('id') or ''): (
+            1 if card.get('noDeckDuplication') else max(2, sample_counts.get(str(card.get('id') or ''), 1) + 1)
+        )
+        for card in weighted_pool
+        if str(card.get('id') or '')
+    }
+    available = [
+        card
+        for card in weighted_pool
+        if seen_counts[str(card.get('id') or '')] < card_limit_by_id.get(str(card.get('id') or ''), 0)
+    ]
 
-    while len(deck) < deck_size and weighted_pool:
-        available: list[dict[str, Any]] = []
-        for card in weighted_pool:
-            card_id = str(card.get('id') or '')
-            if card.get('noDeckDuplication') and seen_counts[card_id] > 0:
-                continue
-            limit = 1 if card.get('noDeckDuplication') else max(2, sample_counts.get(card_id, 1) + 1)
-            if seen_counts[card_id] >= limit:
-                continue
-            available.append(card)
-        if not available:
-            break
+    while len(deck) < deck_size and available:
         selected = sample_card_from_weighted_pool(
             available,
             rng,
@@ -914,6 +908,13 @@ def build_initial_exam_deck(
             break
         sampled_variant = repository.sample_random_card_variant(str(selected.get('id') or ''), rng)
         _append_card(sampled_variant if sampled_variant is not None else selected)
+        selected_card_id = str(selected.get('id') or '')
+        if seen_counts[selected_card_id] >= card_limit_by_id.get(selected_card_id, 0):
+            available = [
+                card
+                for card in available
+                if str(card.get('id') or '') != selected_card_id
+            ]
 
     return _apply_initial_deck_constraints(
         repository,

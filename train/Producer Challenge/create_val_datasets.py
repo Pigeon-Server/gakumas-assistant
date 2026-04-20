@@ -9,9 +9,9 @@ def split_by_percentage(test_ratio, pattern=r'(.+?)_\d+\.'):
     :param test_ratio: 每个数据集的测试集百分比
     :param pattern: 文件名匹配正则
     """
-    base_dir = 'datasets'
-    img_src = os.path.join(base_dir, 'images', 'train')
-    label_src = os.path.join(base_dir, 'labels', 'train')
+    base_dir = os.getcwd()
+    img_src = os.path.join(base_dir, 'images', 'Train')
+    label_src = os.path.join(base_dir, 'labels', 'Train')
     
     # 创建测试目录
     img_dst = os.path.join(base_dir, 'images', 'val')
@@ -37,35 +37,42 @@ def split_by_percentage(test_ratio, pattern=r'(.+?)_\d+\.'):
         # 计算应抽取数量（至少1个）
         total = len(files)
         sample_num = max(1, round(total * test_ratio / 100))
-        
+
         # 实际抽样数量处理
         actual_sample = min(sample_num, total)
         if actual_sample == 0:
             print(f"数据集 {dataset} 跳过（计算样本数为0）")
             continue
 
-        # 执行分层随机抽样
-        selected = random.sample(files, actual_sample)
+        # 排序后均匀间隔抽样，避免集中抽取
+        sorted_files = sorted(files)
+        interval = total / actual_sample
+        selected = [sorted_files[int(interval * i + interval / 2)] for i in range(actual_sample)]
+
+        # 打乱顺序，避免按文件名顺序处理
+        random.shuffle(selected)
         
-        # 复制文件
-        copied = 0
+        # 移动文件
+        moved_imgs = 0
+        moved_labels = 0
         for img_file in selected:
             # 处理图片
             src_img = os.path.join(img_src, img_file)
             dst_img = os.path.join(img_dst, img_file)
-            if not os.path.exists(dst_img):
-                shutil.copy2(src_img, dst_img)
-                copied += 1
-            
+            if os.path.exists(src_img) and not os.path.exists(dst_img):
+                shutil.move(src_img, dst_img)
+                moved_imgs += 1
+
             # 处理标签
             label_file = f"{os.path.splitext(img_file)[0]}.txt"
             src_label = os.path.join(label_src, label_file)
             dst_label = os.path.join(label_dst, label_file)
             if os.path.exists(src_label) and not os.path.exists(dst_label):
-                shutil.copy2(src_label, dst_label)
+                shutil.move(src_label, dst_label)
+                moved_labels += 1
 
-        total_test += copied
-        print(f"数据集 [{dataset}] 原样本 {total} → 测试集 {copied} ({100*copied/total:.1f}%)")
+        total_test += moved_imgs
+        print(f"数据集 [{dataset}] 原样本 {total} → 测试集 {moved_imgs} 张图片, {moved_labels} 个标签 ({100*moved_imgs/total:.1f}%)")
 
     print(f"\n总测试样本：{total_test}")
 

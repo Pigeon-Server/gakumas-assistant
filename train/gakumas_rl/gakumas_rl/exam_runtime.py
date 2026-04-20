@@ -1087,10 +1087,10 @@ class ExamRuntime:
             + self.resources['full_power_point'] * 0.3
         )
 
-    def _reward_profile_config(self) -> dict[str, float]:
-        """返回当前 reward config 的 dict 视图（兼容已有潜势函数签名）。"""
+    def _reward_profile_config(self) -> RewardConfig:
+        """返回当前生效的奖励配置对象。"""
 
-        return self.reward_config.to_dict()
+        return self.reward_config
 
     def _plan_reward_family(self) -> str:
         """把偶像 plan type 归并成奖励层使用的资源流派。"""
@@ -1250,7 +1250,7 @@ class ExamRuntime:
         color_ratio = self._effective_score_bonus_multiplier() / base_multiplier
         return float(np.clip(math.tanh((color_ratio - 1.0) * 1.4), -0.75, 0.75))
 
-    def _phi_goal(self, config: dict[str, float]) -> float:
+    def _phi_goal(self) -> float:
         """潜势函数：离真实目标还有多远。"""
 
         primary_ratio = self._primary_goal_ratio()
@@ -1272,22 +1272,23 @@ class ExamRuntime:
                 finish_bonus += 0.55
         return progress * 1.15 + secondary_progress * 0.35 + pace_gap * 0.55 + finish_bonus
 
-    def _phi_eval(self, config: dict[str, float]) -> float:
+    def _phi_eval(self, config: RewardConfig) -> float:
         """潜势函数：当前局面的终局评价边际价值。"""
 
         primary_ratio = self._primary_goal_ratio()
         score_value = self._score_value_curve(primary_ratio)
         judging_alignment = self._judging_alignment()
         turn_window_value = self._turn_window_value()
-        value = score_value * (0.70 + judging_alignment * 0.60)
-        value += turn_window_value * float(config.get('turn_window_weight', 0.0))
+        alignment_weight = float(config.judging_alignment_weight)
+        value = score_value * (0.70 + judging_alignment * alignment_weight)
+        value += turn_window_value * float(config.turn_window_weight)
         if self.reward_mode == 'clear':
             value += self._clear_finish_value() * 0.20
         if self._fan_vote_enabled_for_mode():
             value += self._fan_vote_gain_value() * 0.30
         return value
 
-    def _phi_archetype(self, config: dict[str, float]) -> float:
+    def _phi_archetype(self) -> float:
         """潜势函数：按 plan 感知未来资源的可兑现价值。"""
 
         remaining_turn_ratio = self._remaining_turn_ratio()
@@ -1331,10 +1332,8 @@ class ExamRuntime:
             + self._resource_curve(self.resources['lesson_buff'], 10.0) * 0.40
         )
 
-    def _phi_risk(self, config: dict[str, float]) -> float:
+    def _phi_risk(self) -> float:
         """潜势函数：失败风险、负面状态和体力断线风险。"""
-
-        del config
         negative_penalty = (
             self.resources['sleepy'] * 0.30
             + self.resources['panic'] * 0.28
@@ -1349,10 +1348,10 @@ class ExamRuntime:
         safety = self._stamina_ratio() * 0.75 + min(remaining_drinks, 2) * 0.12
         return safety - negative_penalty - tempo_pressure * 0.90 - low_stamina * 0.80 - future_gimmick_pressure
 
-    def _phi_efficiency(self, config: dict[str, float]) -> float:
+    def _phi_efficiency(self, config: RewardConfig) -> float:
         """潜势函数：在主要目标可达后，鼓励更高效地收官。"""
 
-        efficiency_gate = float(config.get('efficiency_gate', 0.85))
+        efficiency_gate = float(config.efficiency_gate)
         gate = max(min((self._primary_goal_ratio() - efficiency_gate) / max(1.0 - efficiency_gate, 1e-6), 1.0), 0.0)
         if gate <= 0.0:
             return 0.0
@@ -1364,62 +1363,62 @@ class ExamRuntime:
             + min(self._resource_stock(), 12.0) / 12.0 * 0.15
         )
         overshoot = max(self._primary_goal_ratio() - 1.0, 0.0)
-        return gate * spare_value - overshoot * float(config.get('efficiency_overshoot_penalty', 0.0))
+        return gate * spare_value - overshoot * float(config.efficiency_overshoot_penalty)
 
-    def _potential_value(self, config: dict[str, float]) -> float:
+    def _potential_value(self, config: RewardConfig) -> float:
         """统一潜势函数；step() 会对它做差分得到 shaping。"""
 
         return (
-            float(config.get('goal_weight', 0.0)) * self._phi_goal(config)
-            + float(config.get('eval_weight', 0.0)) * self._phi_eval(config)
-            + float(config.get('archetype_weight', 0.0)) * self._phi_archetype(config)
-            + float(config.get('risk_weight', 0.0)) * self._phi_risk(config)
-            + float(config.get('efficiency_weight', 0.0)) * self._phi_efficiency(config)
+            float(config.goal_weight) * self._phi_goal()
+            + float(config.eval_weight) * self._phi_eval(config)
+            + float(config.archetype_weight) * self._phi_archetype()
+            + float(config.risk_weight) * self._phi_risk()
+            + float(config.efficiency_weight) * self._phi_efficiency(config)
         )
 
-    def _terminal_utility(self, config: dict[str, float]) -> float:
+    def _terminal_utility(self, config: RewardConfig) -> float:
         """终局效用：只在回合真正结束时发放。"""
 
         if not self.terminated:
             return 0.0
-        stamina_term = self._stamina_ratio() * float(config.get('terminal_stamina_weight', 0.0))
-        speed_term = self._remaining_turn_ratio() * float(config.get('terminal_speed_weight', 0.0))
-        overshoot_penalty = float(config.get('overshoot_penalty', 0.0))
+        stamina_term = self._stamina_ratio() * float(config.terminal_stamina_weight)
+        speed_term = self._remaining_turn_ratio() * float(config.terminal_speed_weight)
+        overshoot_penalty = float(config.overshoot_penalty)
         if self._uses_clear_training_rules():
             clear_target = float(self._current_clear_target() or self._target_score() or 0.0)
             clear_ratio = self.score / max(clear_target, 1.0)
             perfect_ratio = self._secondary_goal_ratio()
-            utility = self._score_value_curve(perfect_ratio) * float(config.get('terminal_eval_weight', 0.0))
+            utility = self._score_value_curve(perfect_ratio) * float(config.terminal_eval_weight)
             if self.clear_state == 'perfect':
-                utility += float(config.get('lesson_perfect_reward', 0.0)) + speed_term + self._clear_finish_value() * 0.25
+                utility += float(config.lesson_perfect_reward) + speed_term + self._clear_finish_value() * 0.25
             elif self.clear_state == 'cleared':
-                utility += float(config.get('lesson_clear_reward', 0.0)) + self._clear_finish_value()
+                utility += float(config.lesson_clear_reward) + self._clear_finish_value()
             else:
-                utility -= float(config.get('terminal_failure_weight', 0.0)) * min(max(1.0 - clear_ratio, 0.0), 1.0)
+                utility -= float(config.terminal_failure_weight) * min(max(1.0 - clear_ratio, 0.0), 1.0)
             utility += stamina_term
             utility -= max(perfect_ratio - 1.0, 0.0) * overshoot_penalty
             return utility
 
         primary_ratio = self._primary_goal_ratio()
-        utility = self._score_value_curve(primary_ratio) * float(config.get('terminal_eval_weight', 0.0))
+        utility = self._score_value_curve(primary_ratio) * float(config.terminal_eval_weight)
         if primary_ratio >= 1.0:
-            utility += float(config.get('terminal_pass_reward', 0.0)) + speed_term
+            utility += float(config.terminal_pass_reward) + speed_term
         else:
-            utility -= float(config.get('terminal_failure_weight', 0.0)) * min(max(1.0 - primary_ratio, 0.0), 1.0)
+            utility -= float(config.terminal_failure_weight) * min(max(1.0 - primary_ratio, 0.0), 1.0)
         utility += stamina_term
         utility -= max(primary_ratio - 1.0, 0.0) * overshoot_penalty
         force_end_score = float(self.profile.get('force_end_score') or 0.0)
         if force_end_score > 0 and self.score >= force_end_score:
-            utility += float(config.get('terminal_force_end_bonus', 0.0))
+            utility += float(config.terminal_force_end_bonus)
         if self._fan_vote_enabled_for_mode():
-            utility += self._fan_vote_gain_value() * float(config.get('terminal_nia_bonus', 0.0))
+            utility += self._fan_vote_gain_value() * float(config.terminal_nia_bonus)
         return utility
 
     def _utility_reward_signal(self) -> float:
         """统一奖励信号：终局效用加 potential-based shaping。"""
 
         config = self._reward_profile_config()
-        return self._terminal_utility(config) + float(config.get('shape_scale', 0.0)) * self._potential_value(config)
+        return self._terminal_utility(config) + float(config.shape_scale) * self._potential_value(config)
 
     def _score_reward_signal(self) -> float:
         """高分导向 reward，内部走统一终局效用 + shaping 框架。"""
@@ -1582,6 +1581,15 @@ class ExamRuntime:
         """判断某个持续效果当前是否在场。"""
 
         return any(str(item.effect.get('effectType') or '') == effect_type for item in self.active_effects)
+
+    def _timed_effect_stack_value(self, effect_type: str, *, default_value: float = 1.0) -> float:
+        """累加同类持续效果的主数值，供追加触发类效果复用。"""
+
+        total = 0.0
+        for timed in self._timed_effects_of_type(effect_type):
+            value = self._raw_effect_value(timed.effect)
+            total += value if value > 0 else default_value
+        return total
 
     def _current_card_grow_total(self, grow_effect_type: str) -> float:
         """汇总当前出牌卡上某种成长效果的数值。"""
@@ -2174,7 +2182,8 @@ class ExamRuntime:
 
         if skipped:
             self._dispatch_phase('ProduceExamPhaseType_ExamTurnSkip', phase_value=self.turn)
-        self.score += self._score_gain(self._apply_score_value_modifiers(self.resources['review']))
+        review_activation_count = max(1 + int(round(self._timed_effect_stack_value('ProduceExamEffectType_ExamReviewCountAdd'))), 1)
+        self.score += self._score_gain(self._apply_score_value_modifiers(self.resources['review'])) * review_activation_count
         self._update_clear_state_after_score_change()
         self._dispatch_phase('ProduceExamPhaseType_ExamEndTurn', phase_value=self.turn)
         self._dispatch_interval_phase('ProduceExamPhaseType_ExamEndTurnInterval', self.turn)
@@ -2405,14 +2414,7 @@ class ExamRuntime:
 
         if counter_value <= 0:
             return
-        phase_values = {
-            int(value)
-            for trigger in self.repository.exam_triggers.rows
-            if phase_type in [str(item) for item in trigger.get('phaseTypes', []) if item]
-            for value in trigger.get('phaseValues', [])
-            if int(value or 0) > 0
-        }
-        for interval in sorted(phase_values):
+        for interval in self.repository.interval_phase_values.get(phase_type, ()):
             if counter_value % interval != 0:
                 continue
             self._dispatch_phase(phase_type, phase_value=interval, acting_card=acting_card)
@@ -2671,6 +2673,7 @@ class ExamRuntime:
             'ProduceExamEffectType_ExamParameterBuffAdditive',
             'ProduceExamEffectType_ExamParameterBuffMultiplePerTurn',
             'ProduceExamEffectType_ExamPlayableValueAdd',
+            'ProduceExamEffectType_ExamReviewCountAdd',
             'ProduceExamEffectType_ExamReviewMultiple',
             'ProduceExamEffectType_ExamSearchPlayCardStaminaConsumptionChange',
             'ProduceExamEffectType_ExamStaminaConsumptionAdd',
@@ -2799,6 +2802,16 @@ class ExamRuntime:
                 )
             self._gain_block(delta, effect_type=effect_type, status_change_origin=source)
             return
+        if effect_type == 'ProduceExamEffectType_ExamBlockDependBlockConsumptionSum':
+            delta = self._ceil_positive(self.total_counters['block_consumed'] * self._ratio_value(effect))
+            if source == 'card':
+                delta = self._adjust_direct_gain(
+                    delta,
+                    add_grow_type='ProduceCardGrowEffectType_BlockAdd',
+                    reduce_grow_type='ProduceCardGrowEffectType_BlockReduce',
+                )
+            self._gain_block(delta, effect_type=effect_type, status_change_origin=source)
+            return
         if effect_type == 'ProduceExamEffectType_ExamBlockAddMultipleAggressive':
             base_delta = self._compose_referenced_gain(
                 base=max(self._raw_effect_value(effect), 0.0),
@@ -2877,6 +2890,9 @@ class ExamRuntime:
             return
         if effect_type == 'ProduceExamEffectType_ExamParameterBuffReduce':
             self.resources['parameter_buff'] = max(self.resources['parameter_buff'] - self._direct_value(effect), 0.0)
+            return
+        if effect_type == 'ProduceExamEffectType_ExamParameterBuffMultiplePerTurnReduce':
+            self._consume_parameter_buff_multiple(self._direct_value(effect))
             return
         if effect_type == 'ProduceExamEffectType_ExamParameterBuffDependLessonBuff':
             delta = self._ceil_positive(self.resources['lesson_buff'] * self._ratio_value(effect))
@@ -3734,5 +3750,3 @@ class ExamRuntime:
         """解析效果次数字段，缺省时按 1 处理。"""
 
         return float(effect.get('effectCount') or effect.get('effectValue1') or 1)
-
-

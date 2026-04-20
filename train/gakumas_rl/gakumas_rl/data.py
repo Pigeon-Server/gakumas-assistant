@@ -65,6 +65,12 @@ def _upgrade_count(row: dict[str, Any]) -> int:
     return int(row.get('upgradeCount') or 0)
 
 
+def _card_cache_key(row: dict[str, Any]) -> tuple[str, int]:
+    """为卡牌主数据行生成稳定缓存键。"""
+
+    return (str(row.get('id') or ''), _upgrade_count(row))
+
+
 def _random_upgrade_weight(upgrade_count: int) -> float:
     if upgrade_count <= 0:
         return 0.30
@@ -265,6 +271,13 @@ class MasterDataRepository:
         self.cache_dir = self.root_dir / '.gakumas_rl_cache'
         self._table_cache: dict[str, TableIndex] = {}
         self._localization_cache: dict[str, dict[str, dict[str, Any]]] = {}
+        self._card_exam_effect_types_cache: dict[tuple[str, int], tuple[str, ...]] = {}
+        self._card_trigger_phases_cache: dict[tuple[str, int], tuple[str, ...]] = {}
+        self._drink_exam_effect_types_cache: dict[str, tuple[str, ...]] = {}
+        self._weighted_card_pool_cache: dict[tuple[str, str, str], tuple[dict[str, Any], ...]] = {}
+        self._canonical_card_row_cache: dict[str, dict[str, Any] | None] = {}
+        self._card_row_by_upgrade_cache: dict[str, dict[int, dict[str, Any]]] = {}
+        self._card_variant_sampling_cache: dict[str, tuple[tuple[dict[str, Any], ...], np.ndarray]] = {}
 
     # 原始主数据与本地化都先经过这里的清洗和缓存入口。
     def _sanitize_yaml(self, text: str) -> str:
@@ -782,6 +795,10 @@ class MasterDataRepository:
             if cost_type:
                 card_cost_types.add(str(cost_type))
 
+        shop_card_action_types = tuple(f'shop_buy_card_{index}' for index in range(1, 5))
+        shop_drink_action_types = tuple(f'shop_buy_drink_{index}' for index in range(1, 5))
+        shop_upgrade_action_types = tuple(f'shop_upgrade_card_{index}' for index in range(1, 5))
+        shop_delete_action_types = tuple(f'shop_delete_card_{index}' for index in range(1, 5))
         action_types = (
             'lesson_vocal_normal',
             'lesson_dance_normal',
@@ -802,6 +819,11 @@ class MasterDataRepository:
             'business',
             'present',
             'refresh',
+            *shop_card_action_types,
+            *shop_drink_action_types,
+            *shop_upgrade_action_types,
+            *shop_delete_action_types,
+            'pre_audition_continue',
             'drink',
             'card',
             'end_turn',
@@ -859,30 +881,49 @@ class MasterDataRepository:
     def canonical_card_row(self, card_id: str) -> dict[str, Any] | None:
         """返回该卡 id 的最低强化版本。"""
 
-        rows = self.produce_cards.all(card_id)
-        if not rows:
-            return None
-        return min(rows, key=_upgrade_count)
+        normalized_card_id = str(card_id or '')
+        cached = self._canonical_card_row_cache.get(normalized_card_id)
+        if cached is not None or normalized_card_id in self._canonical_card_row_cache:
+            return cached
+        rows = self.produce_cards.all(normalized_card_id)
+        resolved = min(rows, key=_upgrade_count) if rows else None
+        self._canonical_card_row_cache[normalized_card_id] = resolved
+        return resolved
 
     def card_row_by_upgrade(self, card_id: str, upgrade_count: int, *, fallback_to_canonical: bool = True) -> dict[str, Any] | None:
         """按 card id + upgradeCount 查找具体卡面。"""
 
-        rows = self.produce_cards.all(card_id)
-        for row in rows:
-            if _upgrade_count(row) == int(upgrade_count):
-                return row
+        normalized_card_id = str(card_id or '')
+        upgrade_map = self._card_row_by_upgrade_cache.get(normalized_card_id)
+        if upgrade_map is None:
+            upgrade_map = {
+                _upgrade_count(row): row
+                for row in self.produce_cards.all(normalized_card_id)
+            }
+            self._card_row_by_upgrade_cache[normalized_card_id] = upgrade_map
+        resolved = upgrade_map.get(int(upgrade_count))
+        if resolved is not None:
+            return resolved
         if fallback_to_canonical:
-            return self.canonical_card_row(card_id)
+            return self.canonical_card_row(normalized_card_id)
         return None
 
     def sample_random_card_variant(self, card_id: str, rng: np.random.Generator) -> dict[str, Any] | None:
         """为随机获得的新卡按常见强化分布抽样 upgradeCount。"""
 
-        rows = sorted(self.produce_cards.all(card_id), key=_upgrade_count)
+        normalized_card_id = str(card_id or '')
+        cached = self._card_variant_sampling_cache.get(normalized_card_id)
+        if cached is None:
+            rows = tuple(sorted(self.produce_cards.all(normalized_card_id), key=_upgrade_count))
+            if not rows:
+                return None
+            weights = np.array([_random_upgrade_weight(_upgrade_count(row)) for row in rows], dtype=np.float64)
+            weights = weights / max(weights.sum(), 1e-8)
+            cached = (rows, weights)
+            self._card_variant_sampling_cache[normalized_card_id] = cached
+        rows, weights = cached
         if not rows:
             return None
-        weights = np.array([_random_upgrade_weight(_upgrade_count(row)) for row in rows], dtype=np.float64)
-        weights = weights / max(weights.sum(), 1e-8)
         return rows[int(rng.choice(len(rows), p=weights))]
 
     def card_axis_effect_types(self, card: dict[str, Any]) -> list[str]:
@@ -959,6 +1000,10 @@ class MasterDataRepository:
                 'lesson_visual_hard',
             )
         if route_type == 'nia':
+            shop_card_action_types = tuple(f'shop_buy_card_{index}' for index in range(1, 5))
+            shop_drink_action_types = tuple(f'shop_buy_drink_{index}' for index in range(1, 5))
+            shop_upgrade_action_types = tuple(f'shop_upgrade_card_{index}' for index in range(1, 5))
+            shop_delete_action_types = tuple(f'shop_delete_card_{index}' for index in range(1, 5))
             action_types = action_types + (
                 'self_lesson_vocal_normal',
                 'self_lesson_vocal_sp',
@@ -969,6 +1014,11 @@ class MasterDataRepository:
                 'activity',
                 'business',
                 'present',
+                *shop_card_action_types,
+                *shop_drink_action_types,
+                *shop_upgrade_action_types,
+                *shop_delete_action_types,
+                'pre_audition_continue',
             )
         first_stage = self.stage_thresholds.get((scenario_id, audition_sequence[0]), {})
         weight_vector = np.array(
@@ -1026,8 +1076,30 @@ class MasterDataRepository:
                 values.extend(str(value) for value in group.get(key, []) if value)
         return values
 
+    @cached_property
+    def interval_phase_values(self) -> dict[str, tuple[int, ...]]:
+        """按 phase_type 预编译所有正整数 interval phase 值，避免运行时反复全表扫描。"""
+
+        phase_type_to_values: dict[str, set[int]] = defaultdict(set)
+        for trigger in self.exam_triggers.rows:
+            phase_types = [str(item) for item in trigger.get('phaseTypes', []) if item]
+            positive_values = [int(value) for value in trigger.get('phaseValues', []) if int(value or 0) > 0]
+            if not phase_types or not positive_values:
+                continue
+            for phase_type in phase_types:
+                phase_type_to_values[phase_type].update(positive_values)
+        return {
+            phase_type: tuple(sorted(values))
+            for phase_type, values in phase_type_to_values.items()
+        }
+
     def card_exam_effect_types(self, card: dict[str, Any]) -> list[str]:
         """汇总单张卡牌显式和间接声明的考试效果类型。"""
+
+        cache_key = _card_cache_key(card)
+        cached = self._card_exam_effect_types_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
 
         types: list[str] = []
         for effect_item in card.get('playEffects', []):
@@ -1040,18 +1112,32 @@ class MasterDataRepository:
             if effect and effect.get('effectType'):
                 types.append(str(effect['effectType']))
         types.extend(self._resolve_effect_group_types(card.get('effectGroupIds', []), 'examEffectTypes'))
-        return types
+        cached_types = tuple(types)
+        self._card_exam_effect_types_cache[cache_key] = cached_types
+        return list(cached_types)
 
     def card_trigger_phases(self, card: dict[str, Any]) -> list[str]:
         """返回卡牌主动触发器声明的 phase 列表。"""
 
+        cache_key = _card_cache_key(card)
+        cached = self._card_trigger_phases_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
         trigger = self.exam_trigger_map.get(str(card.get('playProduceExamTriggerId') or ''))
         if not trigger:
             return []
-        return [str(value) for value in trigger.get('phaseTypes', []) if value]
+        cached_phases = tuple(str(value) for value in trigger.get('phaseTypes', []) if value)
+        self._card_trigger_phases_cache[cache_key] = cached_phases
+        return list(cached_phases)
 
     def drink_exam_effect_types(self, drink: dict[str, Any]) -> list[str]:
         """汇总饮料显式和间接声明的考试效果类型。"""
+
+        drink_id = str(drink.get('id') or '')
+        cached = self._drink_exam_effect_types_cache.get(drink_id)
+        if cached is not None:
+            return list(cached)
 
         types: list[str] = []
         for drink_effect_id in drink.get('produceDrinkEffectIds', []):
@@ -1062,7 +1148,10 @@ class MasterDataRepository:
             if exam_effect and exam_effect.get('effectType'):
                 types.append(str(exam_effect['effectType']))
         types.extend(self._resolve_effect_group_types(drink.get('effectGroupIds', []), 'examEffectTypes'))
-        return types
+        cached_types = tuple(types)
+        if drink_id:
+            self._drink_exam_effect_types_cache[drink_id] = cached_types
+        return list(cached_types)
 
     def weighted_card_pool(
         self,
@@ -1071,6 +1160,11 @@ class MasterDataRepository:
         plan_type: str | None = None,
     ) -> list[dict[str, Any]]:
         """构造默认考试卡池，并按主数据先验做降序排序。"""
+
+        cache_key = (scenario.produce_id, str(focus_effect_type or ''), str(plan_type or ''))
+        cached = self._weighted_card_pool_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
 
         candidates = []
         allowed_plan_types = _allowed_plan_types(plan_type)
@@ -1093,7 +1187,9 @@ class MasterDataRepository:
                 score += 1.0
             candidates.append((score, card))
         candidates.sort(key=lambda item: item[0], reverse=True)
-        return [card for _, card in candidates]
+        cached_pool = tuple(card for _, card in candidates)
+        self._weighted_card_pool_cache[cache_key] = cached_pool
+        return list(cached_pool)
 
     def build_initial_exam_deck(
         self,
@@ -1303,4 +1399,3 @@ class MasterDataRepository:
         ]
         values = [abs(float(value)) for value in values if value not in (None, '', 0)]
         return float(np.mean(values)) if values else 1.0
-

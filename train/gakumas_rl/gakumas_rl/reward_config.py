@@ -27,14 +27,15 @@ class RewardConfig:
     #  5 个潜势函数各自的权重
     goal_weight: float = 0.95        # Φ_goal：离通关目标的距离
     eval_weight: float = 1.55        # Φ_eval：终局评价边际价值
-    archetype_weight: float = 1.20   # Φ_archetype：流派资源估值
-    risk_weight: float = 0.60        # Φ_risk：负面状态 / 体力风险
-    efficiency_weight: float = 0.20  # Φ_efficiency：收官效率
+    archetype_weight: float = 1.10   # Φ_archetype：流派资源估值
+    risk_weight: float = 0.70        # Φ_risk：负面状态 / 体力风险
+    efficiency_weight: float = 0.28  # Φ_efficiency：收官效率
 
     # ── Dense 子项参数 ─────────────────────────────────────────────
-    turn_window_weight: float = 0.55       # 回合颜色窗口价值权重
+    turn_window_weight: float = 0.80       # 回合颜色窗口价值权重
+    judging_alignment_weight: float = 0.70  # 审查基准与当前三维匹配度权重
     efficiency_gate: float = 0.92          # Φ_efficiency 启动阈值
-    efficiency_overshoot_penalty: float = 0.12  # 超线惩罚系数
+    efficiency_overshoot_penalty: float = 0.32  # 超线惩罚系数
 
     # ── 资源估值缩放（Φ_archetype）──────────────────────────────
     #  sense / logic / anomaly 流派各自资源的 soft_cap 与权重
@@ -51,17 +52,17 @@ class RewardConfig:
     terminal_stamina_weight: float = 0.45  # 剩余体力加权
     terminal_speed_weight: float = 0.40    # 剩余回合加权
     terminal_failure_weight: float = 5.0   # 失败惩罚（越大惩罚越重）
-    terminal_force_end_bonus: float = 1.2  # 达到最高分自动结束奖励
+    terminal_force_end_bonus: float = 1.8  # 达到最高分自动结束奖励
     terminal_nia_bonus: float = 1.25       # NIA fan vote 终局奖励
     lesson_clear_reward: float = 4.0       # 课程 Clear 一次性奖励
     lesson_perfect_reward: float = 6.5     # 课程 Perfect 一次性奖励
-    overshoot_penalty: float = 0.55        # 超线惩罚（终局）
+    overshoot_penalty: float = 0.95        # 超线惩罚（终局）
 
     # ── 截断 / 惩罚机制 ──────────────────────────────────────────
-    invalid_action_penalty: float = -0.25  # 选择了不可用动作的即时惩罚
-    skip_turn_penalty: float = 0.0         # 空过回合（未出牌直接结束回合）的惩罚
+    invalid_action_penalty: float = -0.45  # 选择了不可用动作的即时惩罚
+    skip_turn_penalty: float = -0.02       # 空过回合（未出牌直接结束回合）的惩罚
     stamina_death_penalty: float = -1.0    # 体力归零导致强制结束时的额外惩罚
-    consecutive_end_turn_penalty: float = 0.0  # 连续结束回合的递增惩罚
+    consecutive_end_turn_penalty: float = -0.04  # 连续结束回合的递增惩罚
 
     # ── 里程碑奖励（Milestone）──────────────────────────────────
     #  在分数首次达到某些关键比例时发放一次性奖励
@@ -78,7 +79,7 @@ class RewardConfig:
 
     # ── 全局缩放 ──────────────────────────────────────────────────
     reward_scale: float = 1.0              # 最终奖励值全局缩放
-    reward_clip: float = 0.0              # >0 时对最终奖励做 clip(-c, c)
+    reward_clip: float = 25.0             # >0 时对最终奖励做 clip(-c, c)
 
     def to_dict(self) -> dict[str, Any]:
         """转成普通 dict，方便序列化与日志记录。"""
@@ -119,22 +120,27 @@ SCORE_PROFILE = RewardConfig(
     shape_scale=1.85,
     goal_weight=0.95,
     eval_weight=1.55,
-    archetype_weight=1.20,
-    risk_weight=0.60,
-    efficiency_weight=0.20,
-    turn_window_weight=0.55,
+    archetype_weight=1.10,
+    risk_weight=0.70,
+    efficiency_weight=0.28,
+    turn_window_weight=0.85,
+    judging_alignment_weight=0.85,
     efficiency_gate=0.92,
-    efficiency_overshoot_penalty=0.12,
+    efficiency_overshoot_penalty=0.32,
     terminal_pass_reward=5.5,
     terminal_eval_weight=5.0,
     terminal_stamina_weight=0.45,
     terminal_speed_weight=0.40,
     terminal_failure_weight=5.0,
-    terminal_force_end_bonus=1.2,
+    terminal_force_end_bonus=1.8,
     terminal_nia_bonus=1.25,
     lesson_clear_reward=4.0,
     lesson_perfect_reward=6.5,
-    overshoot_penalty=0.55,
+    overshoot_penalty=0.95,
+    invalid_action_penalty=-0.60,
+    skip_turn_penalty=-0.02,
+    consecutive_end_turn_penalty=-0.04,
+    reward_clip=25.0,
     milestone_50_reward=0.5,
     milestone_75_reward=1.0,
     milestone_100_reward=2.0,
@@ -145,24 +151,28 @@ CLEAR_PROFILE = RewardConfig(
     shape_scale=1.55,
     goal_weight=1.45,
     eval_weight=1.00,
-    archetype_weight=0.75,
-    risk_weight=1.10,
-    efficiency_weight=0.45,
-    turn_window_weight=0.30,
+    archetype_weight=0.68,
+    risk_weight=1.18,
+    efficiency_weight=0.60,
+    turn_window_weight=0.45,
+    judging_alignment_weight=0.45,
     efficiency_gate=0.75,
-    efficiency_overshoot_penalty=1.10,
+    efficiency_overshoot_penalty=1.45,
     terminal_pass_reward=7.2,
     terminal_eval_weight=3.8,
     terminal_stamina_weight=0.90,
     terminal_speed_weight=0.95,
     terminal_failure_weight=7.0,
-    terminal_force_end_bonus=1.7,
+    terminal_force_end_bonus=2.1,
     terminal_nia_bonus=1.10,
     lesson_clear_reward=5.4,
     lesson_perfect_reward=8.2,
-    overshoot_penalty=2.20,
-    skip_turn_penalty=-0.05,
-    stamina_death_penalty=-2.0,
+    overshoot_penalty=2.60,
+    invalid_action_penalty=-0.95,
+    skip_turn_penalty=-0.08,
+    stamina_death_penalty=-2.3,
+    consecutive_end_turn_penalty=-0.15,
+    reward_clip=25.0,
     milestone_50_reward=0.8,
     milestone_75_reward=1.5,
     milestone_100_reward=3.0,

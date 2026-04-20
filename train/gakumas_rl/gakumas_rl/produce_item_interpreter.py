@@ -30,6 +30,8 @@ SUPPORTED_RUNTIME_PRODUCE_ITEM_PHASES = frozenset(
         'ProducePhaseType_StartShop',
         'ProducePhaseType_StartCustomize',
         'ProducePhaseType_EndShop',
+        'ProducePhaseType_BuyShopItemProduceDrink',
+        'ProducePhaseType_CustomizeProduceCard',
         'ProducePhaseType_StartLesson',
         'ProducePhaseType_EndLesson',
         'ProducePhaseType_EndLessonBeforePresent',

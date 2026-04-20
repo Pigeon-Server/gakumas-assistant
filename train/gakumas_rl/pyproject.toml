@@ -18,21 +18,25 @@ dependencies = [
 [project.optional-dependencies]
 env = ["gymnasium>=0.29"]
 torch = ["torch>=2.2"]
-api = ["fastapi>=0.110", "pydantic>=2.7"]
-sb3 = ["stable-baselines3>=2.3"]
+api = ["fastapi>=0.110", "pydantic>=2.7", "uvicorn>=0.30"]
+sb3 = ["stable-baselines3>=2.3", "sb3-contrib>=2.3", "tensorboard>=2.16"]
 rllib = ["ray[rllib]>=2.9"]
 full = [
   "gymnasium>=0.29",
   "torch>=2.2",
   "fastapi>=0.110",
   "pydantic>=2.7",
+  "uvicorn>=0.30",
   "stable-baselines3>=2.3",
+  "sb3-contrib>=2.3",
+  "tensorboard>=2.16",
   "ray[rllib]>=2.9",
 ]
 
 [project.scripts]
 gakumas-rl = "gakumas_rl.train:main"
 gakumas-rl-demo = "gakumas_rl.demo_exam:main"
+gakumas-rl-inference = "gakumas_rl.inference_api:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

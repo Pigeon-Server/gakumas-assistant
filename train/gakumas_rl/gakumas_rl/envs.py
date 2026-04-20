@@ -28,6 +28,18 @@ class ActionView:
     payload: dict[str, Any]
 
 
+def _sanitize_float32_array(values: np.ndarray, *, lower: float, upper: float) -> np.ndarray:
+    """把观测里的 NaN / Inf 压回有限范围。"""
+
+    sanitized = np.nan_to_num(
+        np.asarray(values, dtype=np.float32),
+        nan=0.0,
+        posinf=upper,
+        neginf=lower,
+    )
+    return np.clip(sanitized, lower, upper).astype(np.float32, copy=False)
+
+
 @dataclass(frozen=True)
 class ManualEpisodeSelection:
     """Resolved manual record picked for the current episode."""
@@ -103,8 +115,72 @@ class GakumasPlanningEnv(gym.Env):
             dtype=np.float32,
         )
         self.max_actions = len(scenario.action_types)
-        self.global_dim = 30
-        self.action_feature_dim = len(self.taxonomy.action_types) + len(self.taxonomy.produce_effect_types) + 12
+        self.global_feature_names = (
+            'step_ratio',
+            'remaining_step_ratio',
+            'audition_progress',
+            'stamina_ratio',
+            'produce_point_ratio',
+            'fan_vote_ratio',
+            'vocal_ratio',
+            'dance_ratio',
+            'visual_ratio',
+            'vocal_growth',
+            'dance_growth',
+            'visual_growth',
+            'deck_quality',
+            'drink_quality',
+            'deck_size_ratio',
+            'drink_inventory_ratio',
+            'exam_enchant_count',
+            'refresh_used_ratio',
+            'last_exam_score_ratio',
+            'route_first_star',
+            'route_nia',
+            'score_weight_vocal',
+            'score_weight_dance',
+            'score_weight_visual',
+            'audition_difficulty_bonus',
+            'audition_parameter_bonus',
+            'producer_level_ratio',
+            'idol_rank_ratio',
+            'dearness_level_ratio',
+            'exam_score_bonus_multiplier',
+            'is_shop_phase',
+            'shop_card_modified_in_visit',
+            'has_pending_audition',
+            'shop_card_modify_count',
+            'remaining_audition_ratio',
+            'activity_produce_point_bonus',
+            'business_vote_bonus',
+            'lesson_present_point_bonus',
+            'support_event_point_bonus',
+            'support_event_stat_bonus',
+            'support_event_stamina_bonus',
+            'audition_vote_bonus',
+            'audition_turn_modifier',
+            'before_audition_refresh_penalty',
+            'generic_sp_rate_bonus',
+            'vocal_sp_rate_bonus',
+            'dance_sp_rate_bonus',
+            'visual_sp_rate_bonus',
+            'shop_discount',
+            'reward_card_count_bonus',
+            'customize_slots',
+            'exclude_count_bonus',
+            'reroll_count_bonus',
+            'card_upgrade_probability_bonus',
+        )
+        self.global_dim = len(self.global_feature_names)
+        self.action_feature_dim = (
+            len(self.taxonomy.action_types)
+            + len(self.taxonomy.produce_effect_types)
+            + len(self.taxonomy.exam_effect_types)
+            + len(self.taxonomy.card_categories)
+            + len(self.taxonomy.card_rarities)
+            + len(self.taxonomy.card_cost_types)
+            + 17
+        )
         self.action_space = spaces.Discrete(self.max_actions)
         self.observation_space = spaces.Dict(
             {
@@ -152,39 +228,64 @@ class GakumasPlanningEnv(gym.Env):
         state = self.runtime.state
         max_refresh = max(self.scenario.max_refresh_count, 1)
         parameter_scale = max(float(getattr(self.scenario, 'parameter_growth_limit', 0.0) or 0.0), 1.0)
+        global_values = {
+            'step_ratio': state['step'] / max(self.scenario.steps, 1),
+            'remaining_step_ratio': max(self.scenario.steps - state['step'], 0) / max(self.scenario.steps, 1),
+            'audition_progress': state['audition_index'] / max(len(self.scenario.audition_sequence), 1),
+            'stamina_ratio': state['stamina'] / max(state['max_stamina'], 1.0),
+            'produce_point_ratio': state['produce_points'] / 150.0,
+            'fan_vote_ratio': state['fan_votes'] / 5000.0,
+            'vocal_ratio': state['vocal'] / parameter_scale,
+            'dance_ratio': state['dance'] / parameter_scale,
+            'visual_ratio': state['visual'] / parameter_scale,
+            'vocal_growth': state['vocal_growth'],
+            'dance_growth': state['dance_growth'],
+            'visual_growth': state['visual_growth'],
+            'deck_quality': state['deck_quality'] / 20.0,
+            'drink_quality': state['drink_quality'] / 10.0,
+            'deck_size_ratio': len(self.runtime.deck) / 40.0,
+            'drink_inventory_ratio': len(self.runtime.drinks) / max(self.scenario.drink_limit, 1),
+            'exam_enchant_count': len(self.runtime.exam_status_enchant_ids) / 20.0,
+            'refresh_used_ratio': state['refresh_used'] / max_refresh,
+            'last_exam_score_ratio': state['last_exam_score'] / 5000.0,
+            'route_first_star': self.route_one_hot[0],
+            'route_nia': self.route_one_hot[1],
+            'score_weight_vocal': self.scenario.score_weights[0],
+            'score_weight_dance': self.scenario.score_weights[1],
+            'score_weight_visual': self.scenario.score_weights[2],
+            'audition_difficulty_bonus': state['audition_difficulty_bonus'],
+            'audition_parameter_bonus': state['audition_parameter_bonus'],
+            'producer_level_ratio': state['producer_level'] / 60.0,
+            'idol_rank_ratio': state['idol_rank'] / 20.0,
+            'dearness_level_ratio': state['dearness_level'] / 20.0,
+            'exam_score_bonus_multiplier': state['exam_score_bonus_multiplier'] / 4.0,
+            'is_shop_phase': 1.0 if self.runtime.pre_audition_phase == 'shop' else 0.0,
+            'shop_card_modified_in_visit': float(state.get('shop_card_modified_in_visit') or 0.0),
+            'has_pending_audition': 1.0 if self.runtime.pending_audition_stage else 0.0,
+            'shop_card_modify_count': _bounded_positive(float(state.get('shop_card_modify_count') or 0.0), 4.0),
+            'remaining_audition_ratio': max(len(self.runtime.checkpoints) - state['audition_index'], 0) / max(len(self.runtime.checkpoints), 1),
+            'activity_produce_point_bonus': _bounded_signed(float(state.get('activity_produce_point_bonus') or 0.0), 0.5),
+            'business_vote_bonus': _bounded_signed(float(state.get('business_vote_bonus') or 0.0), 0.5),
+            'lesson_present_point_bonus': _bounded_signed(float(state.get('lesson_present_point_bonus') or 0.0), 0.5),
+            'support_event_point_bonus': _bounded_signed(float(state.get('support_event_point_bonus') or 0.0), 0.5),
+            'support_event_stat_bonus': _bounded_signed(float(state.get('support_event_stat_bonus') or 0.0), 0.5),
+            'support_event_stamina_bonus': _bounded_signed(float(state.get('support_event_stamina_bonus') or 0.0), 0.5),
+            'audition_vote_bonus': _bounded_signed(float(state.get('audition_vote_bonus') or 0.0), 0.5),
+            'audition_turn_modifier': _bounded_signed(float(state.get('audition_turn_modifier') or 0.0), 2.0),
+            'before_audition_refresh_penalty': _bounded_signed(float(state.get('before_audition_refresh_penalty') or 0.0), 0.5),
+            'generic_sp_rate_bonus': _bounded_signed(float(state.get('generic_sp_rate_bonus') or 0.0), 0.5),
+            'vocal_sp_rate_bonus': _bounded_signed(float(state.get('vocal_sp_rate_bonus') or 0.0), 0.5),
+            'dance_sp_rate_bonus': _bounded_signed(float(state.get('dance_sp_rate_bonus') or 0.0), 0.5),
+            'visual_sp_rate_bonus': _bounded_signed(float(state.get('visual_sp_rate_bonus') or 0.0), 0.5),
+            'shop_discount': _bounded_signed(float(state.get('shop_discount') or 0.0), 0.5),
+            'reward_card_count_bonus': _bounded_positive(float(state.get('reward_card_count_bonus') or 0.0), 2.0),
+            'customize_slots': _bounded_positive(float(state.get('customize_slots') or 0.0), 4.0),
+            'exclude_count_bonus': _bounded_positive(float(state.get('exclude_count_bonus') or 0.0), 3.0),
+            'reroll_count_bonus': _bounded_positive(float(state.get('reroll_count_bonus') or 0.0), 3.0),
+            'card_upgrade_probability_bonus': _bounded_positive(float(state.get('card_upgrade_probability_bonus') or 0.0), 0.5),
+        }
         return np.array(
-            [
-                state['step'] / max(self.scenario.steps, 1),
-                max(self.scenario.steps - state['step'], 0) / max(self.scenario.steps, 1),
-                state['audition_index'] / max(len(self.scenario.audition_sequence), 1),
-                state['stamina'] / max(state['max_stamina'], 1.0),
-                state['produce_points'] / 150.0,
-                state['fan_votes'] / 5000.0,
-                state['vocal'] / parameter_scale,
-                state['dance'] / parameter_scale,
-                state['visual'] / parameter_scale,
-                state['vocal_growth'],
-                state['dance_growth'],
-                state['visual_growth'],
-                state['deck_quality'] / 20.0,
-                state['drink_quality'] / 10.0,
-                len(self.runtime.deck) / 40.0,
-                len(self.runtime.drinks) / max(self.scenario.drink_limit, 1),
-                len(self.runtime.exam_status_enchant_ids) / 20.0,
-                state['refresh_used'] / max_refresh,
-                state['last_exam_score'] / 5000.0,
-                self.route_one_hot[0],
-                self.route_one_hot[1],
-                self.scenario.score_weights[0],
-                self.scenario.score_weights[1],
-                self.scenario.score_weights[2],
-                state['audition_difficulty_bonus'],
-                state['audition_parameter_bonus'],
-                state['producer_level'] / 60.0,
-                state['idol_rank'] / 20.0,
-                state['dearness_level'] / 20.0,
-                state['exam_score_bonus_multiplier'] / 4.0,
-            ],
+            [float(global_values[name]) for name in self.global_feature_names],
             dtype=np.float32,
         )
 
@@ -207,6 +308,11 @@ class GakumasPlanningEnv(gym.Env):
                 state['stamina'] / max(state['max_stamina'], 1.0),
                 state['deck_quality'] / 20.0,
                 state['drink_quality'] / 10.0,
+                len(candidate.exam_effect_types) / 8.0,
+                1.0 if candidate.resource_type == 'ProduceResourceType_ProduceCard' else 0.0,
+                1.0 if candidate.resource_type == 'ProduceResourceType_ProduceDrink' else 0.0,
+                1.0 if candidate.target_deck_index >= 0 else 0.0,
+                float(candidate.resource_level) / 2.0,
             ],
             dtype=np.float32,
         )
@@ -214,6 +320,10 @@ class GakumasPlanningEnv(gym.Env):
             [
                 self.taxonomy.encode_actions([candidate.action_type]),
                 self.taxonomy.encode_produce_effects(effect_types),
+                self.taxonomy.encode_exam_effects(candidate.exam_effect_types),
+                self.taxonomy.encode_categories([candidate.card_category] if candidate.card_category else []),
+                self.taxonomy.encode_rarities([candidate.card_rarity] if candidate.card_rarity else []),
+                self.taxonomy.encode_cost_types([candidate.card_cost_type] if candidate.card_cost_type else []),
                 numeric,
             ]
         ).astype(np.float32)
@@ -349,11 +459,7 @@ class GakumasExamEnv(gym.Env):
             for effect_type, card_ids in (initial_deck_forced_card_groups or {}).items()
             if tuple(str(card_id) for card_id in card_ids if str(card_id or '').strip())
         }
-        self.randomize_stage_type = bool(
-            self.battle_kind == 'exam'
-            and self.episode_randomization.randomize_stage_type
-            and stage_type is None
-        )
+        self.randomize_stage_type = False
         self.current_stage_type = self.stage_type
         self.current_loadout = idol_loadout
         self._initial_seed = seed
@@ -367,6 +473,8 @@ class GakumasExamEnv(gym.Env):
             self.idol_card_pool = (self.idol_loadout.idol_card_id,)
         self._idol_loadout_cache: dict[tuple[Any, ...], IdolLoadout] = {}
         self.current_manual_setup: ResolvedManualExamSetup | None = None
+        self.stage_type_ids = self._resolve_stage_type_ids()
+        self.stage_context_dim = len(self.stage_type_ids) + 1
         self.loadout_character_ids = self._resolve_loadout_character_ids()
         self.loadout_rarities = self._resolve_loadout_rarities()
         self.loadout_context_dim = 4 + len(self.loadout_character_ids) + len(self.loadout_rarities) + len(self.scenario.focus_effect_types) + 4
@@ -392,7 +500,8 @@ class GakumasExamEnv(gym.Env):
             + len(self.taxonomy.card_cost_types)
             + len(self.taxonomy.card_categories)
         ) if self.include_deck_features else 0
-        self.global_dim = 48 + self.loadout_context_dim + self.deck_feature_dim
+        self._refresh_episode_randomization_flags()
+        self.global_dim = 48 + self.stage_context_dim + self.loadout_context_dim + self.deck_feature_dim
         self.action_feature_dim = (
             len(self.taxonomy.action_types)
             + len(self.taxonomy.exam_effect_types)
@@ -416,6 +525,7 @@ class GakumasExamEnv(gym.Env):
             }
         )
         self._candidates: list[ActionView] = []
+        self._candidate_mask = np.zeros(self.max_actions, dtype=bool)
         self._action_type_size = len(self.taxonomy.action_types)
         self._exam_effect_size = len(self.taxonomy.exam_effect_types)
         self._trigger_phase_size = len(self.taxonomy.trigger_phases)
@@ -435,6 +545,8 @@ class GakumasExamEnv(gym.Env):
         self._zero_trigger_phase_vector = np.zeros(self._trigger_phase_size, dtype=np.float32)
         self._zero_category_vector = np.zeros(self._category_size, dtype=np.float32)
         self._zero_cost_type_vector = np.zeros(self._cost_type_size, dtype=np.float32)
+        self._empty_card_feature = np.zeros(self.action_feature_dim, dtype=np.float32)
+        self._empty_drink_feature = np.zeros(self.action_feature_dim, dtype=np.float32)
         self._end_turn_prefix = np.concatenate(
             [
                 self._end_turn_action_vector,
@@ -711,6 +823,19 @@ class GakumasExamEnv(gym.Env):
             character_ids.add(self.idol_loadout.stat_profile.character_id)
         return tuple(sorted(character_ids))
 
+    def _resolve_stage_type_ids(self) -> tuple[str, ...]:
+        """汇总当前场景可能出现的 stage_type，用于显式编码考试舞台。"""
+
+        seen: set[str] = set()
+        stage_types: list[str] = []
+        for raw_value in (self.stage_type, self.scenario.default_stage, *(self.scenario.audition_sequence or ())):
+            stage_type = str(raw_value or '').strip()
+            if not stage_type or stage_type in seen:
+                continue
+            seen.add(stage_type)
+            stage_types.append(stage_type)
+        return tuple(stage_types)
+
     def _resolve_loadout_rarities(self) -> tuple[str, ...]:
         """解析当前训练池中的偶像稀有度列表。"""
 
@@ -726,6 +851,40 @@ class GakumasExamEnv(gym.Env):
             if rarity:
                 rarities.add(rarity)
         return tuple(sorted(rarities))
+
+    def _refresh_episode_randomization_flags(self) -> None:
+        """根据当前配置刷新 episode 级随机化开关。"""
+
+        self.randomize_stage_type = bool(
+            self.battle_kind == 'exam'
+            and self.episode_randomization.randomize_stage_type
+            and self.stage_type is None
+        )
+
+    def update_episode_randomization(
+        self,
+        *,
+        enabled: bool | None = None,
+        randomize_stage_type: bool | None = None,
+        randomize_use_after_item: bool | None = None,
+    ) -> None:
+        """在不中断训练对象的情况下调整后续 episode 的随机化开关。"""
+
+        self.episode_randomization = replace(
+            self.episode_randomization,
+            enabled=self.episode_randomization.enabled if enabled is None else bool(enabled),
+            randomize_stage_type=(
+                self.episode_randomization.randomize_stage_type
+                if randomize_stage_type is None
+                else bool(randomize_stage_type)
+            ),
+            randomize_use_after_item=(
+                self.episode_randomization.randomize_use_after_item
+                if randomize_use_after_item is None
+                else bool(randomize_use_after_item)
+            ),
+        )
+        self._refresh_episode_randomization_flags()
 
     def _sample_episode_loadout(self, rng: np.random.Generator) -> IdolLoadout | None:
         """在每次考试 reset 时抽样一套整局固定的局外上下文。"""
@@ -748,7 +907,7 @@ class GakumasExamEnv(gym.Env):
         sampled_idol_card_id = str(idol_card_id or '')
         if sampled_idol_card_id:
             sampled_use_after_item = config.get('use_after_item')
-            if self.episode_randomization.enabled and self.episode_randomization.randomize_use_after_item:
+            if self.episode_randomization.randomize_use_after_item:
                 sampled_use_after_item = bool(rng.integers(0, 2))
             cache_key = (
                 sampled_idol_card_id,
@@ -904,6 +1063,17 @@ class GakumasExamEnv(gym.Env):
             ]
         ).astype(np.float32)
 
+    def _stage_type_feature(self) -> np.ndarray:
+        """把当前考试舞台编码进全局观测，避免多 stage 混训时上下文缺失。"""
+
+        feature = np.zeros(self.stage_context_dim, dtype=np.float32)
+        try:
+            index = self.stage_type_ids.index(self.current_stage_type)
+        except ValueError:
+            index = len(self.stage_type_ids)
+        feature[index] = 1.0
+        return feature
+
     def _global_observation(self) -> np.ndarray:
         """构造考试全局状态向量。"""
 
@@ -964,7 +1134,7 @@ class GakumasExamEnv(gym.Env):
             dtype=np.float32,
         )
         base = np.concatenate([base_core, self.runtime.turn_color_one_hot()]).astype(np.float32)
-        parts = [base, self._loadout_context_feature()]
+        parts = [base, self._stage_type_feature(), self._loadout_context_feature()]
         if self.include_deck_features:
             parts.append(self._deck_composition_feature())
         return np.concatenate(parts).astype(np.float32)
@@ -1063,7 +1233,23 @@ class GakumasExamEnv(gym.Env):
             self._drink_static_prefix_cache[cache_key] = cached
         return cached
 
-    def _card_feature(self, card: RuntimeCard, slot_index: int, playable: bool) -> np.ndarray:
+    def _candidate_shared_metrics(self) -> tuple[float, float, float, float]:
+        """收集同一帧内所有动作共享的数值特征，避免重复计算。"""
+
+        return (
+            self._score_gap_ratio(),
+            _bounded_positive(self.runtime.resources['review'], 20.0),
+            _bounded_positive(self.runtime.resources['block'], 20.0),
+            _bounded_positive(self.runtime.resources['aggressive'], 20.0),
+        )
+
+    def _card_feature(
+        self,
+        card: RuntimeCard,
+        slot_index: int,
+        playable: bool,
+        shared_metrics: tuple[float, float, float, float],
+    ) -> np.ndarray:
         """把手牌槽位编码成模型输入特征。"""
 
         prefix = self._card_static_prefix(card).copy()
@@ -1075,6 +1261,7 @@ class GakumasExamEnv(gym.Env):
             prefix[self._trigger_phase_slice] += self.taxonomy.encode_trigger_phases(trigger_phases)
         resource_cost = sum(self.runtime._card_resource_costs(card).values())
         customized = 1.0 if (card.grow_effect_ids or card.transient_effect_ids or card.transient_trigger_ids or card.card_status_enchant_id) else 0.0
+        score_gap_ratio, review_resource, block_resource, aggressive_resource = shared_metrics
         numeric = np.array(
             [
                 _bounded_positive(float(card.base_card.get('stamina') or 0), 10.0),
@@ -1086,19 +1273,25 @@ class GakumasExamEnv(gym.Env):
                 _bounded_positive(card.play_count_bonus, 4.0),
                 _bounded_positive(len(card.grow_effect_ids), 4.0),
                 customized,
-                self._score_gap_ratio(),
-                _bounded_positive(self.runtime.resources['review'], 20.0),
-                _bounded_positive(self.runtime.resources['block'], 20.0),
-                _bounded_positive(self.runtime.resources['aggressive'], 20.0),
+                score_gap_ratio,
+                review_resource,
+                block_resource,
+                aggressive_resource,
                 (slot_index + 1) / max(self.max_hand_cards, 1),
             ],
             dtype=np.float32,
         )
         return np.concatenate([prefix, numeric]).astype(np.float32)
 
-    def _drink_feature(self, drink: dict[str, Any], slot_index: int) -> np.ndarray:
+    def _drink_feature(
+        self,
+        drink: dict[str, Any],
+        slot_index: int,
+        shared_metrics: tuple[float, float, float, float],
+    ) -> np.ndarray:
         """把饮料槽位编码成模型输入特征。"""
 
+        score_gap_ratio, review_resource, block_resource, aggressive_resource = shared_metrics
         numeric = np.array(
             [
                 0.0,
@@ -1110,19 +1303,20 @@ class GakumasExamEnv(gym.Env):
                 0.0,
                 0.0,
                 0.0,
-                self._score_gap_ratio(),
-                _bounded_positive(self.runtime.resources['review'], 20.0),
-                _bounded_positive(self.runtime.resources['block'], 20.0),
-                _bounded_positive(self.runtime.resources['aggressive'], 20.0),
+                score_gap_ratio,
+                review_resource,
+                block_resource,
+                aggressive_resource,
                 (slot_index + 1) / max(self.max_drinks, 1),
             ],
             dtype=np.float32,
         )
         return np.concatenate([self._drink_static_prefix(drink), numeric]).astype(np.float32)
 
-    def _end_turn_feature(self) -> np.ndarray:
+    def _end_turn_feature(self, shared_metrics: tuple[float, float, float, float]) -> np.ndarray:
         """构造结束回合动作的特征向量。"""
 
+        score_gap_ratio, review_resource, block_resource, aggressive_resource = shared_metrics
         numeric = np.array(
             [
                 0.0,
@@ -1134,10 +1328,10 @@ class GakumasExamEnv(gym.Env):
                 0.0,
                 0.0,
                 0.0,
-                self._score_gap_ratio(),
-                _bounded_positive(self.runtime.resources['review'], 20.0),
-                _bounded_positive(self.runtime.resources['block'], 20.0),
-                _bounded_positive(self.runtime.resources['aggressive'], 20.0),
+                score_gap_ratio,
+                review_resource,
+                block_resource,
+                aggressive_resource,
                 1.0,
             ],
             dtype=np.float32,
@@ -1148,6 +1342,8 @@ class GakumasExamEnv(gym.Env):
         """把当前手牌、饮料和结束回合动作展开为固定动作槽。"""
 
         candidates: list[ActionView] = []
+        candidate_mask: list[bool] = []
+        shared_metrics = self._candidate_shared_metrics()
 
         for index in range(self.max_hand_cards):
             if index < len(self.runtime.hand):
@@ -1157,19 +1353,21 @@ class GakumasExamEnv(gym.Env):
                     ActionView(
                         label=self.runtime._card_label(card),
                         kind='card',
-                        feature=self._card_feature(card, index, available),
+                        feature=self._card_feature(card, index, available, shared_metrics),
                         payload={'kind': 'card', 'uid': card.uid, 'available': available},
                     )
                 )
+                candidate_mask.append(available)
             else:
                 candidates.append(
                     ActionView(
                         label='empty',
                         kind='card',
-                        feature=np.zeros(self.action_feature_dim, dtype=np.float32),
+                        feature=self._empty_card_feature,
                         payload={'kind': 'card', 'available': False},
                     )
                 )
+                candidate_mask.append(False)
 
         for index in range(self.max_drinks):
             if index < len(self.runtime.drinks):
@@ -1180,47 +1378,82 @@ class GakumasExamEnv(gym.Env):
                     ActionView(
                         label=label,
                         kind='drink',
-                        feature=self._drink_feature(drink, index),
+                        feature=self._drink_feature(drink, index, shared_metrics),
                         payload={'kind': 'drink', 'index': index, 'available': available},
                     )
                 )
+                candidate_mask.append(available)
             else:
                 candidates.append(
                     ActionView(
                         label='no_drink',
                         kind='drink',
-                        feature=np.zeros(self.action_feature_dim, dtype=np.float32),
+                        feature=self._empty_drink_feature,
                         payload={'kind': 'drink', 'available': False},
                     )
                 )
+                candidate_mask.append(False)
 
         end_turn_label = 'SKIP' if self.battle_kind == 'lesson' else 'end_turn'
         candidates.append(
             ActionView(
                 label=end_turn_label,
                 kind='end_turn',
-                feature=self._end_turn_feature(),
+                feature=self._end_turn_feature(shared_metrics),
                 payload={'kind': 'end_turn', 'available': True},
             )
         )
+        candidate_mask.append(True)
+        self._candidate_mask = np.asarray(candidate_mask, dtype=bool)
         return candidates
 
     def _build_observation(self) -> dict[str, np.ndarray]:
         """刷新考试观测。"""
 
         self._candidates = self._build_candidates()
-        return {
+        raw_obs = {
             'global': self._global_observation(),
             'action_features': np.stack([candidate.feature for candidate in self._candidates]).astype(np.float32),
-            'action_mask': self.action_masks().astype(np.float32),
+            'action_mask': self._candidate_mask.astype(np.float32),
         }
+        return self._sanitize_observation(raw_obs)
+
+    def _sanitize_observation(self, obs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """统一清洗考试观测，避免数值异常传进策略网络。"""
+
+        return {
+            'global': _sanitize_float32_array(obs['global'], lower=-20.0, upper=20.0),
+            'action_features': _sanitize_float32_array(obs['action_features'], lower=-20.0, upper=20.0),
+            'action_mask': _sanitize_float32_array(obs['action_mask'], lower=0.0, upper=1.0),
+        }
+
+    def _has_numeric_instability(self) -> bool:
+        """检查 runtime 是否已经出现 NaN / Inf。"""
+
+        critical_values: list[float] = [
+            float(self.runtime.score),
+            float(self.runtime.stamina),
+            float(self.runtime.max_stamina),
+            float(self.runtime.turn),
+            float(self.runtime.extra_turns),
+            float(self.runtime.score_bonus_multiplier),
+        ]
+        critical_values.extend(float(value) for value in self.runtime.parameter_stats)
+        critical_values.extend(float(value) for value in self.runtime.resources.values())
+        return any(not np.isfinite(value) for value in critical_values)
+
+    def _numeric_safeguard_penalty(self) -> float:
+        """数值异常时统一返回一个有限负奖励。"""
+
+        clip_value = float(getattr(self.reward_config, 'reward_clip', 0.0) or 0.0)
+        return -max(clip_value, 10.0)
 
     def action_masks(self) -> np.ndarray:
         """为 MaskablePPO 提供当前动作掩码。"""
 
         if not self._candidates:
             self._candidates = self._build_candidates()
-        return np.array([bool(candidate.payload.get('available', False)) for candidate in self._candidates], dtype=bool)
+        return self._candidate_mask
 
     def step(self, action: int):
         """执行一个考试动作槽。"""
@@ -1257,6 +1490,15 @@ class GakumasExamEnv(gym.Env):
             )
 
         reward, runtime_info = self.runtime.step(runtime_action)
+        numeric_instability = self._has_numeric_instability()
+        if not np.isfinite(float(reward)) or numeric_instability:
+            raw_reward = float(reward)
+            reward = self._numeric_safeguard_penalty()
+            self.runtime.terminated = True
+            runtime_info = dict(runtime_info)
+            runtime_info['numeric_safeguard_triggered'] = True
+            runtime_info['numeric_reward_raw'] = raw_reward
+            runtime_info['numeric_state_unstable'] = bool(numeric_instability)
         obs = self._build_observation()
         info = {
             'scenario': self.scenario.scenario_id,
@@ -1267,5 +1509,3 @@ class GakumasExamEnv(gym.Env):
             info['action_labels'] = [item.label for item in self._candidates]
         info.update(runtime_info)
         return obs, float(reward), bool(self.runtime.terminated), False, info
-
-

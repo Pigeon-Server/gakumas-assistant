@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +19,7 @@ from .auto_training import (
     AutoTrainingConfig,
     DynamicEvaluationScheduler,
     EarlyStoppingCallback,
+    ExamRandomizationCurriculumConfig,
     analyze_training_progress,
     estimate_total_timesteps,
     extract_evaluation_stats,
@@ -40,6 +42,7 @@ class TrainingSpec:
     eval_episodes: int = 5
     rollout_steps: int = 512
     learning_rate: float = 3e-4
+    learning_rate_final: float | None = None
     device: str = 'cpu'
     run_dir: str | Path = ''
     auto_resume: bool = False
@@ -54,6 +57,7 @@ class TrainingSpec:
 
     # 自动训练配置
     auto_config: AutoTrainingConfig | None = None
+    exam_randomization_curriculum: ExamRandomizationCurriculumConfig | None = None
     enable_early_stopping: bool = False
     early_stopping_patience: int = 10
     early_stopping_min_delta: float = 0.01
@@ -112,6 +116,46 @@ def _safe_save_training_metadata(run_dir: Path, metadata_log: Path, training_met
                 'path': str(run_dir / 'training_metadata.json'),
             },
         )
+
+
+def _build_sb3_learning_rate_schedule(
+    initial_lr: float,
+    final_lr: float | None = None,
+) -> float | Any:
+    """构造 SB3 可用的学习率配置。"""
+
+    start = float(initial_lr)
+    end = float(start if final_lr is None else final_lr)
+    if abs(start - end) <= 1e-12:
+        return start
+
+    def schedule(progress_remaining: float) -> float:
+        bounded = min(max(float(progress_remaining), 0.0), 1.0)
+        return end + (start - end) * bounded
+
+    return schedule
+
+
+def _apply_sb3_learning_rate(
+    model: Any,
+    *,
+    initial_lr: float,
+    final_lr: float | None = None,
+) -> None:
+    """在续训场景下覆盖模型学习率设置。"""
+
+    configured = _build_sb3_learning_rate_schedule(initial_lr, final_lr)
+    model.learning_rate = configured
+    if callable(configured):
+        model.lr_schedule = configured
+        current_lr = float(configured(float(getattr(model, '_current_progress_remaining', 1.0))))
+    else:
+        model.lr_schedule = lambda _progress, value=float(configured): value
+        current_lr = float(configured)
+    optimizer = getattr(getattr(model, 'policy', None), 'optimizer', None)
+    if optimizer is not None:
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = current_lr
 
 
 def _extract_step_from_name(path: Path) -> int:
@@ -201,18 +245,177 @@ def _fixed_next_artifact_step(latest_step: int, frequency: int) -> int | None:
 
 
 def _evaluation_env_config(env_config: dict[str, Any], *, seed: int | None = None) -> dict[str, Any]:
-    """构造评估专用环境配置，显式关闭训练期随机化。"""
+    """构造评估专用环境配置，仅关闭高噪声训练随机项。"""
 
     config = dict(env_config)
     if seed is not None:
         config['seed'] = seed
     config['exam_randomize_context'] = False
-    config['exam_randomize_stage_type'] = False
-    config['exam_randomize_use_after_item'] = False
+    config['exam_randomize_stage_type'] = bool(env_config.get('exam_randomize_stage_type') or False)
+    config['exam_randomize_use_after_item'] = bool(env_config.get('exam_randomize_use_after_item') or False)
     config['exam_stat_jitter_ratio'] = 0.0
     config['exam_score_bonus_jitter_ratio'] = 0.0
     config['exam_starting_stamina_mode'] = 'full'
     return config
+
+
+def _clamp_progress_ratio(value: float | None, default: float) -> float:
+    """把课程学习进度比例收敛到 [0, 1]。"""
+
+    numeric = default if value is None else float(value)
+    return min(max(numeric, 0.0), 1.0)
+
+
+def _resolve_exam_randomization_flags(
+    env_config: dict[str, Any],
+    curriculum: ExamRandomizationCurriculumConfig | None,
+    *,
+    current_step: int,
+    total_timesteps: int,
+) -> dict[str, bool]:
+    """根据训练进度计算当前应启用的考试随机化轴。"""
+
+    flags = {
+        'exam_randomize_stage_type': bool(env_config.get('exam_randomize_stage_type') or False),
+        'exam_randomize_use_after_item': bool(env_config.get('exam_randomize_use_after_item') or False),
+    }
+    if curriculum is None or not curriculum.enabled:
+        return flags
+
+    progress = min(max(float(current_step) / max(int(total_timesteps), 1), 0.0), 1.0)
+    stage_threshold = _clamp_progress_ratio(curriculum.stage_type_start_ratio, 0.35)
+    use_after_item_threshold = _clamp_progress_ratio(curriculum.use_after_item_start_ratio, 0.60)
+
+    if flags['exam_randomize_stage_type']:
+        flags['exam_randomize_stage_type'] = progress >= stage_threshold
+    if flags['exam_randomize_use_after_item']:
+        flags['exam_randomize_use_after_item'] = progress >= use_after_item_threshold
+    return flags
+
+
+def _apply_exam_randomization_flags(
+    env_config: dict[str, Any],
+    flags: dict[str, bool],
+) -> dict[str, Any]:
+    """把课程式随机化阶段应用到环境配置。"""
+
+    config = dict(env_config)
+    config['exam_randomize_stage_type'] = bool(flags.get('exam_randomize_stage_type', False))
+    config['exam_randomize_use_after_item'] = bool(flags.get('exam_randomize_use_after_item', False))
+    return config
+
+
+def _apply_exam_randomization_flags_to_env(env: Any, flags: dict[str, bool]) -> int:
+    """把随机化阶段写回已构建的环境实例，并返回命中的环境数量。"""
+
+    pending = [env]
+    seen: set[int] = set()
+    updated_envs = 0
+    while pending:
+        current = pending.pop()
+        if current is None:
+            continue
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+
+        updater = getattr(current, 'update_episode_randomization', None)
+        if callable(updater):
+            updater(
+                randomize_stage_type=bool(flags.get('exam_randomize_stage_type', False)),
+                randomize_use_after_item=bool(flags.get('exam_randomize_use_after_item', False)),
+            )
+            updated_envs += 1
+
+        wrapped_env = getattr(current, 'env', None)
+        if wrapped_env is not None and wrapped_env is not current:
+            pending.append(wrapped_env)
+
+        unwrapped_env = getattr(current, 'unwrapped', None)
+        if unwrapped_env is not None and unwrapped_env is not current:
+            pending.append(unwrapped_env)
+
+        nested_envs = getattr(current, 'envs', None)
+        if nested_envs:
+            pending.extend(nested_envs)
+    return updated_envs
+
+
+def _normalize_rllib_update_count(value: Any) -> int:
+    """把 RLlib foreach_* 返回值规整为“实际更新了多少环境”。"""
+
+    if value is None:
+        return 0
+    if isinstance(value, dict):
+        return sum(_normalize_rllib_update_count(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return sum(_normalize_rllib_update_count(item) for item in value)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
+def _apply_exam_randomization_flags_to_rllib_worker(worker: Any, flags: dict[str, bool]) -> int:
+    """把课程式随机化写回单个 RLlib worker / env runner。"""
+
+    foreach_env = getattr(worker, 'foreach_env', None)
+    if callable(foreach_env):
+        return _normalize_rllib_update_count(
+            foreach_env(partial(_apply_exam_randomization_flags_to_env, flags=flags))
+        )
+
+    updated_envs = 0
+    for attr in ('async_env', 'base_env', 'env'):
+        candidate = getattr(worker, attr, None)
+        if candidate is not None:
+            updated_envs += _apply_exam_randomization_flags_to_env(candidate, flags)
+    direct_envs = getattr(worker, 'envs', None)
+    if direct_envs:
+        updated_envs += sum(_apply_exam_randomization_flags_to_env(env, flags) for env in direct_envs)
+    return updated_envs
+
+
+def _apply_exam_randomization_flags_to_rllib_algo(algo: Any, flags: dict[str, bool]) -> int:
+    """把课程式随机化广播到 RLlib 的所有训练 worker。"""
+
+    updated_envs = 0
+    seen_groups: set[int] = set()
+    for attr in ('workers', 'env_runner_group'):
+        group = getattr(algo, attr, None)
+        if group is None:
+            continue
+        marker = id(group)
+        if marker in seen_groups:
+            continue
+        seen_groups.add(marker)
+
+        foreach_env_runner = getattr(group, 'foreach_env_runner', None)
+        if callable(foreach_env_runner):
+            updated_envs += _normalize_rllib_update_count(
+                foreach_env_runner(partial(_apply_exam_randomization_flags_to_rllib_worker, flags=flags))
+            )
+            continue
+
+        foreach_worker = getattr(group, 'foreach_worker', None)
+        if callable(foreach_worker):
+            updated_envs += _normalize_rllib_update_count(
+                foreach_worker(partial(_apply_exam_randomization_flags_to_rllib_worker, flags=flags))
+            )
+            continue
+        updated_envs += _apply_exam_randomization_flags_to_rllib_worker(group, flags)
+
+    if updated_envs <= 0:
+        raise RuntimeError('RLlib curriculum 未能写回任何训练环境，请检查当前 Ray/RLlib worker API 是否兼容。')
+    return updated_envs
+
+
+def _exam_curriculum_start_step(total_timesteps: int, ratio: float | None, default: float) -> int:
+    """把课程学习比例换算成实际训练步数。"""
+
+    return int(round(max(int(total_timesteps), 1) * _clamp_progress_ratio(ratio, default)))
 
 
 def _resolve_dynamic_scheduler(
@@ -424,11 +627,20 @@ def _load_bc_pretrained_weights_rllib(algo: Any, checkpoint_path: str, device: s
     bc_state = torch.load(checkpoint_path, map_location=device, weights_only=True)
     bc_weights = bc_state.get('model_state_dict', bc_state)
 
-    # RLlib old API stack: algo.get_policy().model.net 是 MaskedPolicyValueNet
-    policy = algo.get_policy()
-    net = getattr(policy.model, 'net', None)
+    # 优先兼容新 API stack 的 RLModule，其次回退到旧 API stack 的 policy.model.net。
+    module = None
+    get_module = getattr(algo, 'get_module', None)
+    if callable(get_module):
+        try:
+            module = get_module()
+        except Exception:
+            module = None
+    net = getattr(module, 'net', None)
     if net is None:
-        print("[BC Pretrain] Warning: could not find policy.model.net, skipping pretrained weight loading")
+        policy = algo.get_policy()
+        net = getattr(policy.model, 'net', None)
+    if net is None:
+        print("[BC Pretrain] Warning: could not find RLlib model net, skipping pretrained weight loading")
         return
     net_state = net.state_dict()
     loaded_keys = []
@@ -474,10 +686,16 @@ def run_torch_training(spec: TrainingSpec) -> TrainingResult:
     dynamic_scheduler = _resolve_dynamic_scheduler(spec, estimated_timesteps or total_timesteps, max(int(spec.rollout_steps), 32))
     prior_history = load_training_history(run_dir)
 
-    train_env = build_env_from_config(spec.env_config)
-    eval_env = build_env_from_config(_evaluation_env_config(spec.env_config, seed=1000))
-
     latest_checkpoint = _latest_checkpoint(checkpoint_dir, '*.pt') if spec.auto_resume else None
+    latest_step = _extract_step_from_name(latest_checkpoint) if latest_checkpoint is not None else 0
+    current_exam_randomization_flags = _resolve_exam_randomization_flags(
+        spec.env_config,
+        spec.exam_randomization_curriculum,
+        current_step=latest_step,
+        total_timesteps=total_timesteps,
+    )
+    train_env = build_env_from_config(_apply_exam_randomization_flags(spec.env_config, current_exam_randomization_flags))
+    eval_env = build_env_from_config(_evaluation_env_config(spec.env_config, seed=1000))
     trainer = ActorCriticTrainer(
         train_env,
         learning_rate=spec.learning_rate,
@@ -490,7 +708,22 @@ def run_torch_training(spec: TrainingSpec) -> TrainingResult:
         trainer.load_model_weights(spec.pretrained_checkpoint, strict=False)
 
     latest_step = int(trainer.num_timesteps)
+    current_exam_randomization_flags = _resolve_exam_randomization_flags(
+        spec.env_config,
+        spec.exam_randomization_curriculum,
+        current_step=latest_step,
+        total_timesteps=total_timesteps,
+    )
+    _apply_exam_randomization_flags_to_env(train_env, current_exam_randomization_flags)
     remaining_timesteps = max(total_timesteps - latest_step, 0)
+
+    if spec.exam_randomization_curriculum is not None and spec.exam_randomization_curriculum.enabled:
+        print(
+            f"[ExamCurriculum] stage_type_start={_exam_curriculum_start_step(total_timesteps, spec.exam_randomization_curriculum.stage_type_start_ratio, 0.35):,}, "
+            f"use_after_item_start={_exam_curriculum_start_step(total_timesteps, spec.exam_randomization_curriculum.use_after_item_start_ratio, 0.60):,}, "
+            f"current_stage_type={current_exam_randomization_flags['exam_randomize_stage_type']}, "
+            f"current_use_after_item={current_exam_randomization_flags['exam_randomize_use_after_item']}"
+        )
 
     early_stopping = None
     if spec.enable_early_stopping:
@@ -524,6 +757,34 @@ def run_torch_training(spec: TrainingSpec) -> TrainingResult:
     best_mean_reward: float | None = max(prior_best) if prior_best else None
     best_checkpoint_path: Path | None = best_checkpoint if best_checkpoint.exists() else None
 
+    def _maybe_update_exam_curriculum(current_step: int) -> None:
+        """按训练进度逐步放开考试随机化轴。"""
+
+        nonlocal current_exam_randomization_flags
+        next_flags = _resolve_exam_randomization_flags(
+            spec.env_config,
+            spec.exam_randomization_curriculum,
+            current_step=current_step,
+            total_timesteps=total_timesteps,
+        )
+        if next_flags == current_exam_randomization_flags:
+            return
+        _apply_exam_randomization_flags_to_env(train_env, next_flags)
+        _append_jsonl(
+            metadata_log,
+            {
+                'kind': 'exam_curriculum',
+                'step': current_step,
+                **next_flags,
+            },
+        )
+        print(
+            f"[ExamCurriculum] Step {current_step:,}: "
+            f"stage_type={next_flags['exam_randomize_stage_type']}, "
+            f"use_after_item={next_flags['exam_randomize_use_after_item']}"
+        )
+        current_exam_randomization_flags = next_flags
+
     if remaining_timesteps > 0:
         print(
             f"[Training] Starting Torch actor-critic: target={total_timesteps:,}, remaining={remaining_timesteps:,}, "
@@ -537,6 +798,7 @@ def run_torch_training(spec: TrainingSpec) -> TrainingResult:
         update_steps = min(max(int(spec.rollout_steps), 1), max(total_timesteps - int(trainer.num_timesteps), 0))
         metrics = trainer.train_update(rollout_steps=update_steps)
         current_step = int(trainer.num_timesteps)
+        _maybe_update_exam_curriculum(current_step)
         should_stop = False
 
         while True:
@@ -662,6 +924,15 @@ def run_torch_training(spec: TrainingSpec) -> TrainingResult:
         'early_stopped': stopped_early,
         'best_checkpoint': str(best_checkpoint_path) if best_checkpoint_path else None,
         'best_mean_reward': best_mean_reward,
+        'exam_randomization_curriculum': (
+            {
+                'enabled': True,
+                'stage_type_start_ratio': spec.exam_randomization_curriculum.stage_type_start_ratio,
+                'use_after_item_start_ratio': spec.exam_randomization_curriculum.use_after_item_start_ratio,
+            }
+            if spec.exam_randomization_curriculum is not None and spec.exam_randomization_curriculum.enabled
+            else None
+        ),
         'env_config': spec.env_config,
     }
     if evaluation_summary is not None:
@@ -717,10 +988,7 @@ def run_sb3_training(spec: TrainingSpec) -> TrainingResult:
     except ModuleNotFoundError:
         print('[SB3] sb3-contrib not installed; falling back to plain PPO without hard action masking. Exam/planning envs expose action_mask in observations, but plain PPO will not enforce it and training quality may degrade badly.')
 
-    def build_monitored_env(eval_seed: int | None = None):
-        env_cfg = spec.env_config
-        if eval_seed is not None:
-            env_cfg = _evaluation_env_config(env_cfg, seed=eval_seed)
+    def build_monitored_env(env_cfg: dict[str, Any]):
         env = build_env_from_config(env_cfg)
         if maskable_enabled and action_masker is not None and hasattr(env, 'action_masks'):
             env = action_masker(env, lambda wrapped_env: wrapped_env.action_masks())
@@ -755,12 +1023,25 @@ def run_sb3_training(spec: TrainingSpec) -> TrainingResult:
     dynamic_scheduler = _resolve_dynamic_scheduler(spec, estimated_timesteps or total_timesteps, max(int(spec.rollout_steps), 32))
     prior_history = load_training_history(run_dir)
 
-    train_env = build_monitored_env()
-    eval_env = build_monitored_env(eval_seed=1000)
-
     latest_checkpoint = _latest_checkpoint(checkpoint_dir, '*.zip') if spec.auto_resume else None
     latest_step = _extract_step_from_name(latest_checkpoint) if latest_checkpoint is not None else 0
+    current_exam_randomization_flags = _resolve_exam_randomization_flags(
+        spec.env_config,
+        spec.exam_randomization_curriculum,
+        current_step=latest_step,
+        total_timesteps=total_timesteps,
+    )
+    train_env = build_monitored_env(_apply_exam_randomization_flags(spec.env_config, current_exam_randomization_flags))
+    eval_env = build_monitored_env(_evaluation_env_config(spec.env_config, seed=1000))
     remaining_timesteps = max(total_timesteps - latest_step, 0)
+
+    if spec.exam_randomization_curriculum is not None and spec.exam_randomization_curriculum.enabled:
+        print(
+            f"[ExamCurriculum] stage_type_start={_exam_curriculum_start_step(total_timesteps, spec.exam_randomization_curriculum.stage_type_start_ratio, 0.35):,}, "
+            f"use_after_item_start={_exam_curriculum_start_step(total_timesteps, spec.exam_randomization_curriculum.use_after_item_start_ratio, 0.60):,}, "
+            f"current_stage_type={current_exam_randomization_flags['exam_randomize_stage_type']}, "
+            f"current_use_after_item={current_exam_randomization_flags['exam_randomize_use_after_item']}"
+        )
 
     early_stopping = None
     if spec.enable_early_stopping:
@@ -777,8 +1058,24 @@ def run_sb3_training(spec: TrainingSpec) -> TrainingResult:
             f"min_delta={spec.early_stopping_min_delta}, min_steps={min_training_steps:,}"
         )
 
+    learning_rate_config = _build_sb3_learning_rate_schedule(
+        spec.learning_rate,
+        spec.learning_rate_final,
+    )
     if latest_checkpoint is not None:
         model = model_class.load(str(latest_checkpoint), env=train_env, device=spec.device)
+        _apply_sb3_learning_rate(
+            model,
+            initial_lr=spec.learning_rate,
+            final_lr=spec.learning_rate_final,
+        )
+        current_exam_randomization_flags = _resolve_exam_randomization_flags(
+            spec.env_config,
+            spec.exam_randomization_curriculum,
+            current_step=int(model.num_timesteps),
+            total_timesteps=total_timesteps,
+        )
+        _apply_exam_randomization_flags_to_env(train_env, current_exam_randomization_flags)
     else:
         model = model_class(
             'MultiInputPolicy',
@@ -787,11 +1084,39 @@ def run_sb3_training(spec: TrainingSpec) -> TrainingResult:
             seed=spec.seed,
             device=spec.device,
             n_steps=max(int(spec.rollout_steps), 32),
-            learning_rate=spec.learning_rate,
+            learning_rate=learning_rate_config,
             tensorboard_log=str(run_dir / 'tensorboard'),
         )
         if spec.pretrained_checkpoint:
             _load_bc_pretrained_weights_sb3(model, spec.pretrained_checkpoint, spec.device)
+
+    def _maybe_update_exam_curriculum(current_step: int) -> None:
+        """按训练进度逐步放开考试随机化轴。"""
+
+        nonlocal current_exam_randomization_flags
+        next_flags = _resolve_exam_randomization_flags(
+            spec.env_config,
+            spec.exam_randomization_curriculum,
+            current_step=current_step,
+            total_timesteps=total_timesteps,
+        )
+        if next_flags == current_exam_randomization_flags:
+            return
+        _apply_exam_randomization_flags_to_env(train_env, next_flags)
+        _append_jsonl(
+            metadata_log,
+            {
+                'kind': 'exam_curriculum',
+                'step': current_step,
+                **next_flags,
+            },
+        )
+        print(
+            f"[ExamCurriculum] Step {current_step:,}: "
+            f"stage_type={next_flags['exam_randomize_stage_type']}, "
+            f"use_after_item={next_flags['exam_randomize_use_after_item']}"
+        )
+        current_exam_randomization_flags = next_flags
 
     class PeriodicArtifactCallback(BaseCallback):
         """按计划输出 checkpoint、评估结果和最佳模型。"""
@@ -821,6 +1146,7 @@ def run_sb3_training(spec: TrainingSpec) -> TrainingResult:
             """在训练步推进时按计划落 checkpoint 并执行评估。"""
 
             current_step = int(self.model.num_timesteps)
+            _maybe_update_exam_curriculum(current_step)
             while True:
                 due_steps = []
                 if self.next_checkpoint is not None and current_step >= self.next_checkpoint:
@@ -925,7 +1251,8 @@ def run_sb3_training(spec: TrainingSpec) -> TrainingResult:
     if remaining_timesteps > 0:
         print(
             f"[Training] Starting SB3 PPO: target={total_timesteps:,}, remaining={remaining_timesteps:,}, "
-            f"rollout_steps={max(int(spec.rollout_steps), 32):,}, maskable={maskable_enabled}"
+            f"rollout_steps={max(int(spec.rollout_steps), 32):,}, maskable={maskable_enabled}, "
+            f"lr_start={spec.learning_rate:.6g}, lr_end={(spec.learning_rate_final if spec.learning_rate_final is not None else spec.learning_rate):.6g}"
         )
         model.learn(total_timesteps=remaining_timesteps, callback=callback, reset_num_timesteps=latest_checkpoint is None, progress_bar=False)
     else:
@@ -951,6 +1278,17 @@ def run_sb3_training(spec: TrainingSpec) -> TrainingResult:
         'early_stopped': early_stopping.should_stop if early_stopping else False,
         'best_checkpoint': str(callback.best_checkpoint) if callback.best_checkpoint else None,
         'best_mean_reward': callback.best_mean_reward,
+        'learning_rate': spec.learning_rate,
+        'learning_rate_final': spec.learning_rate_final if spec.learning_rate_final is not None else spec.learning_rate,
+        'exam_randomization_curriculum': (
+            {
+                'enabled': True,
+                'stage_type_start_ratio': spec.exam_randomization_curriculum.stage_type_start_ratio,
+                'use_after_item_start_ratio': spec.exam_randomization_curriculum.use_after_item_start_ratio,
+            }
+            if spec.exam_randomization_curriculum is not None and spec.exam_randomization_curriculum.enabled
+            else None
+        ),
         'env_config': spec.env_config,
     }
     if evaluation_summary is not None:
@@ -983,9 +1321,10 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
     try:
         import ray
         from ray.rllib.algorithms.ppo import PPOConfig
+        from ray.rllib.core.rl_module.rl_module import RLModuleSpec
         from ray.tune.registry import register_env
 
-        from .rllib_model import register_rllib_model
+        from .rllib_model import DEFAULT_RLLIB_MODEL_CONFIG, build_rllib_module_spec
     except ModuleNotFoundError as exc:
         raise SystemExit('RLlib backend requires ray[rllib] in the active environment.') from exc
 
@@ -1016,6 +1355,15 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
 
     dynamic_scheduler = _resolve_dynamic_scheduler(spec, estimated_timesteps or total_timesteps, max(int(spec.rollout_steps), 256))
     prior_history = load_training_history(run_dir)
+    latest_checkpoint = _latest_checkpoint(checkpoint_dir, 'checkpoint*') if spec.auto_resume else None
+    latest_step = _extract_step_from_name(latest_checkpoint) if latest_checkpoint is not None else 0
+    current_exam_randomization_flags = _resolve_exam_randomization_flags(
+        spec.env_config,
+        spec.exam_randomization_curriculum,
+        current_step=latest_step,
+        total_timesteps=total_timesteps,
+    )
+    train_env_config = _apply_exam_randomization_flags(spec.env_config, current_exam_randomization_flags)
 
     early_stopping = None
     if spec.enable_early_stopping:
@@ -1037,28 +1385,24 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
     eval_env_name = f"{env_name}_eval"
     register_env(env_name, lambda config: build_env_from_config(config))
     register_env(eval_env_name, lambda config: build_env_from_config(config))
-    model_name = register_rllib_model()
     rllib_runtime = _resolve_rllib_runtime_config(spec)
+    rl_module_spec: RLModuleSpec = build_rllib_module_spec(DEFAULT_RLLIB_MODEL_CONFIG)
 
     ray.init(ignore_reinit_error=True, include_dashboard=False)
     try:
         config = (
             PPOConfig()
-            .api_stack(enable_rl_module_and_learner=False, enable_env_runner_and_connector_v2=False)
-            .environment(env=env_name, env_config=spec.env_config, disable_env_checking=True)
+            .api_stack(enable_rl_module_and_learner=True, enable_env_runner_and_connector_v2=True)
+            .environment(env=env_name, env_config=train_env_config, disable_env_checking=True)
             .framework('torch')
+            .rl_module(rl_module_spec=rl_module_spec)
             .training(
                 lr=spec.learning_rate,
                 train_batch_size=rllib_runtime.train_batch_size,
-                model={
-                    'custom_model': model_name,
-                    'custom_model_config': {'hidden_dim': 256},
-                },
             )
-            .resources(num_gpus=float(spec.rllib_num_gpus))
             .env_runners(num_env_runners=rllib_runtime.num_env_runners)
             .evaluation(
-                evaluation_num_env_runners=0,
+                evaluation_num_env_runners=1,
                 evaluation_duration=max(int(spec.eval_episodes), 1),
                 evaluation_duration_unit='episodes',
                 evaluation_config={
@@ -1067,19 +1411,30 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
                 },
             )
         )
+        if float(spec.rllib_num_gpus) > 0.0:
+            config = config.learners(
+                num_learners=1,
+                num_gpus_per_learner=float(spec.rllib_num_gpus),
+            )
         _set_rllib_config_attr(config, rllib_runtime.num_envs_per_env_runner, 'num_envs_per_env_runner')
         _set_rllib_config_attr(config, rllib_runtime.rollout_fragment_length, 'rollout_fragment_length')
         _set_rllib_config_attr(config, 'truncate_episodes', 'batch_mode')
+        _set_rllib_config_attr(config, rllib_runtime.train_batch_size, 'train_batch_size_per_learner', 'train_batch_size')
         _set_rllib_config_attr(config, rllib_runtime.minibatch_size, 'minibatch_size', 'sgd_minibatch_size')
         if rllib_runtime.num_epochs > 0:
             _set_rllib_config_attr(config, rllib_runtime.num_epochs, 'num_epochs', 'num_sgd_iter')
         algo = config.build_algo()
-        latest_checkpoint = _latest_checkpoint(checkpoint_dir, 'checkpoint*') if spec.auto_resume else None
-        latest_step = _extract_step_from_name(latest_checkpoint) if latest_checkpoint is not None else 0
         if latest_checkpoint is not None:
             algo.restore(str(latest_checkpoint))
         elif spec.pretrained_checkpoint:
             _load_bc_pretrained_weights_rllib(algo, spec.pretrained_checkpoint, spec.device)
+        current_exam_randomization_flags = _resolve_exam_randomization_flags(
+            spec.env_config,
+            spec.exam_randomization_curriculum,
+            current_step=latest_step,
+            total_timesteps=total_timesteps,
+        )
+        _apply_exam_randomization_flags_to_rllib_algo(algo, current_exam_randomization_flags)
 
         evaluation_history = list(prior_history)
         next_checkpoint = (
@@ -1094,11 +1449,49 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
         )
         next_report = _fixed_next_artifact_step(latest_step, spec.test_report_freq)
         total_steps = latest_step
+        if spec.exam_randomization_curriculum is not None and spec.exam_randomization_curriculum.enabled:
+            print(
+                f"[ExamCurriculum] stage_type_start={_exam_curriculum_start_step(total_timesteps, spec.exam_randomization_curriculum.stage_type_start_ratio, 0.35):,}, "
+                f"use_after_item_start={_exam_curriculum_start_step(total_timesteps, spec.exam_randomization_curriculum.use_after_item_start_ratio, 0.60):,}, "
+                f"current_stage_type={current_exam_randomization_flags['exam_randomize_stage_type']}, "
+                f"current_use_after_item={current_exam_randomization_flags['exam_randomize_use_after_item']}"
+            )
+
+        def _maybe_update_exam_curriculum(current_step: int) -> None:
+            """按训练进度把课程随机化广播到所有 RLlib 训练 worker。"""
+
+            nonlocal current_exam_randomization_flags
+            next_flags = _resolve_exam_randomization_flags(
+                spec.env_config,
+                spec.exam_randomization_curriculum,
+                current_step=current_step,
+                total_timesteps=total_timesteps,
+            )
+            if next_flags == current_exam_randomization_flags:
+                return
+            updated_envs = _apply_exam_randomization_flags_to_rllib_algo(algo, next_flags)
+            _append_jsonl(
+                metadata_log,
+                {
+                    'kind': 'exam_curriculum',
+                    'step': current_step,
+                    'updated_envs': updated_envs,
+                    **next_flags,
+                },
+            )
+            print(
+                f"[ExamCurriculum] Step {current_step:,}: "
+                f"stage_type={next_flags['exam_randomize_stage_type']}, "
+                f"use_after_item={next_flags['exam_randomize_use_after_item']}, "
+                f"updated_envs={updated_envs}"
+            )
+            current_exam_randomization_flags = next_flags
+
         print(
             f"[Training] Starting RLlib PPO: target={int(total_timesteps):,}, workers={rllib_runtime.num_env_runners:,}, "
             f"envs_per_worker={rllib_runtime.num_envs_per_env_runner:,}, gpus={float(spec.rllib_num_gpus):.1f}, "
             f"fragment={rllib_runtime.rollout_fragment_length:,}, train_batch={rllib_runtime.train_batch_size:,}, "
-            f"minibatch={rllib_runtime.minibatch_size:,}, api_stack=old"
+            f"minibatch={rllib_runtime.minibatch_size:,}, api_stack=new"
         )
         if rllib_runtime.num_epochs > 0:
             print(f"[Training] RLlib PPO epochs={rllib_runtime.num_epochs:,}")
@@ -1127,6 +1520,7 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
                 f"time_this_iter={time_this_iter:.2f}s steps_per_sec={steps_per_sec:.1f}"
             )
             previous_total_steps = total_steps
+            _maybe_update_exam_curriculum(total_steps)
 
             while True:
                 due_steps = []
@@ -1217,14 +1611,24 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
 
         training_metadata = {
             'backend': 'rllib',
-            'api_stack': 'old',
-            'custom_model': model_name,
+            'api_stack': 'new',
+            'rl_module_class': 'GakumasActionMaskingTorchRLModule',
+            'custom_model_config': dict(DEFAULT_RLLIB_MODEL_CONFIG),
             'total_timesteps': int(total_steps),
             'target_timesteps': int(total_timesteps),
             'estimated_timesteps': estimated_timesteps,
             'dynamic_eval_schedule': bool(spec.auto_config.dynamic_eval_schedule) if spec.auto_config else False,
             'dynamic_checkpoint_schedule': bool(spec.auto_config.dynamic_checkpoint_schedule) if spec.auto_config else False,
             'early_stopped': early_stopping.should_stop if early_stopping else False,
+            'exam_randomization_curriculum': (
+                {
+                    'enabled': True,
+                    'stage_type_start_ratio': spec.exam_randomization_curriculum.stage_type_start_ratio,
+                    'use_after_item_start_ratio': spec.exam_randomization_curriculum.use_after_item_start_ratio,
+                }
+                if spec.exam_randomization_curriculum is not None and spec.exam_randomization_curriculum.enabled
+                else None
+            ),
             'env_config': spec.env_config,
             'rllib_config': {
                 'num_env_runners': rllib_runtime.num_env_runners,
@@ -1239,6 +1643,7 @@ def run_rllib_training(spec: TrainingSpec) -> TrainingResult:
         if early_stopping is not None and early_stopping.history:
             training_metadata['evaluation_summary'] = analyze_training_progress(early_stopping.history)
             training_metadata['early_stopping_summary'] = early_stopping.get_summary()
+        _safe_save_training_metadata(run_dir, metadata_log, training_metadata)
         replay_html, replay_json = _maybe_generate_demo_artifacts(spec, final_checkpoint, run_dir, metadata_log)
         if replay_html is not None or replay_json is not None:
             training_metadata['replay_artifacts'] = {

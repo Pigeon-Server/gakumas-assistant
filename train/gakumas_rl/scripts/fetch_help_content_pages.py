@@ -4,8 +4,11 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import ssl
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
@@ -17,6 +20,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - 兼容未安装 certifi 的环境
+    certifi = None
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -161,6 +169,40 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding='utf-8')
 
 
+def _create_ssl_context() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
+def _is_retryable_fetch_error(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, (TimeoutError, ssl.SSLError)):
+        return True
+    return 'timed out' in str(reason).casefold()
+
+
+def _fetch_html_bytes_with_curl(url: str, headers: dict[str, str], timeout: float) -> bytes:
+    curl_path = shutil.which('curl')
+    if not curl_path:
+        raise RuntimeError('curl not available')
+    command = [
+        curl_path,
+        '--silent',
+        '--show-error',
+        '--location',
+        '--max-time',
+        str(timeout),
+    ]
+    for key, value in headers.items():
+        command.extend(['-H', f'{key}: {value}'])
+    command.append(url)
+    completed = subprocess.run(command, check=True, capture_output=True)
+    return completed.stdout
+
+
 def _fetch_one(
     entry: HelpPageEntry,
     text_dir: Path,
@@ -195,30 +237,57 @@ def _fetch_one(
         )
         return result
     request = urllib.request.Request(entry.detail_url, headers=request_headers)
-    context = ssl.create_default_context()
-    try:
-        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-            html_bytes = response.read()
-            charset = response.headers.get_content_charset() or 'utf-8'
-            html = html_bytes.decode(charset, errors='replace')
-            title, text = _extract_title_and_text(html)
-            _write_text(text_path, text + '\n')
-            result.update(
-                {
-                    'status': 'ok',
-                    'httpStatus': getattr(response, 'status', None),
-                    'title': title or None,
-                    'textLength': len(text),
-                    'contentSha256': hashlib.sha256(html_bytes).hexdigest(),
-                }
-            )
+    context = _create_ssl_context()
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+                html_bytes = response.read()
+                charset = response.headers.get_content_charset() or 'utf-8'
+                html = html_bytes.decode(charset, errors='replace')
+                title, text = _extract_title_and_text(html)
+                _write_text(text_path, text + '\n')
+                result.update(
+                    {
+                        'status': 'ok',
+                        'httpStatus': getattr(response, 'status', None),
+                        'title': title or None,
+                        'textLength': len(text),
+                        'contentSha256': hashlib.sha256(html_bytes).hexdigest(),
+                    }
+                )
+                return result
+        except urllib.error.HTTPError as exc:
+            result.update({'status': 'error', 'httpStatus': exc.code, 'error': str(exc)})
             return result
-    except urllib.error.HTTPError as exc:
-        result.update({'status': 'error', 'httpStatus': exc.code, 'error': str(exc)})
-        return result
-    except Exception as exc:  # noqa: BLE001
-        result.update({'status': 'error', 'error': str(exc)})
-        return result
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if _is_retryable_fetch_error(exc):
+                try:
+                    html_bytes = _fetch_html_bytes_with_curl(entry.detail_url, request_headers, timeout)
+                    html = html_bytes.decode('utf-8', errors='replace')
+                    title, text = _extract_title_and_text(html)
+                    _write_text(text_path, text + '\n')
+                    result.update(
+                        {
+                            'status': 'ok',
+                            'httpStatus': 200,
+                            'title': title or None,
+                            'textLength': len(text),
+                            'contentSha256': hashlib.sha256(html_bytes).hexdigest(),
+                        }
+                    )
+                    return result
+                except Exception:
+                    pass
+            if attempt < 2 and _is_retryable_fetch_error(exc):
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            result.update({'status': 'error', 'error': str(exc)})
+            return result
+    if last_error is not None:
+        result.update({'status': 'error', 'error': str(last_error)})
+    return result
 
 
 def _write_category_markdowns(output_dir: Path, manifest: list[dict[str, Any]]) -> None:

@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 
-from .auto_training import AutoTrainingConfig
+from .auto_training import AutoTrainingConfig, ExamRandomizationCurriculumConfig
 from .backends import TrainingSpec, run_training
 from .service import LoadoutConfig, build_env_from_config, loadout_summary
 
@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--eval-episodes', type=int, default=20)
     parser.add_argument('--rollout-steps', type=int, default=512)
     parser.add_argument('--learning-rate', type=float, default=1e-4)
+    parser.add_argument('--learning-rate-final', type=float, default=None, help='线性学习率衰减末值；留空表示固定学习率')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--run-dir', default='')
     parser.add_argument('--auto-resume', action='store_true')
@@ -52,6 +53,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--exam-score-bonus-jitter-ratio', type=float, default=0.05, help='考试上下文随机化时的倍率抖动比例')
     parser.add_argument('--exam-randomize-use-after-item', action='store_true', help='考试上下文随机化时允许 before/after P 道具切换')
     parser.add_argument('--exam-randomize-stage-type', action='store_true', help='考试上下文随机化时允许在场景的多个 stage 间采样')
+    parser.add_argument('--exam-randomization-curriculum', action='store_true', help='按训练进度逐步打开 stage_type / use_after_item 随机化，避免一开始就把泛化轴全压给策略')
+    parser.add_argument('--exam-curriculum-stage-type-start-ratio', type=float, default=0.10, help='总训练进度达到该比例后启用 stage_type 随机化')
+    parser.add_argument('--exam-curriculum-use-after-item-start-ratio', type=float, default=0.25, help='总训练进度达到该比例后启用 use_after_item 随机化')
     parser.add_argument('--exam-starting-stamina-mode', choices=['full', 'random'], default='full', help='exam-only 模式下的开场体力策略')
     parser.add_argument('--exam-starting-stamina-min-ratio', type=float, default=0.6, help='随机开场体力的最小比例')
     parser.add_argument('--exam-starting-stamina-max-ratio', type=float, default=1.0, help='随机开场体力的最大比例')
@@ -94,17 +98,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--reward-archetype-weight', type=float, default=None, help='Φ_archetype 权重')
     parser.add_argument('--reward-risk-weight', type=float, default=None, help='Φ_risk 权重')
     parser.add_argument('--reward-efficiency-weight', type=float, default=None, help='Φ_efficiency 权重')
+    parser.add_argument('--reward-turn-window-weight', type=float, default=None, help='回合颜色窗口权重')
+    parser.add_argument('--reward-judging-alignment-weight', type=float, default=None, help='审查基准匹配权重')
+    parser.add_argument('--reward-efficiency-overshoot-penalty', type=float, default=None, help='提前达标后的超线惩罚')
     parser.add_argument('--reward-terminal-pass', type=float, default=None, help='考试通过奖励')
     parser.add_argument('--reward-terminal-failure', type=float, default=None, help='考试失败惩罚')
+    parser.add_argument('--reward-terminal-force-end-bonus', type=float, default=None, help='达到 force_end_score 的收官奖励')
     parser.add_argument('--reward-lesson-clear', type=float, default=None, help='课程 Clear 奖励')
     parser.add_argument('--reward-lesson-perfect', type=float, default=None, help='课程 Perfect 奖励')
     parser.add_argument('--reward-overshoot-penalty', type=float, default=None, help='超线惩罚')
     parser.add_argument('--reward-invalid-action-penalty', type=float, default=None, help='无效动作惩罚')
     parser.add_argument('--reward-skip-turn-penalty', type=float, default=None, help='空过回合惩罚')
+    parser.add_argument('--reward-consecutive-end-turn-penalty', type=float, default=None, help='连续结束回合惩罚')
     parser.add_argument('--reward-stamina-death-penalty', type=float, default=None, help='体力归零额外惩罚')
-    parser.add_argument('--reward-milestone-50', type=float, default=None, help='50% 目标里程碑奖励')
-    parser.add_argument('--reward-milestone-75', type=float, default=None, help='75% 目标里程碑奖励')
-    parser.add_argument('--reward-milestone-100', type=float, default=None, help='100% 目标里程碑奖励')
+    parser.add_argument('--reward-milestone-50', type=float, default=None, help='50%% 目标里程碑奖励')
+    parser.add_argument('--reward-milestone-75', type=float, default=None, help='75%% 目标里程碑奖励')
+    parser.add_argument('--reward-milestone-100', type=float, default=None, help='100%% 目标里程碑奖励')
     parser.add_argument('--reward-score-delta-scale', type=float, default=None, help='分数差分密集奖励缩放')
     parser.add_argument('--reward-card-play-reward', type=float, default=None, help='出牌微奖励')
     parser.add_argument('--reward-scale', type=float, default=None, help='全局奖励缩放')
@@ -114,12 +123,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--print-observation', action='store_true')
     parser.add_argument('--print-loadout', action='store_true')
 
-    parser.add_argument('--auto-train', action='store_true', help='自动决定训练步数，使用上限步数 + 早停结束训练')
-    parser.add_argument('--auto-timesteps', action='store_true', help='自动估算训练步数')
+    parser.add_argument('--auto-train', action='store_true', help='自动训练模式：自动估算步数、动态调整评估/落盘间隔，并默认启用早停；高随机性环境不建议长期训练时使用')
+    parser.add_argument('--auto-timesteps', action='store_true', help='仅自动估算训练步数，不会像 --auto-train 那样默认开启早停')
     parser.add_argument('--auto-min-timesteps', type=int, default=100_000, help='自动训练允许早停前的最少训练步数')
     parser.add_argument('--auto-max-timesteps', type=int, default=5_000_000, help='自动训练的最大训练步数上限')
     parser.add_argument('--auto-eval-interval', type=int, default=50_000, help='自动训练的评估基准间隔，实际会按训练进度动态调整')
-    parser.add_argument('--early-stopping', action='store_true', help='启用早停机制')
+    parser.add_argument('--early-stopping', action='store_true', help='启用早停机制；高随机性环境或服务器长期训练通常建议关闭')
     parser.add_argument('--early-stopping-patience', type=int, default=20, help='早停耐心值')
     parser.add_argument('--early-stopping-min-delta', type=float, default=0.01, help='早停最小改善阈值')
     return parser.parse_args()
@@ -151,13 +160,18 @@ _REWARD_CLI_MAP = {
     'reward_archetype_weight': 'archetype_weight',
     'reward_risk_weight': 'risk_weight',
     'reward_efficiency_weight': 'efficiency_weight',
+    'reward_turn_window_weight': 'turn_window_weight',
+    'reward_judging_alignment_weight': 'judging_alignment_weight',
+    'reward_efficiency_overshoot_penalty': 'efficiency_overshoot_penalty',
     'reward_terminal_pass': 'terminal_pass_reward',
     'reward_terminal_failure': 'terminal_failure_weight',
+    'reward_terminal_force_end_bonus': 'terminal_force_end_bonus',
     'reward_lesson_clear': 'lesson_clear_reward',
     'reward_lesson_perfect': 'lesson_perfect_reward',
     'reward_overshoot_penalty': 'overshoot_penalty',
     'reward_invalid_action_penalty': 'invalid_action_penalty',
     'reward_skip_turn_penalty': 'skip_turn_penalty',
+    'reward_consecutive_end_turn_penalty': 'consecutive_end_turn_penalty',
     'reward_stamina_death_penalty': 'stamina_death_penalty',
     'reward_milestone_50': 'milestone_50_reward',
     'reward_milestone_75': 'milestone_75_reward',
@@ -321,6 +335,7 @@ def main() -> int:
             eval_episodes=args.eval_episodes,
             rollout_steps=args.rollout_steps,
             learning_rate=args.learning_rate,
+            learning_rate_final=args.learning_rate_final,
             device=args.device,
             run_dir=args.run_dir,
             auto_resume=args.auto_resume,
@@ -333,6 +348,11 @@ def main() -> int:
             rllib_num_epochs=args.rllib_num_epochs,
             rllib_rollout_fragment_length=args.rllib_rollout_fragment_length,
             auto_config=auto_config,
+            exam_randomization_curriculum=ExamRandomizationCurriculumConfig(
+                enabled=bool(args.exam_randomization_curriculum),
+                stage_type_start_ratio=args.exam_curriculum_stage_type_start_ratio,
+                use_after_item_start_ratio=args.exam_curriculum_use_after_item_start_ratio,
+            ),
             enable_early_stopping=enable_early_stopping,
             early_stopping_patience=args.early_stopping_patience,
             early_stopping_min_delta=args.early_stopping_min_delta,

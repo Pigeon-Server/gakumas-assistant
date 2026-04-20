@@ -75,8 +75,10 @@ class InferenceResponse:
     """推理响应。"""
 
     action_index: int  # 选择的动作索引
-    action_label: str  # 动作标签
     confidence: float  # 置信度
+    action_id: str = ""  # 动作稳定标识（优先由客户端传入）
+    db_id: str = ""  # 实体类动作对应的主库 ID
+    action_kind: str = ""  # 动作类别
     value_estimate: float | None = None  # 价值估计（可选）
     policy_probs: list[float] | None = None  # 策略概率分布（可选）
 
@@ -85,7 +87,7 @@ class RLBackend(ABC):
     """RL后端抽象基类。"""
 
     @abstractmethod
-    def load_model(self, checkpoint_path: Path) -> None:
+    def load_model(self, checkpoint_path: Path, *, device: str = 'cpu') -> None:
         """加载模型checkpoint。"""
         pass
 
@@ -107,14 +109,14 @@ class PPOBackend(RLBackend):
         self.model = None
         self.env = None
 
-    def load_model(self, checkpoint_path: Path) -> None:
+    def load_model(self, checkpoint_path: Path, *, device: str = 'cpu') -> None:
         """加载PPO模型。"""
         try:
             from stable_baselines3 import PPO
         except ImportError:
             raise RuntimeError("PPO backend requires stable-baselines3")
 
-        self.model = PPO.load(str(checkpoint_path))
+        self.model = PPO.load(str(checkpoint_path), device=device)
 
     def predict(self, request: InferenceRequest) -> InferenceResponse:
         """执行PPO推理。"""
@@ -128,11 +130,15 @@ class PPOBackend(RLBackend):
         action, _states = self.model.predict(obs, deterministic=request.deterministic)
         action_index = int(action)
 
-        # 获取动作标签
+        # 通过稳定字段回传动作身份，避免协议依赖 OCR 名称
+        action_id = ""
+        db_id = ""
+        action_kind = ""
         if action_index < len(request.legal_actions):
-            action_label = request.legal_actions[action_index].get('label', f'action_{action_index}')
-        else:
-            action_label = f'action_{action_index}'
+            action_payload = request.legal_actions[action_index]
+            action_id = str(action_payload.get('action_id') or action_payload.get('id') or "")
+            db_id = str(action_payload.get('db_id') or "")
+            action_kind = str(action_payload.get('kind') or "")
 
         # 获取价值估计（如果可用）
         value_estimate = None
@@ -143,7 +149,9 @@ class PPOBackend(RLBackend):
 
         return InferenceResponse(
             action_index=action_index,
-            action_label=action_label,
+            action_id=action_id,
+            db_id=db_id,
+            action_kind=action_kind,
             confidence=1.0 if request.deterministic else 0.0,
             value_estimate=value_estimate,
         )
@@ -209,8 +217,9 @@ class DQNBackend(RLBackend):
     def __init__(self):
         self.model = None
 
-    def load_model(self, checkpoint_path: Path) -> None:
+    def load_model(self, checkpoint_path: Path, *, device: str = 'cpu') -> None:
         """加载DQN模型。"""
+        del checkpoint_path, device
         raise NotImplementedError("DQN backend not yet implemented")
 
     def predict(self, request: InferenceRequest) -> InferenceResponse:
@@ -233,8 +242,9 @@ class AlphaZeroBackend(RLBackend):
         self.model = None
         self.mcts_simulations = 100
 
-    def load_model(self, checkpoint_path: Path) -> None:
+    def load_model(self, checkpoint_path: Path, *, device: str = 'cpu') -> None:
         """加载AlphaZero模型。"""
+        del checkpoint_path, device
         raise NotImplementedError("AlphaZero backend not yet implemented")
 
     def predict(self, request: InferenceRequest) -> InferenceResponse:
@@ -254,7 +264,13 @@ class AlphaZeroBackend(RLBackend):
 class InferenceService:
     """统一的推理服务。"""
 
-    def __init__(self, backend_type: str = 'ppo'):
+    def __init__(
+        self,
+        backend_type: str = 'ppo',
+        *,
+        checkpoint_path: str | Path | None = None,
+        device: str = 'cpu',
+    ):
         """初始化推理服务。
 
         Args:
@@ -262,6 +278,10 @@ class InferenceService:
         """
         self.backend = self._create_backend(backend_type)
         self.backend_type = backend_type
+        self.device = str(device or 'cpu')
+        self.checkpoint_path = str(checkpoint_path or "")
+        if checkpoint_path:
+            self.load_model(checkpoint_path, device=self.device)
 
     def _create_backend(self, backend_type: str) -> RLBackend:
         """创建后端实例。"""
@@ -276,9 +296,13 @@ class InferenceService:
 
         return backends[backend_type]()
 
-    def load_model(self, checkpoint_path: str | Path) -> None:
+    def load_model(self, checkpoint_path: str | Path, *, device: str | None = None) -> None:
         """加载模型。"""
-        self.backend.load_model(Path(checkpoint_path))
+        resolved_device = str(device or self.device or 'cpu')
+        resolved_path = Path(checkpoint_path)
+        self.backend.load_model(resolved_path, device=resolved_device)
+        self.device = resolved_device
+        self.checkpoint_path = str(resolved_path)
 
     def predict(self, request: InferenceRequest) -> InferenceResponse:
         """执行推理。"""
@@ -289,5 +313,7 @@ class InferenceService:
         return {
             'service': 'gakumas_rl_inference',
             'backend_type': self.backend_type,
+            'device': self.device,
+            'checkpoint_path': self.checkpoint_path,
             'backend_info': self.backend.get_backend_info(),
         }

@@ -1,35 +1,28 @@
-"""推理服务的HTTP API接口。"""
+"""推理服务的 HTTP API 接口。"""
 
 from __future__ import annotations
 
-from pathlib import Path
+import argparse
+import os
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .inference_service import (
-    ExamState,
-    InferenceRequest,
-    InferenceResponse,
-    InferenceService,
-)
+from .inference_service import ExamState, InferenceRequest, InferenceService
 
 router = APIRouter(prefix='/api/inference', tags=['inference'])
+
+_ENV_BACKEND = 'GAKUMAS_RL_INFERENCE_BACKEND'
+_ENV_CHECKPOINT = 'GAKUMAS_RL_INFERENCE_CHECKPOINT'
+_ENV_DEVICE = 'GAKUMAS_RL_INFERENCE_DEVICE'
 
 # 全局推理服务实例
 _inference_service: InferenceService | None = None
 
 
-class LoadModelRequest(BaseModel):
-    """加载模型请求。"""
-
-    backend_type: str = Field(..., description="后端类型: ppo/dqn/alphazero")
-    checkpoint_path: str = Field(..., description="模型checkpoint路径")
-
-
 class PredictRequest(BaseModel):
-    """推理请求。"""
+    """Battle 推理请求。"""
 
     # 基础属性
     vocal: int
@@ -38,7 +31,7 @@ class PredictRequest(BaseModel):
     stamina: int
     max_stamina: int
 
-    # 考试状态
+    # 考试/课程状态
     score: int
     target_score: int
     turn: int
@@ -65,16 +58,14 @@ class PredictRequest(BaseModel):
     # 饮料信息
     drinks: list[dict[str, Any]] = Field(default_factory=list)
 
-    # P道具效果
+    # P道具/附魔
     status_enchants: list[str] = Field(default_factory=list)
 
-    # N.I.A专属
+    # N.I.A 专属
     fan_votes: int | None = None
 
-    # 回忆卡（支援卡）
-    support_cards: list[str] | None = None
-
     # 其他状态
+    support_cards: list[str] | None = None
     gimmicks: list[dict[str, Any]] | None = None
 
     # 合法动作列表
@@ -88,85 +79,75 @@ class PredictResponse(BaseModel):
     """推理响应。"""
 
     action_index: int
-    action_label: str
+    action_id: str = ""
+    db_id: str = ""
+    action_kind: str = ""
     confidence: float
     value_estimate: float | None = None
     policy_probs: list[float] | None = None
 
 
-@router.post('/load_model')
-def load_model(request: LoadModelRequest) -> dict[str, Any]:
-    """加载模型。
+def _resolve_server_config(
+    *,
+    backend_type: str | None = None,
+    checkpoint_path: str | None = None,
+    device: str | None = None,
+) -> tuple[str, str, str]:
+    """解析 server 启动配置。"""
 
-    Example:
-        ```json
-        {
-            "backend_type": "ppo",
-            "checkpoint_path": "runs/sb3_exam_nia_master_xxx/checkpoints/step_500000.zip"
-        }
-        ```
-    """
-    global _inference_service
+    resolved_backend = str(
+        backend_type
+        or os.getenv(_ENV_BACKEND)
+        or 'ppo'
+    ).strip()
+    resolved_checkpoint = str(
+        checkpoint_path
+        or os.getenv(_ENV_CHECKPOINT)
+        or ''
+    ).strip()
+    resolved_device = str(
+        device
+        or os.getenv(_ENV_DEVICE)
+        or 'cpu'
+    ).strip()
+    if not resolved_checkpoint:
+        raise RuntimeError(
+            'RL inference server 启动失败：未提供 checkpoint。'
+            f'请通过参数 --checkpoint 或环境变量 {_ENV_CHECKPOINT} 指定模型。'
+        )
+    return resolved_backend, resolved_checkpoint, resolved_device
 
-    try:
-        _inference_service = InferenceService(backend_type=request.backend_type)
-        _inference_service.load_model(request.checkpoint_path)
 
-        return {
-            'status': 'success',
-            'message': f'Model loaded successfully',
-            'info': _inference_service.get_info(),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def _build_service(
+    *,
+    backend_type: str | None = None,
+    checkpoint_path: str | None = None,
+    device: str | None = None,
+) -> InferenceService:
+    """根据启动配置创建并预加载模型。"""
+
+    resolved_backend, resolved_checkpoint, resolved_device = _resolve_server_config(
+        backend_type=backend_type,
+        checkpoint_path=checkpoint_path,
+        device=device,
+    )
+    return InferenceService(
+        backend_type=resolved_backend,
+        checkpoint_path=resolved_checkpoint,
+        device=resolved_device,
+    )
 
 
 @router.post('/predict', response_model=PredictResponse)
 def predict(request: PredictRequest) -> PredictResponse:
-    """执行推理。
+    """执行推理。"""
 
-    Example:
-        ```json
-        {
-            "vocal": 450,
-            "dance": 420,
-            "visual": 380,
-            "stamina": 12,
-            "max_stamina": 15,
-            "score": 500,
-            "target_score": 2000,
-            "turn": 3,
-            "max_turns": 9,
-            "block": 5,
-            "review": 10,
-            "aggressive": 8,
-            "hand_cards": [
-                {"id": "card_001", "name": "卡牌1", "stamina": 3},
-                {"id": "card_002", "name": "卡牌2", "stamina": 2}
-            ],
-            "drinks": [
-                {"id": "drink_001", "name": "饮料1", "consumed": false}
-            ],
-            "legal_actions": [
-                {"index": 0, "label": "卡牌1", "kind": "card", "available": true},
-                {"index": 1, "label": "卡牌2", "kind": "card", "available": true},
-                {"index": 48, "label": "饮料1", "kind": "drink", "available": true},
-                {"index": 51, "label": "结束回合", "kind": "end_turn", "available": true}
-            ],
-            "deterministic": true
-        }
-        ```
-    """
     global _inference_service
 
     if _inference_service is None:
-        raise HTTPException(
-            status_code=400,
-            detail='Model not loaded. Please call /load_model first.'
-        )
+        raise HTTPException(status_code=500, detail='Inference service is not initialized.')
 
     try:
-        # 构造状态
         state = ExamState(
             vocal=request.vocal,
             dance=request.dance,
@@ -195,76 +176,99 @@ def predict(request: PredictRequest) -> PredictResponse:
             support_cards=request.support_cards,
             gimmicks=request.gimmicks,
         )
-
-        # 构造推理请求
         inference_request = InferenceRequest(
             state=state,
             legal_actions=request.legal_actions,
             deterministic=request.deterministic,
         )
-
-        # 执行推理
         response = _inference_service.predict(inference_request)
-
         return PredictResponse(
             action_index=response.action_index,
-            action_label=response.action_label,
+            action_id=response.action_id,
+            db_id=response.db_id,
+            action_kind=response.action_kind,
             confidence=response.confidence,
             value_estimate=response.value_estimate,
             policy_probs=response.policy_probs,
         )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get('/info')
 def get_info() -> dict[str, Any]:
     """获取推理服务信息。"""
+
     global _inference_service
 
     if _inference_service is None:
         return {
-            'status': 'not_loaded',
-            'message': 'No model loaded',
+            'status': 'error',
+            'message': 'Inference service is not initialized.',
         }
-
     return {
         'status': 'ready',
         'info': _inference_service.get_info(),
     }
 
 
-@router.post('/unload')
-def unload_model() -> dict[str, Any]:
-    """卸载当前模型。"""
-    global _inference_service
-
-    if _inference_service is None:
-        return {
-            'status': 'success',
-            'message': 'No model to unload',
-        }
-
-    _inference_service = None
-
-    return {
-        'status': 'success',
-        'message': 'Model unloaded successfully',
-    }
-
-
 def register_inference_routes(app: FastAPI) -> None:
-    """注册推理路由到FastAPI应用。"""
+    """注册推理路由到 FastAPI 应用。"""
+
     app.include_router(router)
 
 
-def create_inference_app() -> FastAPI:
-    """创建独立的推理服务应用。"""
+def create_inference_app(
+    *,
+    backend_type: str | None = None,
+    checkpoint_path: str | None = None,
+    device: str | None = None,
+) -> FastAPI:
+    """创建独立的推理服务应用，并在启动时预加载模型。"""
+
+    global _inference_service
+    _inference_service = _build_service(
+        backend_type=backend_type,
+        checkpoint_path=checkpoint_path,
+        device=device,
+    )
     app = FastAPI(
         title="Gakumas RL Inference Service",
-        description="统一的RL推理服务，支持多种后端算法",
-        version="1.0.0",
+        description="统一的 RL 推理服务（模型在服务启动时加载）",
+        version="2.0.0",
     )
     register_inference_routes(app)
     return app
+
+
+def parse_args() -> argparse.Namespace:
+    """解析推理服务命令行参数。"""
+
+    parser = argparse.ArgumentParser(description='Start Gakumas RL inference service.')
+    parser.add_argument('--backend', default=None, help='后端类型（ppo/dqn/alphazero），默认读环境变量')
+    parser.add_argument('--checkpoint', default=None, help='模型 checkpoint 路径，默认读环境变量')
+    parser.add_argument('--device', default=None, help='模型加载设备（cpu/cuda），默认读环境变量')
+    parser.add_argument('--host', default='0.0.0.0', help='监听地址')
+    parser.add_argument('--port', type=int, default=8001, help='监听端口')
+    return parser.parse_args()
+
+
+def main() -> int:
+    """命令行启动入口。"""
+
+    import uvicorn
+
+    args = parse_args()
+    app = create_inference_app(
+        backend_type=args.backend,
+        checkpoint_path=args.checkpoint,
+        device=args.device,
+    )
+    uvicorn.run(app, host=str(args.host), port=int(args.port))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -27,6 +27,49 @@ ACTION_STEP_TYPES = {
     'self_lesson_visual_sp': 'ProduceStepType_SelfLessonVisualSp',
 }
 
+SHOP_CARD_ACTION_TYPES = tuple(f'shop_buy_card_{index}' for index in range(1, 5))
+SHOP_DRINK_ACTION_TYPES = tuple(f'shop_buy_drink_{index}' for index in range(1, 5))
+SHOP_UPGRADE_ACTION_TYPES = tuple(f'shop_upgrade_card_{index}' for index in range(1, 5))
+SHOP_DELETE_ACTION_TYPES = tuple(f'shop_delete_card_{index}' for index in range(1, 5))
+
+
+def _is_shop_card_action(action_type: str) -> bool:
+    """判断动作是否属于咨询里的技能卡槽位。"""
+
+    return action_type in SHOP_CARD_ACTION_TYPES
+
+
+def _is_shop_drink_action(action_type: str) -> bool:
+    """判断动作是否属于咨询里的饮料槽位。"""
+
+    return action_type in SHOP_DRINK_ACTION_TYPES
+
+
+def _is_shop_upgrade_action(action_type: str) -> bool:
+    """判断动作是否属于咨询里的强化槽位。"""
+
+    return action_type in SHOP_UPGRADE_ACTION_TYPES
+
+
+def _is_shop_delete_action(action_type: str) -> bool:
+    """判断动作是否属于咨询里的删除槽位。"""
+
+    return action_type in SHOP_DELETE_ACTION_TYPES
+
+
+def _shop_slot_index(action_type: str) -> int:
+    """解析咨询槽位动作对应的 0-based 下标。"""
+
+    if _is_shop_card_action(action_type):
+        return SHOP_CARD_ACTION_TYPES.index(action_type)
+    if _is_shop_drink_action(action_type):
+        return SHOP_DRINK_ACTION_TYPES.index(action_type)
+    if _is_shop_upgrade_action(action_type):
+        return SHOP_UPGRADE_ACTION_TYPES.index(action_type)
+    if _is_shop_delete_action(action_type):
+        return SHOP_DELETE_ACTION_TYPES.index(action_type)
+    return -1
+
 ACTION_EFFECT_TYPES = {
     'lesson_vocal_sp': ['ProduceEffectType_VocalAddition', 'ProduceEffectType_LessonVocalSpChangeRatePermilAddition'],
     'lesson_dance_sp': ['ProduceEffectType_DanceAddition', 'ProduceEffectType_LessonDanceSpChangeRatePermilAddition'],
@@ -44,6 +87,11 @@ ACTION_EFFECT_TYPES = {
     'business': ['ProduceEffectType_EventBusinessVoteCountUp'],
     'present': ['ProduceEffectType_ProduceReward', 'ProduceEffectType_ProduceRewardSet', 'ProduceEffectType_ProduceCardUpgrade'],
     'refresh': ['ProduceEffectType_StaminaRecoverMultiple'],
+    'pre_audition_continue': [],
+    **{action_type: [] for action_type in SHOP_CARD_ACTION_TYPES},
+    **{action_type: [] for action_type in SHOP_DRINK_ACTION_TYPES},
+    **{action_type: [] for action_type in SHOP_UPGRADE_ACTION_TYPES},
+    **{action_type: [] for action_type in SHOP_DELETE_ACTION_TYPES},
 }
 
 EVENT_ACTION_TYPES = {'activity', 'business', 'present'}
@@ -77,6 +125,13 @@ HARD_ACTION_TYPES = {
     'lesson_dance_hard',
     'lesson_visual_hard',
 }
+PRE_AUDITION_ACTION_TYPES = {
+    'pre_audition_continue',
+    *SHOP_CARD_ACTION_TYPES,
+    *SHOP_DRINK_ACTION_TYPES,
+    *SHOP_UPGRADE_ACTION_TYPES,
+    *SHOP_DELETE_ACTION_TYPES,
+}
 
 
 def _is_lesson_action(action_type: str) -> bool:
@@ -109,6 +164,16 @@ class ProduceActionCandidate:
     stat_deltas: tuple[float, float, float] = (0.0, 0.0, 0.0)
     available: bool = True
     source_row_id: str = ''
+    resource_type: str = ''
+    resource_id: str = ''
+    resource_level: int = 0
+    target_deck_index: int = -1
+    customize_id: str = ''
+    slot_index: int = -1
+    exam_effect_types: list[str] = field(default_factory=list)
+    card_category: str = ''
+    card_rarity: str = ''
+    card_cost_type: str = ''
 
 
 class ProduceRuntime:
@@ -133,6 +198,7 @@ class ProduceRuntime:
         self.np_random = np.random.default_rng(seed)
         self.produce_row = repository.produces.first(scenario.produce_id) or {}
         self.produce_setting = repository.produce_settings.first(str(self.produce_row.get('produceSettingId') or '')) or {}
+        self.runtime_setting = (repository.load_table('Setting').rows or [{}])[0]
         self.produce_effects = repository.load_table('ProduceEffect')
         self.event_suggestions = repository.load_table('ProduceStepEventSuggestion')
         self.event_details = repository.load_table('ProduceStepEventDetail')
@@ -150,6 +216,11 @@ class ProduceRuntime:
         self.active_produce_items: list[ActiveProduceItem] = []
         self.support_skills: list[str] = []
         self._candidates: list[ProduceActionCandidate] = []
+        self.pending_audition_stage: str | None = None
+        self.pre_audition_phase = 'weekly'
+        self.remaining_customize_actions = 0
+        self.initial_deck_card_ids: set[str] = set()
+        self.shop_inventory: dict[str, ProduceActionCandidate] = {}
 
     def _build_checkpoint_positions(self) -> list[tuple[int, str]]:
         """按路线考试数量计算阶段性考试触发点。"""
@@ -223,6 +294,8 @@ class ProduceRuntime:
             'reroll_count_bonus': 0.0,
             'shop_discount': 0.0,
             'card_upgrade_probability_bonus': 0.0,
+            'shop_card_modify_count': 0.0,
+            'shop_card_modified_in_visit': 0.0,
             'producer_level': float(self.idol_loadout.producer_level if self.idol_loadout else 0),
             'idol_rank': float(self.idol_loadout.idol_rank if self.idol_loadout else 0),
             'dearness_level': float(self.idol_loadout.dearness_level if self.idol_loadout else 0),
@@ -253,6 +326,7 @@ class ProduceRuntime:
 
         self.state = self._base_state()
         self.deck = list(build_initial_exam_deck(self.repository, self.scenario, rng=self.np_random, loadout=self.idol_loadout))
+        self.initial_deck_card_ids = {str(card.get('id') or '') for card in self.deck if str(card.get('id') or '')}
         self.drinks = list(
             self.repository.build_drink_inventory(
                 self.scenario,
@@ -264,6 +338,10 @@ class ProduceRuntime:
         self.exam_status_enchant_specs = []
         self.active_produce_items = []
         self.support_skills = []
+        self.pending_audition_stage = None
+        self.pre_audition_phase = 'weekly'
+        self.remaining_customize_actions = 0
+        self.shop_inventory = {}
         self._apply_loadout_start_effects()
         self._dispatch_produce_item_phase('ProducePhaseType_ProduceStart')
         self._trim_drinks()
@@ -394,9 +472,496 @@ class ProduceRuntime:
 
         return (
             'ProducePhaseType_StartShop',
-            'ProducePhaseType_EndShop',
             'ProducePhaseType_StartCustomize',
+            'ProducePhaseType_EndShop',
         )
+
+    def _shop_price_by_rarity(self, rarity: str, *, kind: str) -> float:
+        """按用户指定的近似规则，把 rarity 映射到咨询价格档。"""
+
+        normalized = str(rarity or '').upper()
+        if kind == 'card':
+            if 'SSR' in normalized:
+                return 150.0
+            if 'SR' in normalized:
+                return 100.0
+            return 80.0
+        if 'SSR' in normalized:
+            return 130.0
+        if 'SR' in normalized:
+            return 100.0
+        return 50.0
+
+    def _shop_card_price(self, card_row: dict[str, Any]) -> float:
+        """计算咨询技能卡价格，最多只按一次强化额外加价。"""
+
+        price = self._shop_price_by_rarity(str(card_row.get('rarity') or ''), kind='card')
+        if int(card_row.get('upgradeCount') or 0) >= 1:
+            price += 20.0
+        return price
+
+    def _shop_drink_price(self, drink_row: dict[str, Any]) -> float:
+        """计算咨询 P 饮料价格。"""
+
+        return self._shop_price_by_rarity(str(drink_row.get('rarity') or ''), kind='drink')
+
+    def _shop_modify_cost(self) -> float:
+        """计算本次相谈执行一次强化/删除所需的 P 点。"""
+
+        base_cost = 100.0 + 25.0 * float(self.state.get('shop_card_modify_count') or 0.0)
+        return self._effective_shop_cost(base_cost, 1.0)
+
+    def _discounted_shop_slot_count(self) -> int:
+        """每组前 1~2 个槽位会随机带折扣。"""
+
+        return int(self.np_random.integers(1, 3))
+
+    def _shop_discount_ratio(self, slot_index: int, discounted_count: int) -> float:
+        """返回当前槽位的折扣倍率。"""
+
+        if slot_index >= discounted_count:
+            return 1.0
+        return float(self.np_random.choice(np.array([0.8, 0.9], dtype=np.float64)))
+
+    def _effective_shop_cost(self, base_cost: float, discount_ratio: float) -> float:
+        """叠加槽位折扣和运行时商店倍率，统一折算最终消费。"""
+
+        runtime_ratio = max(0.0, 1.0 + float(self.state.get('shop_discount') or 0.0))
+        effective_ratio = max(0.0, float(discount_ratio)) * runtime_ratio
+        return float(max(1, int(np.floor(max(base_cost, 1.0) * effective_ratio))))
+
+    def _allowed_plan_types(self) -> set[str]:
+        """返回当前培育可接受的公共/本流派类型集合。"""
+
+        allowed = {'ProducePlanType_Common'}
+        if self.idol_loadout is not None and self.idol_loadout.stat_profile.plan_type:
+            allowed.add(str(self.idol_loadout.stat_profile.plan_type))
+        return allowed
+
+    def _selection_card_pool(self) -> list[dict[str, Any]]:
+        """为咨询和三选一卡池复用同一套过滤规则。"""
+
+        weighted_pool = build_weighted_card_pool(self.repository, self.scenario, loadout=self.idol_loadout)
+        filtered: list[dict[str, Any]] = []
+        for card_row in weighted_pool:
+            card_id = str(card_row.get('id') or '')
+            if not card_id or card_id in self.initial_deck_card_ids:
+                continue
+            if int(card_row.get('upgradeCount') or 0) > 1:
+                continue
+            origin_idol_card_id = str(card_row.get('originIdolCardId') or '')
+            if origin_idol_card_id and (self.idol_loadout is None or origin_idol_card_id != self.idol_loadout.idol_card_id):
+                continue
+            if str(card_row.get('originSupportCardId') or ''):
+                continue
+            filtered.append(card_row)
+        return filtered
+
+    def _candidate_card_metadata(self, card_row: dict[str, Any]) -> dict[str, Any]:
+        """提取技能卡供动作特征编码使用的元信息。"""
+
+        return {
+            'exam_effect_types': self.repository.card_exam_effect_types(card_row),
+            'card_category': str(card_row.get('category') or ''),
+            'card_rarity': str(card_row.get('rarity') or ''),
+            'card_cost_type': str(card_row.get('costType') or ''),
+        }
+
+    def _candidate_drink_metadata(self, drink_row: dict[str, Any]) -> dict[str, Any]:
+        """提取 P 饮料供动作特征编码使用的元信息。"""
+
+        return {
+            'exam_effect_types': self.repository.drink_exam_effect_types(drink_row),
+            'card_category': '',
+            'card_rarity': '',
+            'card_cost_type': '',
+        }
+
+    def _shop_drink_pool(self) -> list[dict[str, Any]]:
+        """按当前流派、等级和显式来源过滤咨询饮料候选池。"""
+
+        producer_level = int(self.state.get('producer_level') or 0)
+        allowed_plan_types = self._allowed_plan_types()
+        return [
+            dict(row)
+            for row in self.repository.produce_drinks.rows
+            if not row.get('libraryHidden')
+            and str(row.get('planType') or 'ProducePlanType_Common') in allowed_plan_types
+            and int(row.get('unlockProducerLevel') or 0) <= producer_level
+            and not str(row.get('originSupportCardId') or '')
+        ]
+
+    def _sample_capped_card_variant(self, card_id: str, *, max_upgrade_count: int) -> dict[str, Any] | None:
+        """按既有随机分布抽卡面，但硬性限制最高强化次数。"""
+
+        for _ in range(8):
+            sampled = self.repository.sample_random_card_variant(card_id, self.np_random)
+            if sampled is not None and int(sampled.get('upgradeCount') or 0) <= max_upgrade_count:
+                return dict(sampled)
+        for upgrade_count in range(max_upgrade_count, -1, -1):
+            matched = self.repository.card_row_by_upgrade(card_id, upgrade_count, fallback_to_canonical=False)
+            if matched is not None:
+                return dict(matched)
+        canonical = self.repository.canonical_card_row(card_id)
+        return dict(canonical) if canonical is not None else None
+
+    def _empty_shop_candidate(self, action_type: str) -> ProduceActionCandidate:
+        """构造一个已售空或无货的咨询槽位。"""
+
+        return ProduceActionCandidate(
+            label=self._action_label(action_type),
+            action_type=action_type,
+            effect_types=[],
+            produce_effect_ids=[],
+            available=False,
+            slot_index=_shop_slot_index(action_type),
+        )
+
+    def _eligible_shop_upgrade_targets(self) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
+        """返回相谈里可强化的未强化技能卡，并按收益优先排序。"""
+
+        targets: list[tuple[float, int, dict[str, Any], dict[str, Any]]] = []
+        for index, card in enumerate(self.deck):
+            if int(card.get('upgradeCount') or 0) != 0:
+                continue
+            upgraded = self._lookup_card_row(str(card.get('id') or ''), 1)
+            if upgraded is None or int(upgraded.get('upgradeCount') or 0) != 1:
+                continue
+            current_prior = float(self.repository.card_play_priors.get(str(card.get('id') or ''), 0.0))
+            upgraded_prior = float(self.repository.card_play_priors.get(str(upgraded.get('id') or ''), current_prior))
+            current_eval = float(card.get('evaluation') or 0.0)
+            upgraded_eval = float(upgraded.get('evaluation') or current_eval)
+            score = (upgraded_prior - current_prior) + (upgraded_eval - current_eval) / 10.0
+            targets.append((score, index, dict(card), dict(upgraded)))
+        targets.sort(key=lambda item: (item[0], float(item[2].get('evaluation') or 0.0)), reverse=True)
+        return [(index, current_card, upgraded_card) for _, index, current_card, upgraded_card in targets]
+
+    def _eligible_shop_delete_targets(self) -> list[tuple[int, dict[str, Any]]]:
+        """返回相谈里可删除的技能卡，并按低价值优先排序。"""
+
+        targets: list[tuple[float, int, dict[str, Any]]] = []
+        for index, card in enumerate(self.deck):
+            card_id = str(card.get('id') or '')
+            if not card_id:
+                continue
+            prior = float(self.repository.card_play_priors.get(card_id, 0.0))
+            evaluation = float(card.get('evaluation') or 0.0)
+            score = prior + evaluation / 10.0
+            targets.append((score, index, dict(card)))
+        targets.sort(key=lambda item: (item[0], float(item[2].get('evaluation') or 0.0)))
+        return [(index, card) for _, index, card in targets]
+
+    def _build_shop_card_inventory(self) -> dict[str, ProduceActionCandidate]:
+        """生成固定的 4 个技能卡咨询槽位。"""
+
+        offers: dict[str, ProduceActionCandidate] = {}
+        available_pool = list(self._selection_card_pool())
+        discounted_count = self._discounted_shop_slot_count()
+        for slot_index, action_type in enumerate(SHOP_CARD_ACTION_TYPES):
+            if not available_pool:
+                offers[action_type] = self._empty_shop_candidate(action_type)
+                continue
+            sampled = sample_card_from_weighted_pool(available_pool, self.np_random)
+            if sampled is None:
+                offers[action_type] = self._empty_shop_candidate(action_type)
+                continue
+            sampled_card_id = str(sampled.get('id') or '')
+            card_row = self._sample_capped_card_variant(sampled_card_id, max_upgrade_count=1) or dict(sampled)
+            discount_ratio = self._shop_discount_ratio(slot_index, discounted_count)
+            cost = self._effective_shop_cost(self._shop_card_price(card_row), discount_ratio)
+            metadata = self._candidate_card_metadata(card_row)
+            offers[action_type] = ProduceActionCandidate(
+                label=f'购买技能卡[{slot_index + 1}]:{self.repository.card_name(card_row)}',
+                action_type=action_type,
+                effect_types=[],
+                produce_effect_ids=[],
+                produce_point_delta=-cost,
+                produce_card_id=sampled_card_id,
+                resource_type='ProduceResourceType_ProduceCard',
+                resource_id=sampled_card_id,
+                resource_level=int(card_row.get('upgradeCount') or 0),
+                source_row_id=sampled_card_id,
+                slot_index=slot_index,
+                exam_effect_types=list(metadata['exam_effect_types']),
+                card_category=str(metadata['card_category']),
+                card_rarity=str(metadata['card_rarity']),
+                card_cost_type=str(metadata['card_cost_type']),
+            )
+            available_pool = [row for row in available_pool if str(row.get('id') or '') != sampled_card_id]
+        return offers
+
+    def _build_shop_drink_inventory(self) -> dict[str, ProduceActionCandidate]:
+        """生成固定的 4 个饮料咨询槽位。"""
+
+        offers: dict[str, ProduceActionCandidate] = {}
+        available_pool = list(self._shop_drink_pool())
+        discounted_count = self._discounted_shop_slot_count()
+        for slot_index, action_type in enumerate(SHOP_DRINK_ACTION_TYPES):
+            if not available_pool:
+                offers[action_type] = self._empty_shop_candidate(action_type)
+                continue
+            selected_index = int(self.np_random.integers(0, len(available_pool)))
+            drink_row = dict(available_pool.pop(selected_index))
+            drink_id = str(drink_row.get('id') or '')
+            discount_ratio = self._shop_discount_ratio(slot_index, discounted_count)
+            cost = self._effective_shop_cost(self._shop_drink_price(drink_row), discount_ratio)
+            metadata = self._candidate_drink_metadata(drink_row)
+            offers[action_type] = ProduceActionCandidate(
+                label=f'购买P饮料[{slot_index + 1}]:{self.repository.drink_name(drink_row)}',
+                action_type=action_type,
+                effect_types=[],
+                produce_effect_ids=[],
+                produce_point_delta=-cost,
+                resource_type='ProduceResourceType_ProduceDrink',
+                resource_id=drink_id,
+                source_row_id=drink_id,
+                slot_index=slot_index,
+                exam_effect_types=list(metadata['exam_effect_types']),
+            )
+        return offers
+
+    def _build_shop_upgrade_inventory(self) -> dict[str, ProduceActionCandidate]:
+        """生成固定的相谈强化候选槽位。"""
+
+        offers: dict[str, ProduceActionCandidate] = {}
+        modify_cost = self._shop_modify_cost()
+        for slot_index, action_type in enumerate(SHOP_UPGRADE_ACTION_TYPES):
+            targets = self._eligible_shop_upgrade_targets()
+            if slot_index >= len(targets):
+                offers[action_type] = self._empty_shop_candidate(action_type)
+                continue
+            deck_index, current_card, upgraded_card = targets[slot_index]
+            metadata = self._candidate_card_metadata(upgraded_card)
+            offers[action_type] = ProduceActionCandidate(
+                label=f'强化技能卡[{slot_index + 1}]:{self.repository.card_name(upgraded_card)}',
+                action_type=action_type,
+                effect_types=[],
+                produce_effect_ids=[],
+                produce_point_delta=-modify_cost,
+                produce_card_id=str(upgraded_card.get('id') or ''),
+                resource_type='ProduceResourceType_ProduceCard',
+                resource_id=str(upgraded_card.get('id') or ''),
+                resource_level=int(upgraded_card.get('upgradeCount') or 0),
+                source_row_id=str(current_card.get('id') or ''),
+                target_deck_index=deck_index,
+                slot_index=slot_index,
+                exam_effect_types=list(metadata['exam_effect_types']),
+                card_category=str(metadata['card_category']),
+                card_rarity=str(metadata['card_rarity']),
+                card_cost_type=str(metadata['card_cost_type']),
+            )
+        return offers
+
+    def _build_shop_delete_inventory(self) -> dict[str, ProduceActionCandidate]:
+        """生成固定的相谈删除候选槽位。"""
+
+        offers: dict[str, ProduceActionCandidate] = {}
+        modify_cost = self._shop_modify_cost()
+        for slot_index, action_type in enumerate(SHOP_DELETE_ACTION_TYPES):
+            targets = self._eligible_shop_delete_targets()
+            if slot_index >= len(targets):
+                offers[action_type] = self._empty_shop_candidate(action_type)
+                continue
+            deck_index, card_row = targets[slot_index]
+            metadata = self._candidate_card_metadata(card_row)
+            offers[action_type] = ProduceActionCandidate(
+                label=f'删除技能卡[{slot_index + 1}]:{self.repository.card_name(card_row)}',
+                action_type=action_type,
+                effect_types=[],
+                produce_effect_ids=[],
+                produce_point_delta=-modify_cost,
+                produce_card_id=str(card_row.get('id') or ''),
+                resource_type='ProduceResourceType_ProduceCard',
+                resource_id=str(card_row.get('id') or ''),
+                resource_level=int(card_row.get('upgradeCount') or 0),
+                source_row_id=str(card_row.get('id') or ''),
+                target_deck_index=deck_index,
+                slot_index=slot_index,
+                exam_effect_types=list(metadata['exam_effect_types']),
+                card_category=str(metadata['card_category']),
+                card_rarity=str(metadata['card_rarity']),
+                card_cost_type=str(metadata['card_cost_type']),
+            )
+        return offers
+
+    def _build_shop_inventory(self) -> dict[str, ProduceActionCandidate]:
+        """在进入咨询阶段时一次性生成稳定库存。"""
+
+        inventory = self._build_shop_card_inventory()
+        inventory.update(self._build_shop_drink_inventory())
+        inventory.update(self._build_shop_upgrade_inventory())
+        inventory.update(self._build_shop_delete_inventory())
+        return inventory
+
+    def _next_checkpoint_stage(self) -> str | None:
+        """返回当前是否已经进入考试前置流程。"""
+
+        if self.pending_audition_stage:
+            return self.pending_audition_stage
+        if self.state['audition_index'] >= len(self.checkpoints):
+            return None
+        checkpoint_step, stage_type = self.checkpoints[self.state['audition_index']]
+        if self.state['step'] < checkpoint_step:
+            return None
+        return stage_type
+
+    def _customize_options_for_card(self, card: dict[str, Any]) -> list[dict[str, Any]]:
+        """从主数据里解析当前卡还可执行的特训选项。"""
+
+        customize_ids = [str(value) for value in card.get('produceCardCustomizeIds', []) if value]
+        if not customize_ids:
+            return []
+        applied_ids = [str(value) for value in card.get('customizedProduceCardCustomizeIds', []) if value]
+        grouped_rows = self.repository.load_table('ProduceCardCustomize')
+        options: list[dict[str, Any]] = []
+        for customize_id in customize_ids:
+            level_rows = [
+                row
+                for row in grouped_rows.by_id.get(customize_id, [])
+                if int(row.get('customizeCount') or 0) > 0
+            ]
+            if not level_rows:
+                continue
+            next_count = sum(1 for value in applied_ids if value == customize_id) + 1
+            next_row = next(
+                (row for row in level_rows if int(row.get('customizeCount') or 0) == next_count),
+                None,
+            )
+            if next_row is not None:
+                options.append(dict(next_row))
+        return options
+
+    def _sample_customize_candidate(self) -> ProduceActionCandidate:
+        """特训阶段随机抽一个仍可继续强化的卡面选项。"""
+
+        candidates: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+        for index, card in enumerate(self.deck):
+            for option in self._customize_options_for_card(card):
+                candidates.append((index, card, option))
+        if not candidates:
+            return ProduceActionCandidate(label='特训技能卡', action_type='customize_apply', effect_types=[], available=False)
+        deck_index, card_row, customize_row = candidates[int(self.np_random.integers(0, len(candidates)))]
+        cost = float(customize_row.get('producePoint') or 0.0)
+        return ProduceActionCandidate(
+            label=f'特训技能卡:{str(card_row.get("id") or "")}',
+            action_type='customize_apply',
+            effect_types=[],
+            produce_effect_ids=[],
+            produce_point_delta=-cost,
+            produce_card_id=str(card_row.get('id') or ''),
+            source_row_id=str(card_row.get('id') or ''),
+            target_deck_index=deck_index,
+            customize_id=str(customize_row.get('id') or ''),
+        )
+
+    def _apply_customize_candidate(self, candidate: ProduceActionCandidate) -> bool:
+        """把一条特训主数据应用到当前牌组卡面。"""
+
+        if candidate.target_deck_index < 0 or candidate.target_deck_index >= len(self.deck) or not candidate.customize_id:
+            return False
+        card = dict(self.deck[candidate.target_deck_index])
+        options = self._customize_options_for_card(card)
+        customize_row = next((row for row in options if str(row.get('id') or '') == candidate.customize_id), None)
+        if customize_row is None:
+            return False
+        grow_effect_ids = list(card.get('growEffectIds') or [])
+        for grow_effect_id in customize_row.get('produceCardGrowEffectIds', []) or []:
+            grow_effect_id = str(grow_effect_id or '')
+            if grow_effect_id and grow_effect_id not in grow_effect_ids:
+                grow_effect_ids.append(grow_effect_id)
+        applied_ids = list(card.get('customizedProduceCardCustomizeIds') or [])
+        applied_ids.append(candidate.customize_id)
+        card['growEffectIds'] = grow_effect_ids
+        card['customizedProduceCardCustomizeIds'] = applied_ids
+        self.deck[candidate.target_deck_index] = card
+        self.remaining_customize_actions = max(self.remaining_customize_actions - 1, 0)
+        self._dispatch_produce_item_phase(
+            'ProducePhaseType_CustomizeProduceCard',
+            stage_type=self.pending_audition_stage or '',
+            card=card,
+            customize_id=candidate.customize_id,
+        )
+        return True
+
+    def _mark_shop_modify_used(self) -> None:
+        """记录本次相谈已经执行过一次强化/删除。"""
+
+        self.state['shop_card_modified_in_visit'] = 1.0
+        self.state['shop_card_modify_count'] = float(self.state.get('shop_card_modify_count') or 0.0) + 1.0
+
+    def _apply_shop_upgrade_candidate(self, candidate: ProduceActionCandidate) -> bool:
+        """执行相谈内的技能卡强化。"""
+
+        if candidate.target_deck_index < 0 or candidate.target_deck_index >= len(self.deck):
+            return False
+        current_card = self.deck[candidate.target_deck_index]
+        if int(current_card.get('upgradeCount') or 0) != 0:
+            return False
+        upgraded = self._lookup_card_row(str(current_card.get('id') or ''), 1)
+        if upgraded is None or int(upgraded.get('upgradeCount') or 0) != 1:
+            return False
+        upgraded_row = dict(upgraded)
+        self.deck[candidate.target_deck_index] = upgraded_row
+        self._mark_shop_modify_used()
+        self._dispatch_produce_item_phase(
+            'ProducePhaseType_CustomizeProduceCard',
+            stage_type=self.pending_audition_stage or '',
+            card=upgraded_row,
+        )
+        self._dispatch_produce_item_phase('ProducePhaseType_UpgradeProduceCard', card=upgraded_row)
+        self.shop_inventory.update(self._build_shop_upgrade_inventory())
+        self.shop_inventory.update(self._build_shop_delete_inventory())
+        return True
+
+    def _apply_shop_delete_candidate(self, candidate: ProduceActionCandidate) -> bool:
+        """执行相谈内的技能卡删除。"""
+
+        if candidate.target_deck_index < 0 or candidate.target_deck_index >= len(self.deck):
+            return False
+        deleted_card = dict(self.deck[candidate.target_deck_index])
+        self.deck.pop(candidate.target_deck_index)
+        self._mark_shop_modify_used()
+        self._dispatch_produce_item_phase('ProducePhaseType_DeleteProduceCard', card=deleted_card)
+        self.shop_inventory.update(self._build_shop_upgrade_inventory())
+        self.shop_inventory.update(self._build_shop_delete_inventory())
+        return True
+
+    def _start_pre_audition_flow(self, stage_type: str) -> None:
+        """在 checkpoint 处进入咨询/特训决策流程。"""
+
+        if self.pending_audition_stage == stage_type and self.pre_audition_phase != 'weekly':
+            return
+        self.pending_audition_stage = stage_type
+        self.pre_audition_phase = 'shop'
+        self._dispatch_produce_item_phase('ProducePhaseType_StartShop', stage_type=stage_type)
+        self._dispatch_produce_item_phase('ProducePhaseType_StartCustomize', stage_type=stage_type)
+        self.state['shop_card_modified_in_visit'] = 0.0
+        self.shop_inventory = self._build_shop_inventory()
+
+    def _supports_pre_audition_actions(self) -> bool:
+        """判断当前场景是否真的把相谈前置动作暴露给训练环境。"""
+
+        return any(action_type in PRE_AUDITION_ACTION_TYPES for action_type in self.scenario.action_types)
+
+    def _advance_pre_audition_flow(self) -> tuple[float, bool, dict[str, Any]]:
+        """结束相谈并推进到考试。"""
+
+        stage_type = self.pending_audition_stage
+        if not stage_type:
+            return 0.0, self.state['step'] >= self.state['max_steps'], {'pre_audition_phase': self.pre_audition_phase}
+        self._dispatch_produce_item_phase('ProducePhaseType_EndShop', stage_type=stage_type)
+        audition_slot = self.state['audition_index']
+        reward, exam_info = self._run_audition(stage_type, include_pre_audition_phases=False)
+        self.state['audition_index'] += 1
+        self.pending_audition_stage = None
+        self.pre_audition_phase = 'weekly'
+        self.state['shop_card_modified_in_visit'] = 0.0
+        self.shop_inventory = {}
+        terminated = self.state['step'] >= self.state['max_steps'] and self.state['audition_index'] >= len(self.checkpoints)
+        return reward, terminated, {
+            'pre_audition_phase': self.pre_audition_phase,
+            f'audition_{audition_slot}': exam_info,
+        }
 
     def legal_actions(self) -> list[ProduceActionCandidate]:
         """采样当前周的所有动作候选，并标记可用性。"""
@@ -415,6 +980,67 @@ class ProduceRuntime:
         candidate = self._candidates[action_index]
         if not candidate.available:
             return -0.25, False, {'invalid_action': True}
+
+        if self.pre_audition_phase != 'weekly':
+            reward = -0.01
+            before_deck_quality = float(self.state.get('deck_quality') or 0.0)
+            before_drink_quality = float(self.state.get('drink_quality') or 0.0)
+            succeeded = True
+            if candidate.action_type == 'pre_audition_continue':
+                flow_reward, terminated, info = self._advance_pre_audition_flow()
+                info.update(
+                    {
+                        'action': candidate.label,
+                        'action_type': candidate.action_type,
+                        'success': True,
+                        'vocal': self.state['vocal'],
+                        'dance': self.state['dance'],
+                        'visual': self.state['visual'],
+                        'stamina': self.state['stamina'],
+                        'produce_points': self.state['produce_points'],
+                        'fan_votes': self.state['fan_votes'],
+                    }
+                )
+                return reward + flow_reward, terminated, info
+            if _is_shop_card_action(candidate.action_type):
+                self.state['produce_points'] = max(self.state['produce_points'] + candidate.produce_point_delta, 0.0)
+                self._grant_resource(candidate.resource_type, candidate.resource_id, candidate.resource_level)
+                self.shop_inventory[candidate.action_type] = self._empty_shop_candidate(candidate.action_type)
+            elif _is_shop_drink_action(candidate.action_type):
+                self.state['produce_points'] = max(self.state['produce_points'] + candidate.produce_point_delta, 0.0)
+                self._grant_resource(candidate.resource_type, candidate.resource_id, candidate.resource_level)
+                self.shop_inventory[candidate.action_type] = self._empty_shop_candidate(candidate.action_type)
+                self._dispatch_produce_item_phase(
+                    'ProducePhaseType_BuyShopItemProduceDrink',
+                    stage_type=self.pending_audition_stage or '',
+                    drink_id=candidate.resource_id,
+                )
+            elif _is_shop_upgrade_action(candidate.action_type):
+                self.state['produce_points'] = max(self.state['produce_points'] + candidate.produce_point_delta, 0.0)
+                succeeded = self._apply_shop_upgrade_candidate(candidate)
+                if not succeeded:
+                    return -0.25, False, {'invalid_action': True}
+            elif _is_shop_delete_action(candidate.action_type):
+                self.state['produce_points'] = max(self.state['produce_points'] + candidate.produce_point_delta, 0.0)
+                succeeded = self._apply_shop_delete_candidate(candidate)
+                if not succeeded:
+                    return -0.25, False, {'invalid_action': True}
+            self._trim_drinks()
+            self._refresh_quality_scores()
+            reward += (self.state['deck_quality'] - before_deck_quality) * 0.2
+            reward += (self.state['drink_quality'] - before_drink_quality) * 0.2
+            return reward, False, {
+                'action': candidate.label,
+                'action_type': candidate.action_type,
+                'success': succeeded,
+                'pre_audition_phase': self.pre_audition_phase,
+                'vocal': self.state['vocal'],
+                'dance': self.state['dance'],
+                'visual': self.state['visual'],
+                'stamina': self.state['stamina'],
+                'produce_points': self.state['produce_points'],
+                'fan_votes': self.state['fan_votes'],
+            }
 
         reward = -0.01
         phase_context = {
@@ -463,6 +1089,7 @@ class ProduceRuntime:
             'action': candidate.label,
             'action_type': candidate.action_type,
             'success': succeeded,
+            'pre_audition_phase': self.pre_audition_phase,
             'vocal': self.state['vocal'],
             'dance': self.state['dance'],
             'visual': self.state['visual'],
@@ -476,24 +1103,45 @@ class ProduceRuntime:
             checkpoint_step, stage_type = self.checkpoints[self.state['audition_index']]
             if self.state['step'] < checkpoint_step:
                 break
+            if self._supports_pre_audition_actions():
+                self._start_pre_audition_flow(stage_type)
+                info['pre_audition_phase'] = self.pre_audition_phase
+                break
             exam_reward, exam_info = self._run_audition(stage_type)
             reward += exam_reward
             info[f'audition_{self.state["audition_index"]}'] = exam_info
             self.state['audition_index'] += 1
 
-        terminated = self.state['step'] >= self.state['max_steps']
-        if terminated and self.state['audition_index'] < len(self.checkpoints):
-            while self.state['audition_index'] < len(self.checkpoints):
-                _, stage_type = self.checkpoints[self.state['audition_index']]
-                exam_reward, exam_info = self._run_audition(stage_type)
-                reward += exam_reward
-                info[f'audition_{self.state["audition_index"]}'] = exam_info
-                self.state['audition_index'] += 1
+        terminated = (
+            self.state['step'] >= self.state['max_steps']
+            and self.state['audition_index'] >= len(self.checkpoints)
+            and self.pending_audition_stage is None
+        )
         return reward, terminated, info
 
     def _action_available(self, candidate: ProduceActionCandidate) -> bool:
         """根据体力和休息次数判断动作当前是否可用。"""
 
+        if self.pre_audition_phase != 'weekly':
+            if self.pre_audition_phase == 'shop':
+                if _is_shop_card_action(candidate.action_type):
+                    return bool(candidate.resource_id) and self.state['produce_points'] + candidate.produce_point_delta >= 0.0
+                if _is_shop_drink_action(candidate.action_type):
+                    return (
+                        bool(candidate.resource_id)
+                        and len(self.drinks) < max(self.scenario.drink_limit, 1)
+                        and self.state['produce_points'] + candidate.produce_point_delta >= 0.0
+                    )
+                if _is_shop_upgrade_action(candidate.action_type) or _is_shop_delete_action(candidate.action_type):
+                    return (
+                        candidate.target_deck_index >= 0
+                        and float(self.state.get('shop_card_modified_in_visit') or 0.0) < 1.0
+                        and self.state['produce_points'] + candidate.produce_point_delta >= 0.0
+                    )
+                return candidate.action_type == 'pre_audition_continue'
+            return False
+        if candidate.action_type in PRE_AUDITION_ACTION_TYPES:
+            return False
         if candidate.action_type == 'refresh':
             return self.state['refresh_used'] < max(self.scenario.max_refresh_count, 1)
         if candidate.action_type != 'refresh' and self.state['stamina'] <= 0.0:
@@ -524,6 +1172,17 @@ class ProduceRuntime:
     def _sample_action(self, action_type: str) -> ProduceActionCandidate:
         """为指定动作类型采样一条本周可执行动作。"""
 
+        if action_type == 'pre_audition_continue':
+            return ProduceActionCandidate(
+                label='继续前进',
+                action_type=action_type,
+                effect_types=[],
+                produce_effect_ids=[],
+            )
+        if _is_shop_card_action(action_type) or _is_shop_drink_action(action_type):
+            return replace(self.shop_inventory.get(action_type, self._empty_shop_candidate(action_type)))
+        if _is_shop_upgrade_action(action_type) or _is_shop_delete_action(action_type):
+            return replace(self.shop_inventory.get(action_type, self._empty_shop_candidate(action_type)))
         if action_type == 'refresh':
             recovery_permille = float(self.produce_setting.get('refreshStaminaRecoveryPermil') or 700)
             return ProduceActionCandidate(
@@ -784,8 +1443,8 @@ class ProduceRuntime:
         if effect_type == 'ProduceEffectType_AuditionNpcEnhance':
             self.state['audition_difficulty_bonus'] += value / 1000.0
             return
-        if effect_type == '128':
-            # 有一条主数据直接把原始枚举值序列化进来，需要按 id 识别为 NPC 弱化。
+        if effect_type in {'ProduceEffectType_AuditionNpcWeaken', '128'}:
+            # 线上主数据既有正式枚举，也残留过直接落原始值 `128` 的脏数据，两者都表示削弱对手分数。
             self.state['audition_difficulty_bonus'] -= value / 1000.0
             return
         if effect_type == 'ProduceEffectType_ExamTurnDown':
@@ -940,16 +1599,15 @@ class ProduceRuntime:
                     self.drinks.append(drink_row)
                     self._dispatch_produce_item_phase('ProducePhaseType_GetProduceDrink')
             elif resource_type == 'ProduceResourceType_ProduceCard':
-                candidates = build_weighted_card_pool(self.repository, self.scenario, loadout=self.idol_loadout)
+                candidates = self._selection_card_pool()
                 if candidates:
                     sampled = sample_card_from_weighted_pool(candidates, self.np_random)
                     if sampled is None:
                         continue
-                    randomized = self.repository.sample_random_card_variant(str(sampled.get('id') or ''), self.np_random)
-                    card_row = dict(randomized or sampled)
+                    card_row = self._sample_capped_card_variant(str(sampled.get('id') or ''), max_upgrade_count=1) or dict(sampled)
                     if self.np_random.random() < self.state['card_upgrade_probability_bonus']:
                         upgraded_row = self._lookup_card_row(str(card_row.get('id')), int(card_row.get('upgradeCount') or 0) + 1)
-                        if upgraded_row is not None:
+                        if upgraded_row is not None and int(upgraded_row.get('upgradeCount') or 0) <= 1:
                             card_row = dict(upgraded_row)
                     self.deck.append(card_row)
                     self._dispatch_produce_item_phase('ProducePhaseType_GetProduceCard', card=card_row)
@@ -1037,17 +1695,16 @@ class ProduceRuntime:
         if not indices:
             return
         index = int(self.np_random.choice(indices))
-        candidates = build_weighted_card_pool(self.repository, self.scenario, loadout=self.idol_loadout)
+        candidates = self._selection_card_pool()
         if not candidates:
             return
         sampled = sample_card_from_weighted_pool(candidates, self.np_random)
         if sampled is None:
             return
-        randomized = self.repository.sample_random_card_variant(str(sampled.get('id') or ''), self.np_random)
-        replacement = dict(randomized or sampled)
+        replacement = self._sample_capped_card_variant(str(sampled.get('id') or ''), max_upgrade_count=1) or dict(sampled)
         if upgraded:
             upgraded_row = self._lookup_card_row(str(replacement.get('id')), int(replacement.get('upgradeCount') or 0) + 1)
-            if upgraded_row is not None:
+            if upgraded_row is not None and int(upgraded_row.get('upgradeCount') or 0) <= 1:
                 replacement = dict(upgraded_row)
         self.deck[index] = replacement
         self._dispatch_produce_item_phase('ProducePhaseType_ChangeProduceCard', card=replacement)
@@ -1091,7 +1748,16 @@ class ProduceRuntime:
             'business': '营业',
             'present': '差入/事件',
             'refresh': '休息',
+            'pre_audition_continue': '继续前进',
         }
+        if _is_shop_card_action(action_type):
+            return f'购买技能卡槽位{_shop_slot_index(action_type) + 1}'
+        if _is_shop_drink_action(action_type):
+            return f'购买P饮料槽位{_shop_slot_index(action_type) + 1}'
+        if _is_shop_upgrade_action(action_type):
+            return f'强化技能卡槽位{_shop_slot_index(action_type) + 1}'
+        if _is_shop_delete_action(action_type):
+            return f'删除技能卡槽位{_shop_slot_index(action_type) + 1}'
         return labels.get(action_type, action_type)
 
     def _trim_drinks(self) -> None:
@@ -1169,11 +1835,12 @@ class ProduceRuntime:
                 best_action = action
         return best_action
 
-    def _run_audition(self, stage_type: str) -> tuple[float, dict[str, Any]]:
+    def _run_audition(self, stage_type: str, *, include_pre_audition_phases: bool = True) -> tuple[float, dict[str, Any]]:
         """把当前培育构筑带入考试运行时，返回考试奖励与摘要。"""
 
-        for phase_type in self._pre_audition_item_phases():
-            self._dispatch_produce_item_phase(phase_type, stage_type=stage_type)
+        if include_pre_audition_phases:
+            for phase_type in self._pre_audition_item_phases():
+                self._dispatch_produce_item_phase(phase_type, stage_type=stage_type)
         self._dispatch_produce_item_phase('ProducePhaseType_EndBeforeAuditionRefresh')
         for phase_type in self._stage_trigger_phases(stage_type):
             self._dispatch_produce_item_phase(phase_type)
@@ -1244,7 +1911,3 @@ class ProduceRuntime:
             'fan_vote_baseline': float(profile.get('fan_vote_baseline') or 0.0),
             'turns': runtime.turn,
         }
-
-
-
-

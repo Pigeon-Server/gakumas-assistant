@@ -469,9 +469,10 @@ def _choose_planning_action(runtime: ProduceRuntime) -> int | None:
         score = candidate.success_probability
         score += candidate.produce_point_delta * 0.05
         score += len(candidate.effect_types) * 0.02
+        score += len(candidate.exam_effect_types) * 0.01
         if candidate.action_type == 'refresh' and runtime.state['stamina'] < runtime.state['max_stamina'] * 0.35:
             score += 1.0
-        if candidate.produce_card_id:
+        if candidate.action_type.startswith('shop_buy_card_'):
             score += 0.3
         if score > best_score:
             best_score = score
@@ -627,6 +628,5 @@ def simulate_exam(
             for index, action in enumerate(runtime.legal_actions())
         ],
     }
-
 
 
