@@ -7,6 +7,7 @@ import auto_enhancement_support_card_setting from "@/components/lists/config/tas
 import auto_producer_setting from "@/components/lists/config/task_settings/auto_producer_setting.vue";
 import { useAppStore } from "@/stores/app.js";
 import { TaskStatus } from "@/scripts/constants";
+import dialogs from "@/scripts/utils/dialogs.js";
 
 const app_store = useAppStore();
 const props = defineProps({
@@ -93,10 +94,15 @@ const drawerValue = computed({
 })
 
 const runningTaskName = ref("")
+const runningFromTaskName = ref("")
 const togglingTaskName = ref("")
 
 function isTaskBusy(taskName) {
-  return runningTaskName.value === taskName || togglingTaskName.value === taskName
+  return runningTaskName.value === taskName || runningFromTaskName.value === taskName || togglingTaskName.value === taskName
+}
+
+function canRunTaskFrom(task) {
+  return !task.manual_only && app_store.status.task === TaskStatus.PENDING
 }
 
 async function runTask(taskName) {
@@ -108,6 +114,22 @@ async function runTask(taskName) {
     await app_store.run_task(taskName)
   } finally {
     runningTaskName.value = ""
+  }
+}
+
+async function runTaskFrom(taskName, taskDescription) {
+  if (isTaskBusy(taskName)) {
+    return
+  }
+  await dialogs.confirm(
+    "是否从这里开始执行",
+    `将从“${taskDescription}”开始，按任务列表顺序执行后续已启用自动任务。`
+  )
+  runningFromTaskName.value = taskName
+  try {
+    await app_store.run_task_from(taskName)
+  } finally {
+    runningFromTaskName.value = ""
   }
 }
 
@@ -207,6 +229,17 @@ async function toggleTask(taskName, enable) {
                   @click="runTask(task_name)"
                 >
                   执行
+                </v-btn>
+                <v-btn
+                  v-if="!task.manual_only"
+                  :disabled="!canRunTaskFrom(task) || taskExecutionBlocked || isTaskBusy(task_name)"
+                  :loading="runningFromTaskName === task_name"
+                  color="primary"
+                  variant="tonal"
+                  :title="taskExecutionBlocked ? '资源未准备完成，暂不可执行' : (app_store.status.task !== TaskStatus.PENDING ? '当前已有任务队列在运行' : '从当前任务开始执行后续已启用自动任务')"
+                  @click="runTaskFrom(task_name, task.description)"
+                >
+                  从这里开始执行
                 </v-btn>
                 <v-btn
                   v-if="task.enable"

@@ -118,6 +118,18 @@ export const useAppStore = defineStore('app', {
       }
       message.showInfo(`已开始手动执行任务：${taskLabel}`)
     },
+    async run_task_from(task_name: string) {
+      const task = this.get_task_by_id(task_name)
+      const taskLabel = task?.description || task_name
+      await apis.run_task_from(task_name)
+      this.status.task = TaskStatus.RUNNING
+      this.status.current_task = task_name
+      this.status.suspended_task = ""
+      if (task) {
+        task.status = TaskStatus.RUNNING
+      }
+      message.showInfo(`已从这里开始执行后续任务：${taskLabel}`)
+    },
     async enable_task(task_name: string) {
       const task = this.get_task_by_id(task_name)
       const taskLabel = task?.description || task_name

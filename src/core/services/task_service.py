@@ -180,6 +180,60 @@ class TaskService:
             return False
         return True
 
+    def start_queue_from(self, task_id: str):
+        """从指定任务开始启动后续自动任务队列"""
+        if self._queue_status:
+            return False
+        if not self._app.is_resource_ready():
+            logger.warning("Task queue start from rejected: required game resources are not ready")
+            return False
+        if not self._app.ensure_device_ready(restart_inference=True):
+            logger.warning(
+                f"Task queue start from rejected: {self._app.get_device_status().get('message', 'device unavailable')}"
+            )
+            return False
+        start_index = -1
+        for index, task in enumerate(self._task_list):
+            if task.id == task_id:
+                start_index = index
+                break
+        if start_index < 0:
+            logger.warning(f"Task '{task_id}' not found.")
+            return False
+        start_task = self._task_list[start_index]
+        if start_task.manual_only:
+            logger.warning(f"Task '{task_id}' is manual only and cannot start queue from here.")
+            return False
+
+        self._queue_status = True
+        self._stop_event.clear()
+        self._resume_event.set()
+        self._suspended.clear()
+        self._suspend_target_task = None
+        debug_tools.clear_all()
+        with self._task_queue.mutex:
+            self._task_queue.queue.clear()
+
+        queued = False
+        for task in self._task_list[start_index:]:
+            if not task.enable or task.manual_only:
+                continue
+            task.update_status(TaskStatus.PENDING)
+            self._task_queue.put(task)
+            queued = True
+        if not queued:
+            logger.warning(f"No executable task found from '{task_id}'.")
+            self._queue_status = False
+            return False
+        if self._worker_thread is None or not self._worker_thread.is_alive():
+            self._worker_thread = Thread(target=self._processor_task_queue, daemon=True)
+            self._worker_thread.start()
+        else:
+            logger.error("Worker thread is already alive.")
+            self._queue_status = False
+            return False
+        return True
+
     def stop(self):
         """停止任务队列"""
         if not self._queue_status:

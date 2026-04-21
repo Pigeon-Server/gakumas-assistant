@@ -57,6 +57,15 @@ function run_task(task_name) {
 }
 
 /**
+ * 从指定任务开始执行后续自动任务
+ * @param task_name 任务名
+ * @return {Promise<axios.AxiosResponse<any>>}
+ */
+function run_task_from(task_name) {
+  return axiosplus.get(`/api/task/start_from/${task_name}`);
+}
+
+/**
  * 获取后端状态
  * @return {Promise<AxiosResponse<any, any>>}
  */
@@ -257,6 +266,7 @@ export default {
   suspend_task,
   resume_task,
   run_task,
+  run_task_from,
   get_status,
   shutdown_app,
   get_registered_tasks,

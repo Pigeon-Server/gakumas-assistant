@@ -5,13 +5,10 @@ import threading
 from typing import TYPE_CHECKING
 
 import cv2
-import config
 from time import sleep
 
-from src.constants.path.data_path import DataPath
 from src.constants.path.debug_path import DebugPath
 from src.constants.device.device_type import DeviceType
-from src.constants.task_status import TaskStatus
 from src.constants.websocket_actions import WebsocketActions
 from src.core.device.Android.app import Android_App
 from src.core.device.unavailable_device import UnavailableDevice
@@ -34,7 +31,6 @@ from src.entity.BaseDevice import BaseDevice
 from src.entity.Game.Game_Info import GameStatusManager
 from src.entity.WebSocketData import WebSocketData
 from src.utils.debug_tools import DebugTools
-from src.utils.dmm_tools import extract_gakumas_launch_parameters
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str
 
@@ -490,3 +486,6 @@ class AppProcessor:
 
     def exec_task(self, task_name: str = None):
         return self.task_queue.start_queue(task_name)
+
+    def exec_task_from(self, task_name: str):
+        return self.task_queue.start_queue_from(task_name)

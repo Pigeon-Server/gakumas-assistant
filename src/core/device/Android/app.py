@@ -39,14 +39,14 @@ class Android_App(BaseDevice):
     __config_service: ConfigService
     __adb_host: str
     __adb_port: int
-    __adb_device: adbutils.AdbDevice = None
+    __adb_device: adbutils.AdbDevice | None = None
     __u2_device: Optional[u2.Device] = None
     __package_name: str
     __connect_mode: str
     __screen_capture_service: str
     __screen_touch_service: str
     __droidcast_service_status: bool = False
-    __capture_service_shell: ADBShell = None
+    __capture_service_shell: ADBShell | None = None
     __scrcpy_adapter: Optional[ScrcpyAdapter] = None
     __minitouch_adapter: Optional[MinitouchAdapter] = None
     __maatouch_adapter: Optional[MaaTouchAdapter] = None
@@ -387,6 +387,28 @@ class Android_App(BaseDevice):
                 self.__screen_touch_service = ADBOperation.TouchService.ADB
                 return self.__adb_device
 
+    def _get_touch_service_with_retry(self):
+        service = self.__get_touch_service()
+        if service is not None:
+            return service
+
+        logger.warning("Touch service unavailable, reinitializing Android touch runtime once")
+        self._reset_runtime_services()
+        if not self.__connect_ADB():
+            raise RuntimeError(self.__unavailable_reason or "重新连接 ADB 设备失败")
+        self.__init_capture_service()
+        self.__init_touch_service()
+        if (
+            self.__screen_capture_service == ADBOperation.ScreenCaptureService.uiautomator2
+            or self.__screen_touch_service == ADBOperation.TouchService.uiautomator2
+        ):
+            self.__connect_uiautomator2()
+        service = self.__get_touch_service()
+        if service is None:
+            self._set_unavailable("touch_service_unavailable", "点击失败：触摸服务不可用")
+            raise RuntimeError(self.__unavailable_reason)
+        return service
+
     def swipe(self, start_x, start_y, end_x, end_y, duration=0.8,
               offset_x=10, offset_y=10, safe_margin=50, hold_end=0.0, ease=None):
         """
@@ -437,7 +459,7 @@ class Android_App(BaseDevice):
         offset_y = random.randint(0-offset_y, offset_y)
         # 将 duration 稍微随机化，避免死板的固定时长
         actual_duration = duration * random.uniform(0.9, 1.1)
-        service = self.__get_touch_service()
+        service = self._get_touch_service_with_retry()
         try:
             service.swipe(
                 safe_start_x + offset_x,
@@ -525,7 +547,11 @@ class Android_App(BaseDevice):
             color=(255, 0, 0),
             thickness=1
         )
-        self.__get_touch_service().click(x, y)
+        service = self._get_touch_service_with_retry()
+        try:
+            service.click(x, y)
+        except Exception as exc:
+            self._handle_runtime_adb_error(exc, "点击")
         record_task_click(x, y, label=el_label, source="android")
 
     def capture(self) -> Optional[np.ndarray]:

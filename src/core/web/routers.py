@@ -116,6 +116,22 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             return _api_return(False, "任务启动失败")
         return _api_return(True, "OK")
 
+    @app.get("/api/task/start_from/{task_name:str}")
+    def run_task_from(task_name: str):
+        """从指定任务开始执行后续自动任务"""
+        if not processor.is_resource_ready():
+            return _resource_not_ready_response()
+        if not processor.ensure_device_ready(restart_inference=True):
+            return _api_return(False, processor.get_device_status().get("message", "当前设备不可用"))
+        task = processor.task_queue._find_task(task_name)
+        if task is None:
+            return _api_return(False, "任务不存在")
+        if task.manual_only:
+            return _api_return(False, "仅手动任务不支持从这里开始执行")
+        if not processor.exec_task_from(task_name):
+            return _api_return(False, "从当前任务开始执行失败")
+        return _api_return(True, "OK")
+
     @app.get("/api/task/suspend")
     def suspend_task():
         """
