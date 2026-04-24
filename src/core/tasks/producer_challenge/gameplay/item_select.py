@@ -78,6 +78,19 @@ _CACHE_POS_TOLERANCE = 30    # 像素容差
 
 @dataclass
 class ItemSelectCandidate:
+    """定义 ItemSelectCandidate 的结构化数据。
+
+    Attributes:
+        index: 候选项在当前列表中的序号（通常从上到下或从左到右）。
+        title: 候选项主标题文本，通常来自 OCR 或预设文案。
+        selected: 是否为当前已选中项（True 表示已选中）。
+        box: 候选项对应的检测框，用于点击、裁剪和可视化调试。
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        db_id: 数据库中的实体 ID；为空通常表示当前候选项尚未完成实体识别。
+        source: 候选项来源标记（如 OCR、DB、fallback），便于排查识别链路。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+        metadata: 扩展元数据，保存额外识别信息与决策辅助字段。
+    """
     index: int
     title: str
     selected: bool
@@ -90,10 +103,20 @@ class ItemSelectCandidate:
 
 
 def _normalize_item_select_text(text: str | None) -> str:
+    """规范化`item_select_text`。"""
     return normalize_ocr_jp(str(text or "")).strip()
 
 
 def _collect_item_select_lookup_texts(app: "AppProcessor", items: list) -> list[list[str]]:
+    """收集道具、选择、lookup、texts并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        items: 用于提供items相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0 or not items:
         return [[] for _ in items]
@@ -203,7 +226,15 @@ def _should_skip_probe(ctx: "ProduceContext", candidate: ItemSelectCandidate) ->
 
 
 def _increment_probe_count(ctx: "ProduceContext", candidate: ItemSelectCandidate) -> int:
-    """递增探查计数，返回新的计数值。"""
+    """处理increment、probe、数量并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidate: 单个候选项对象。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     probe_counts: dict = ctx.handler_state.setdefault(_ITEM_PROBE_COUNT_KEY, {})
     key = _item_pos_key(candidate.box)
     count = probe_counts.get(key, 0) + 1
@@ -212,6 +243,15 @@ def _increment_probe_count(ctx: "ProduceContext", candidate: ItemSelectCandidate
 
 
 def collect_item_select_candidates(app: "AppProcessor", *, selected: bool = False) -> list[ItemSelectCandidate]:
+    """收集道具、选择、候选项列表并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        selected: 用于提供selected相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     items = sorted(app.latest_results.filter_by_label(ProducerLabels.SPECIAL_ITEM), key=lambda b: b.cx)
     lookup_text_groups = _collect_item_select_lookup_texts(app, items)
     candidates: list[ItemSelectCandidate] = []
@@ -266,6 +306,17 @@ def decide_item_select(
     *,
     position: str,
 ) -> int:
+    """决策道具、select并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     decision_state = build_decision_state(
         app,
         ctx,
@@ -321,17 +372,34 @@ def _extract_selected_item_name(app: "AppProcessor") -> str | None:
         return None
 
     def _normalize_item_panel_name(text: str) -> str:
+        """规范化`item_panel_name`。"""
         cleaned = normalize_ocr_jp(fullwidth_to_halfwidth(str(text or "")))
         cleaned = _ITEM_SELECT_NAME_NOISE_RE.sub("", cleaned).strip()
         return cleaned
 
     def _looks_like_effect_text(text: str) -> bool:
+        """判断文本是否像“效果说明”而非名称标题。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         normalized = fullwidth_to_halfwidth(str(text or "")).strip()
         if not normalized:
             return False
         return normalized.startswith(_ITEM_SELECT_EFFECT_PREFIXES)
 
     def _is_plausible_item_name(text: str) -> bool:
+        """判断文本是否可作为道具名称。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         normalized = _normalize_item_panel_name(text)
         if len(normalized) < 2:
             return False
@@ -550,7 +618,14 @@ def _probe_unresolved_items(
 
 
 def _click_receive_button(app: "AppProcessor") -> bool:
-    """点击激活的「受け取る」按钮。"""
+    """点击receive、按钮并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     # 优先找 Confirm Button
     confirm = app.latest_results.filter_by_label(ProducerLabels.CONFIRM_BUTTON)
     if confirm:
@@ -559,7 +634,7 @@ def _click_receive_button(app: "AppProcessor") -> bool:
     # 其次找 Universal button
     buttons = list(app.latest_results.filter_by_label(BaseUILabels.BUTTON))
     if buttons:
-        # 取最靠下的按钮（受け取る通常在底部）
+        # 取最靠下的按钮（“受け取る”通常在底部）。
         btn = max(buttons, key=lambda b: b.cy)
         app.device.click_element(btn)
         return True
@@ -577,14 +652,36 @@ class ItemSelectHandler(GameplayHandler):
     priority = 50  # 与 LESSON / SCHEDULE 等同级
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == GameplayPhase.ITEM_SELECT
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         if position == GameplayPosition.ITEM_SELECT_SELECTED:
-            # 探查模式下不点击受け取る，等探查完成后再决策
+            # 探查模式下不点击“受け取る”，待探查完成后再决策。
             if ctx.handler_state.get("_item_probe_active"):
                 return HandlerResult.no_action("item_select: 探查中，跳过确认")
-            # 已选择物品，点击受け取る
+            # 已选择物品，点击“受け取る”。
             if _click_receive_button(app):
                 ctx.handler_state["item_select_idle_streak"] = 0
                 # 同步已选 P-item 到 deck_mutations

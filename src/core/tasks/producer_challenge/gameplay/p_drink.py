@@ -1,12 +1,12 @@
-"""P饮料选择 handler。
+"""P飲料选择 handler。
 
-P饮料可在以下场景选择:
+P 饮料可在以下场景选择:
   - 周间奖励发放（独立的 p_drink 阶段）
   - レッスン/試験内底栏（由 lesson handler 单独处理）
 
 交互模式（经 ADB 实测确认）:
-  - 第一次点击饮料: 橙色选框高亮，底部受け取る按钮变为可用。
-  - 第二次点击确认按钮: 接受饮料并推进。
+  - 第一次点击饮料：橙色选框高亮，底部受け取る按钮变为可用。
+  - 第二次点击确认按钮：接受饮料并推进。
 """
 
 from __future__ import annotations
@@ -53,6 +53,19 @@ _ocr = OCRService()
 
 @dataclass
 class PDrinkCandidate:
+    """定义 PDrinkCandidate 的结构化数据。
+
+    Attributes:
+        index: 候选项在当前列表中的序号（通常从上到下或从左到右）。
+        title: 候选项主标题文本，通常来自 OCR 或预设文案。
+        selected: 是否为当前已选中项（True 表示已选中）。
+        box: 候选项对应的检测框，用于点击、裁剪和可视化调试。
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        db_id: 数据库中的实体 ID；为空通常表示当前候选项尚未完成实体识别。
+        source: 候选项来源标记（如 OCR、DB、fallback），便于排查识别链路。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+        metadata: 扩展元数据，保存额外识别信息与决策辅助字段。
+    """
     index: int
     title: str
     selected: bool
@@ -66,12 +79,31 @@ class PDrinkCandidate:
 
 @dataclass
 class PDrinkStepResult:
-    status: str  # "selected" | "confirmed"
+    """定义 PDrinkStepResult 的结构化数据。
+
+    Attributes:
+        status: 步骤执行状态（如 selected/confirmed/skipped）。
+        candidate: 本步骤最终选中的候选项对象。
+    """
+    status: str  # 状态值："selected" | "confirmed"
     candidate: PDrinkCandidate | None = None
 
 
 @dataclass
 class PDrinkLimitActionCandidate:
+    """定义 PDrinkLimitActionCandidate 的结构化数据。
+
+    Attributes:
+        index: 候选项在当前列表中的序号（通常从上到下或从左到右）。
+        title: 候选项主标题文本，通常来自 OCR 或预设文案。
+        kind: 候选项类型标签，用于规则筛选与优先级判断。
+        box: 候选项对应的检测框，用于点击、裁剪和可视化调试。
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        db_id: 数据库中的实体 ID；为空通常表示当前候选项尚未完成实体识别。
+        source: 候选项来源标记（如 OCR、DB、fallback），便于排查识别链路。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+        metadata: 扩展元数据，保存额外识别信息与决策辅助字段。
+    """
     index: int
     title: str
     kind: str
@@ -84,6 +116,7 @@ class PDrinkLimitActionCandidate:
 
 
 def _normalize_pending_p_drink_payload(candidate: PDrinkCandidate) -> dict[str, Any]:
+    """规范化`pending_p_drink_payload`。"""
     metadata = dict(candidate.metadata or {})
     return {
         "action_id": candidate.action_id,
@@ -100,10 +133,19 @@ def _remember_pending_new_p_drink(
     ctx: "ProduceContext",
     candidate: PDrinkCandidate,
 ) -> None:
+    """记录`pending_new_p_drink`到上下文状态。"""
     ctx.handler_state[_PENDING_NEW_P_DRINK_STATE_KEY] = _normalize_pending_p_drink_payload(candidate)
 
 
 def _get_pending_new_p_drink(ctx: "ProduceContext" | None) -> dict[str, Any]:
+    """获取pending、new、p、饮料并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     if ctx is None:
         return {}
     payload = ctx.handler_state.get(_PENDING_NEW_P_DRINK_STATE_KEY, {})
@@ -111,6 +153,7 @@ def _get_pending_new_p_drink(ctx: "ProduceContext" | None) -> dict[str, Any]:
 
 
 def _drink_display_name(payload: dict[str, Any]) -> str:
+    """根据候选数据生成人类可读的饮料显示名。"""
     return str(
         payload.get("display_name")
         or payload.get("title")
@@ -121,6 +164,7 @@ def _drink_display_name(payload: dict[str, Any]) -> str:
 
 
 def _score_drink_payload(ctx: "ProduceContext", payload: dict[str, Any]) -> float:
+    """计算`drink_payload`得分。"""
     return score_produce_drink_metadata(
         payload,
         phase="lesson",
@@ -134,6 +178,15 @@ def _select_p_drink_limit_preference(
     ctx: "ProduceContext",
     candidates: list[PDrinkLimitActionCandidate],
 ) -> tuple[PDrinkLimitActionCandidate, str, float]:
+    """选择p、饮料、limit、preference并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        tuple[PDrinkLimitActionCandidate, str, float]: 返回值类型见注解，语义由函数用途决定。
+    """
     skip_candidate = next(
         (candidate for candidate in candidates if candidate.kind == "skip_new_drink"),
         candidates[0],
@@ -177,6 +230,16 @@ def _annotate_p_drink_limit_preference(
     preferred_index: int,
     reason: str,
 ) -> None:
+    """补充标注p、饮料、limit、preference并返回结果。
+
+    Args:
+        decision_state: 决策快照，包含上下文、候选项与当前理由。
+        preferred_index: 用于提供preferred、index相关输入。
+        reason: 用于提供reason相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     label = f"候选 {preferred_index}"
     for payload in decision_state.get("candidates", []) or []:
         if int(payload.get("index", -1)) == preferred_index:
@@ -236,11 +299,27 @@ def _ocr_p_drink_header(
         (name, effect) 饮料名称和效果描述。无选中时返回 ("", "")。
     """
     def _normalize_header_text(text: str) -> str:
+        """标准化header、text并返回结果。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+
+        Returns:
+            str: 处理后的文本结果。
+        """
         cleaned = normalize_ocr_jp(fullwidth_to_halfwidth(str(text or "")))
         cleaned = _P_DRINK_NAME_NOISE_RE.sub("", cleaned).strip()
         return cleaned
 
     def _looks_like_effect_line(text: str) -> bool:
+        """判断文本是否像效果描述行。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         normalized = fullwidth_to_halfwidth(str(text or "")).strip()
         if not normalized:
             return False
@@ -249,6 +328,14 @@ def _ocr_p_drink_header(
         return bool(_P_DRINK_EFFECT_LINE_RE.search(normalized))
 
     def _is_plausible_drink_name(text: str) -> bool:
+        """判断文本是否可作为饮料名称。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         normalized = _normalize_header_text(text)
         if len(normalized) < 2:
             return False
@@ -377,11 +464,10 @@ def _ocr_p_drink_header(
 
 def _detect_central_drinks(app: "AppProcessor"):
     """检测中央区域（非底栏）的 P Drink 图标，按 x 坐标排序。"""
-    frame_height = (
-        app.latest_frame.shape[0]
-        if getattr(app, "latest_frame", None) is not None
-        else 2340
-    )
+    frame = getattr(app, "latest_frame", None)
+    if frame is None or frame.size == 0:
+        return []
+    frame_height = frame.shape[0]
     return sorted(
         (d for d in app.latest_results.filter_by_label(BaseUILabels.P_DRINK)
          if d.cy < frame_height * 0.85),
@@ -442,6 +528,15 @@ def _ocr_limit_controls(frame) -> list[dict[str, Any]]:
 
 
 def _find_limit_row(rows: list[dict[str, Any]], *tokens: str) -> dict[str, Any] | None:
+    """查找limit、row并返回结果。
+
+    Args:
+        rows: 用于提供rows相关输入。
+        *tokens: 用于提供tokens相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     for row in rows:
         text = str(row.get("text", "") or "")
         if text and any(token in text for token in tokens):
@@ -450,7 +545,7 @@ def _find_limit_row(rows: list[dict[str, Any]], *tokens: str) -> dict[str, Any] 
 
 
 # ────────────────────────────────────────────────────────────
-# 饮料丢弃链（P_DRINK_DETAIL 模态 → 捨てる → 廃棄確認 → はい）
+# 饮料丢弃链（P_DRINK_DETAIL 模态 → “捨てる” → “廃棄確認” → “はい”）。
 # ────────────────────────────────────────────────────────────
 
 _DISCARD_CHAIN_MODAL_WAIT = 2.0     # 等待模态出现的超时秒数
@@ -511,7 +606,7 @@ def _find_discard_button_position(app: "AppProcessor") -> tuple[int, int] | None
     if not ocr_results:
         return None
 
-    # 查找包含「捨てる」的文本块
+    # 查找包含“捨てる”的文本块。
     for item in ocr_results:
         text = str(getattr(item, "text", "") or "").strip()
         if ProduceText.P_DRINK_DISCARD in text:
@@ -536,8 +631,13 @@ def _click_cancel_in_modal(app: "AppProcessor") -> None:
         logger.debug("p_drink: 丢弃链 - 点击 キャンセル 关闭模态")
     else:
         # 回退: 点击模态外部区域关闭
-        fh = app.latest_frame.shape[0] if app.latest_frame is not None else 2340
-        fw = app.latest_frame.shape[1] if app.latest_frame is not None else 1080
+        frame = app.latest_frame
+        if frame is None or frame.size == 0:
+            logger.warning("p_drink: 丢弃链 - 无法获取画面，跳过关闭操作")
+            time.sleep(_DISCARD_CHAIN_SETTLE)
+            return
+        fh = frame.shape[0]
+        fw = frame.shape[1]
         app.device.click(fw // 2, int(fh * 0.1), el_label="p_drink_discard_cancel_fallback")
         logger.warning("p_drink: 丢弃链 - 未找到取消按钮，点击空白区域尝试关闭")
     time.sleep(_DISCARD_CHAIN_SETTLE)
@@ -569,7 +669,7 @@ def _ocr_drink_detail_name(app: "AppProcessor") -> str:
     cancel_boxes = list(results.filter_by_label(ProducerLabels.CANCEL_BUTTON))
     fh, fw = frame.shape[:2]
 
-    # OCR 区域: 模态头下方 → 取消按钮上方，横向取模态宽度的左 2/3（排除右侧「捨てる」）
+    # OCR 区域：模态头下方到取消按钮上方，横向取模态左侧 2/3（排除右侧“捨てる”）。
     region_y1 = int(header.h)
     region_y2 = int(cancel_boxes[0].y) if cancel_boxes else int(fh * 0.8)
     region_x1 = max(0, int(header.x) - 10)
@@ -585,7 +685,7 @@ def _ocr_drink_detail_name(app: "AppProcessor") -> str:
     if not ocr_results:
         return ""
 
-    # 第一段非空文本即为饮料名（排除「捨てる」等控件文本）
+    # 第一段非空文本视为饮料名（排除“捨てる”等控件文本）。
     for item in ocr_results:
         text = str(getattr(item, "text", "") or "").strip()
         if text and ProduceText.P_DRINK_DISCARD not in text and len(text) >= 2:
@@ -681,7 +781,7 @@ def _execute_drink_discard_chain(
     app.device.click_element(target.box)
     time.sleep(_DISCARD_CHAIN_SETTLE)
 
-    # 2. 等待 Pドリンク詳細 模态
+    # 2. 等待“Pドリンク詳細”模态。
     if not _wait_for_modal_header(app):
         logger.warning("p_drink: 丢弃链 - 点击库存饮料后未检测到模态")
         return False
@@ -689,7 +789,7 @@ def _execute_drink_discard_chain(
     # 额外等待确保模态渲染完成
     time.sleep(0.3)
 
-    # 3. OCR 定位「捨てる」并点击
+    # 3. OCR 定位“捨てる”并点击。
     discard_pos = _find_discard_button_position(app)
     if discard_pos is None:
         logger.warning("p_drink: 丢弃链 - 未找到「捨てる」按钮，取消操作")
@@ -708,11 +808,11 @@ def _execute_drink_discard_chain(
 
     time.sleep(0.3)
 
-    # 5. 点击确认按钮（はい）
+    # 5. 点击确认按钮（“はい”）。
     results = app.latest_results
     confirm_boxes = list(results.filter_by_label(ProducerLabels.CONFIRM_BUTTON))
     if confirm_boxes:
-        # 选择最右侧的按钮（「はい」通常在右侧）
+        # 选择最右侧按钮（“はい”通常在右侧）。
         target_btn = max(confirm_boxes, key=lambda b: b.cx)
         app.device.click_element(target_btn)
         logger.info("p_drink: 丢弃链 - 确认丢弃「{}」", drink_name)
@@ -740,6 +840,14 @@ def _execute_drink_discard_chain(
 
 
 def _is_p_drink_limit_page(app: "AppProcessor") -> bool:
+    """判断当前页面是否为 P 饮料上限处理页。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     rows = _ocr_limit_controls(app.latest_frame)
     return any(
         any(keyword in str(row.get("text", "") or "") for keyword in _LIMIT_KEYWORDS)
@@ -748,12 +856,18 @@ def _is_p_drink_limit_page(app: "AppProcessor") -> bool:
 
 
 def _detect_bottom_inventory_drinks(app: "AppProcessor"):
-    """检测底部库存饮料栏。"""
-    frame_height = (
-        app.latest_frame.shape[0]
-        if getattr(app, "latest_frame", None) is not None
-        else 2340
-    )
+    """检测bottom、inventory、drinks并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        返回处理结果，具体类型见返回注解。
+    """
+    frame = getattr(app, "latest_frame", None)
+    if frame is None or frame.size == 0:
+        return []
+    frame_height = frame.shape[0]
     return sorted(
         (d for d in app.latest_results.filter_by_label(ProducerLabels.P_DRINK)
          if d.cy >= frame_height * 0.88),
@@ -765,7 +879,15 @@ def collect_p_drink_limit_action_candidates(
     app: "AppProcessor",
     ctx: "ProduceContext" | None = None,
 ) -> list[PDrinkLimitActionCandidate]:
-    """收集 P饮料所持上限页的动作候选。"""
+    """收集p、饮料、limit、操作、候选项并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     rows = _ocr_limit_controls(app.latest_frame)
     skip_row = _find_limit_row(rows, ProduceText.P_DRINK_LIMIT_NO_RECEIVE)
     confirm_row = _find_limit_row(rows, *ProduceText.P_DRINK_LIMIT_SKIP_ALTS[1:])
@@ -837,6 +959,16 @@ def decide_p_drink_limit_action(
     ctx: "ProduceContext",
     candidates: list[PDrinkLimitActionCandidate],
 ) -> PDrinkLimitActionCandidate:
+    """决策p、饮料、limit、操作并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        PDrinkLimitActionCandidate: 返回值类型见注解，语义由函数用途决定。
+    """
     decision_state = build_decision_state(
         app,
         ctx,
@@ -891,6 +1023,17 @@ def decide_p_drink_limit_action(
 
 
 def _click_absolute(app: "AppProcessor", x: int, y: int, *, label: str) -> None:
+    """点击absolute并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        x: 用于提供x相关输入。
+        y: 用于提供y相关输入。
+        label: 用于提供label相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     app.device.click(int(x), int(y), el_label=label)
 
 
@@ -898,6 +1041,15 @@ def _handle_p_drink_limit_page(
     app: "AppProcessor",
     ctx: "ProduceContext",
 ) -> PDrinkStepResult | None:
+    """处理handle、p、饮料、limit、page并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        PDrinkStepResult | None: 返回值类型见注解。
+    """
     candidates = collect_p_drink_limit_action_candidates(app, ctx)
     if not candidates:
         logger.warning("p_drink: 所持上限页未收集到任何候选动作")
@@ -930,13 +1082,13 @@ def _handle_p_drink_limit_page(
         )
         time.sleep(1.0)
 
-        # 处理可能弹出的「報酬スキップ」确认弹窗
+        # 处理可能弹出的“報酬スキップ”确认弹窗。
         if _handle_reward_skip_confirmation(app):
             return PDrinkStepResult(status="confirmed")
         return PDrinkStepResult(status="selected")
 
     if target.kind == "discard_existing_drink" and target.box is not None:
-        # 执行完整丢弃链: 点击库存饮料 → 捨てる → 廃棄確認 → はい
+        # 执行完整丢弃链：点击库存饮料 → “捨てる” → “廃棄確認” → “はい”。
         success = _execute_drink_discard_chain(app, ctx, target)
         ctx.handler_state["p_drink_limit_skip_attempts"] = 0
         ctx.record_operation(
@@ -948,7 +1100,7 @@ def _handle_p_drink_limit_page(
             },
         )
         if success:
-            # 丢弃成功后必须点击「受け取る」接收新饮料，不能只丢不拿
+            # 丢弃成功后必须点击“受け取る”接收新饮料，不能只丢不拿。
             logger.info("p_drink: 丢弃成功，点击「受け取る」接收新饮料")
             time.sleep(0.5)
             _click_any_bottom_button(app)
@@ -1052,6 +1204,17 @@ def decide_p_drink(
     *,
     position: str,
 ) -> int:
+    """决策p、饮料并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     decision_state = build_decision_state(
         app,
         ctx,
@@ -1117,7 +1280,7 @@ def _handle_reward_skip_confirmation(app: "AppProcessor", timeout: float = 2.0) 
             time.sleep(0.3)
             continue
 
-        # 報酬スキップ弹窗会在上限页之上叠加，导致出现 ≥2 个 MODAL_HEADER
+        # “報酬スキップ”弹窗会叠加在上限页之上，导致出现 ≥2 个 MODAL_HEADER。
         modal_headers = list(results.filter_by_label(BaseUILabels.MODAL_HEADER))
         if len(modal_headers) >= 2:
             buttons: list = []
@@ -1171,11 +1334,10 @@ def _verify_p_drink_advanced(app: "AppProcessor", timeout: float = 1.5) -> bool:
     """
     deadline = time.monotonic() + timeout
     time.sleep(0.6)
-    frame_height = (
-        app.latest_frame.shape[0]
-        if getattr(app, "latest_frame", None) is not None
-        else 2340
-    )
+    frame = getattr(app, "latest_frame", None)
+    if frame is None or frame.size == 0:
+        return False
+    frame_height = frame.shape[0]
     while time.monotonic() < deadline:
         results = app.latest_results
         # 检查中央 P Drink 是否消失（底栏饮料不算）
@@ -1185,7 +1347,7 @@ def _verify_p_drink_advanced(app: "AppProcessor", timeout: float = 1.5) -> bool:
         ]
         if not central_drinks:
             return True
-        # 也检查是否弹出了modal（报酬スキップ确认）
+        # 同时检查是否弹出 modal（“報酬スキップ”确认）。
         if results.exists_label(ProducerLabels.MODAL_HEADER):
             return True
         time.sleep(0.3)
@@ -1193,6 +1355,7 @@ def _verify_p_drink_advanced(app: "AppProcessor", timeout: float = 1.5) -> bool:
 
 
 def _record_p_drink_confirmed(ctx: "ProduceContext") -> None:
+    """记录`p_drink_confirmed`到上下文状态。"""
     pending_drink = _get_pending_new_p_drink(ctx)
     drink_db_id = str(pending_drink.get("db_id") or "")
     ctx.record_operation(
@@ -1218,7 +1381,7 @@ def _try_skip_p_drink(app: "AppProcessor", *, checkbox_already_checked: bool = F
     """
 
     if not checkbox_already_checked:
-        # 查找「受け取らない」复选框
+        # 查找“受け取らない”复选框。
         checkbox_boxes = list(app.latest_results.filter_by_label(BaseUILabels.CHECKBOX))
         if not checkbox_boxes:
             logger.debug("p_drink: 未找到复选框，无法跳过")
@@ -1232,14 +1395,36 @@ def _try_skip_p_drink(app: "AppProcessor", *, checkbox_already_checked: bool = F
     _click_any_bottom_button(app)
     time.sleep(1.5)
 
-    # 处理「報酬スキップ」确认子弹窗
+    # 处理“報酬スキップ”确认子弹窗。
     results = app.latest_results
     modal_headers = list(results.filter_by_label(ProducerLabels.MODAL_HEADER))
     if modal_headers:
-        logger.info("p_drink: 检测到報酬スキップ确认弹窗，点击确认")
+        logger.info("p_drink: 检测到\"報酬スキップ确认\"弹窗，点击确认")
         _click_any_bottom_button(app)
         time.sleep(1.0)
     return True
+
+
+def _is_p_drink_limit_by_controls(app: "AppProcessor") -> bool:
+    """通过控件组合判断所持上限页（OCR 失败时兜底）。"""
+    results = getattr(app, "latest_results", None)
+    if results is None:
+        return False
+    has_disable = results.exists_label(ProducerLabels.DISABLE_BUTTON)
+    has_checkbox = results.exists_label(BaseUILabels.CHECKBOX)
+    return bool(has_disable and has_checkbox)
+
+
+def _should_handle_p_drink_limit_page(app: "AppProcessor") -> bool:
+    """判断当前帧是否需要进入 P 饮料上限处理流程。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
+    return _is_p_drink_limit_page(app) or _is_p_drink_limit_by_controls(app)
 
 
 def execute_p_drink_step(
@@ -1250,11 +1435,11 @@ def execute_p_drink_step(
 ) -> PDrinkStepResult | None:
     """执行一步 P 饮料交互。
 
-    - p_drink_selected: 点击确认按钮（第 2 步），支持所持上限跳过
-    - p_drink_idle: 选择一个饮料（第 1 步），检测所持上限自动跳过
+    - p_drink_selected: 点击确认按钮（第 2 步），必要时转入所持上限决策
+    - p_drink_idle: 选择一个饮料（第 1 步），检测所持上限并走决策流程
     """
     if position == "p_drink_selected":
-        if _is_p_drink_limit_page(app):
+        if _should_handle_p_drink_limit_page(app):
             return _handle_p_drink_limit_page(app, ctx)
 
         _click_any_bottom_button(app)
@@ -1270,32 +1455,13 @@ def execute_p_drink_step(
             return PDrinkStepResult(status="confirmed")
 
         # 画面未推进 → 可能是P饮料所持上限，尝试跳过
-        logger.warning("p_drink: 确认按钮点击后画面未推进，尝试跳过领取")
-        if _try_skip_p_drink(app):
-            ctx.clear_p_drink_pending()
-            return PDrinkStepResult(status="skipped")
+        logger.warning("p_drink: 确认按钮点击后画面未推进，尝试走所持上限决策流程")
+        if _should_handle_p_drink_limit_page(app):
+            return _handle_p_drink_limit_page(app, ctx)
 
         return None
 
-    # idle 状态：检测是否为所持上限场景（Disable按钮 + Checkbox可见）
-    has_disable = app.latest_results.exists_label(ProducerLabels.DISABLE_BUTTON)
-    has_checkbox = app.latest_results.exists_label(BaseUILabels.CHECKBOX)
-    if has_disable and has_checkbox:
-        # 追踪连续跳过尝试次数，避免checkbox来回切换
-        skip_attempts = ctx.handler_state.get("p_drink_skip_attempts", 0)
-        # 偶数次点击checkbox（第0、2、4…次），奇数次跳过checkbox（第1、3…次已勾选）
-        checkbox_already_checked = (skip_attempts % 2) == 1
-        logger.info(
-            "p_drink: idle 检测到 Disable + Checkbox → 所持上限，"
-            f"尝试跳过(第{skip_attempts + 1}次, checkbox_checked={checkbox_already_checked})"
-        )
-        ctx.handler_state["p_drink_skip_attempts"] = skip_attempts + 1
-        if _try_skip_p_drink(app, checkbox_already_checked=checkbox_already_checked):
-            ctx.handler_state["p_drink_skip_attempts"] = 0
-            ctx.clear_p_drink_pending()
-            return PDrinkStepResult(status="skipped")
-
-    if _is_p_drink_limit_page(app):
+    if _should_handle_p_drink_limit_page(app):
         return _handle_p_drink_limit_page(app, ctx)
 
     # 检测中央区域的饮料图标
@@ -1334,7 +1500,7 @@ def execute_p_drink_step(
 
 
 # ────────────────────────────────────────────────────────────
-# Handler
+# 处理器
 # ────────────────────────────────────────────────────────────
 
 class PDrinkHandler(GameplayHandler):
@@ -1344,9 +1510,31 @@ class PDrinkHandler(GameplayHandler):
     priority = 50
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == "p_drink"
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         result = execute_p_drink_step(app, ctx, position=position)
         if result is None:
             return HandlerResult.no_action("no p_drink elements")

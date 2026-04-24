@@ -40,10 +40,10 @@ class DecisionRecord:
     # ── 基本标识 ──
     seq: int                            # 本次 session 内的序号
     timestamp: str                      # ISO 8601 时间戳
-    phase: str                          # lesson / exam / schedule / consult / ...
+    phase: str                          # 阶段：lesson / exam / schedule / consult / ...
     position: str                       # 更细的位置标识
     week: int = 0                       # 当前周数
-    revision: int = 0                   # state_revision
+    revision: int = 0                   # 状态修订号（state_revision）
 
     # ── 局面快照 ──
     llm_snapshot: dict[str, Any] = field(default_factory=dict)
@@ -126,7 +126,11 @@ class DecisionDumper:
 
     @classmethod
     def get_instance(cls) -> DecisionDumper:
-        """获取全局唯一实例。"""
+        """获取instance并返回结果。
+
+        Returns:
+            DecisionDumper: 返回值类型见注解，语义由函数用途决定。
+        """
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance

@@ -39,6 +39,7 @@ from .notebook import (
     _NOTEBOOK_SPECIAL_KEYWORDS,
     _classify_icon_hue,
     _close_p_notebook,
+    _detect_p_notebook_close_button,
     _detect_notebook_icons,
     _detect_p_notebook_button,
     _group_icons_into_rows,
@@ -68,13 +69,159 @@ _SCHEDULE_SCREEN_OCR = OCRService()
 _PRESENT_SUPPORT_BONUS_RE = re.compile(r"\+\d+")
 _SCHEDULE_LOOKUP_NOISE_TOKENS = ProduceText.SCHEDULE_LOOKUP_NOISE_TOKENS
 _ACTION_INFO_OCR = OCRService()
+_SCHEDULE_ACTION_DECISION_POSITIONS = frozenset({
+    GameplayPosition.SCHEDULE_IDLE,
+    GameplayPosition.SCHEDULE_RECOMMEND,
+})
+
+
+def _is_schedule_action_decision_position(position: str) -> bool:
+    """判断当前 position 是否处于日程操作待决策状态。
+
+    Args:
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
+    return position in _SCHEDULE_ACTION_DECISION_POSITIONS
+
+
+def _schedule_notebook_mode(ctx: "ProduceContext") -> str:
+    """处理日程`schedule_notebook_mode`。"""
+    return str(getattr(ctx, "schedule_notebook_mode", "before_decision") or "before_decision").strip().lower()
+
+
+def _has_decided_schedule_action_this_week(ctx: "ProduceContext") -> bool:
+    """判断本周是否已完成日程操作决策。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
+    decided_week = ctx.handler_state.get("schedule_action_decided_week")
+    try:
+        return int(decided_week) == int(ctx.current_week)
+    except (TypeError, ValueError):
+        return False
+
+
+def _mark_schedule_action_decided(ctx: "ProduceContext") -> None:
+    """标记`mark_schedule_action_decided`。"""
+    ctx.handler_state["schedule_action_decided_week"] = int(ctx.current_week)
+
+
+def _should_read_p_notebook_before_decision(
+    ctx: "ProduceContext",
+    *,
+    position: str,
+) -> bool:
+    """判断决策前是否需要先读取 P 手账信息。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
+    if position != GameplayPosition.SCHEDULE_IDLE:
+        return False
+    if _schedule_notebook_mode(ctx) != "before_decision":
+        return False
+    if _has_decided_schedule_action_this_week(ctx):
+        return False
+    cache_key = f"p_notebook_week_{ctx.current_week}"
+    return ctx.handler_state.get(cache_key) is None
+
+
+def _ensure_p_notebook_closed_before_decision(
+    app: "AppProcessor",
+    ctx: "ProduceContext",
+    *,
+    position: str,
+) -> bool:
+    """处理ensure、p、手账、closed、before、decision并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
+    def _has_schedule_controls_visible() -> bool:
+        """判断 has schedule controls visible 是否满足条件。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
+        results = getattr(app, "latest_results", None)
+        if results is None:
+            return False
+        try:
+            if len(list(results.filter_by_label(ProducerLabels.PC_ACTION))) > 0:
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            recommend_boxes = results.filter_by_label(ProducerLabels.PC_RECOMMEND_ACTION)
+            return bool(recommend_boxes and len(recommend_boxes) > 0)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _is_p_notebook_open_likely() -> bool:
+        """判断 is p notebook open likely 是否满足条件。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
+        close_button = _detect_p_notebook_close_button(app)
+        if close_button is None:
+            return False
+        # 常规 schedule 行动控件可见时，优先认为不是 P手帳 打开态，避免误拦截。
+        if _has_schedule_controls_visible():
+            return False
+        return True
+
+    if not _is_schedule_action_decision_position(position):
+        return True
+    if not _is_p_notebook_open_likely():
+        return True
+
+    logger.info("schedule: 自动决策前检测到 P手帳 可能打开，尝试关闭后再继续")
+    closed = _close_p_notebook(app, allow_fallback=False)
+    if not closed:
+        logger.warning("schedule: 未检测到 P手帳 关闭按钮，跳过本轮自动决策")
+        return False
+
+    game_utils = getattr(app, "game_utils", None)
+    wait_stable = getattr(game_utils, "wait_frame_stable", None)
+    if callable(wait_stable):
+        wait_stable(stable_count=2, timeout=2.0)
+    if _is_p_notebook_open_likely():
+        logger.warning("schedule: 关闭 P手帳 后仍疑似打开，跳过本轮自动决策")
+        return False
+    return True
 
 
 def _normalize_schedule_text(text: str | None) -> str:
+    """规范化`schedule_text`。"""
     return normalize_ocr_jp(str(text or "")).strip()
 
 
 def _is_unknown_schedule_action_id(action_id: str | None) -> bool:
+    """判断给定 action_id 是否属于未知日程操作。
+
+    Args:
+        action_id: 业务对象标识符，用于索引或匹配目标实体。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     normalized = str(action_id or "").strip()
     return not normalized or ":" in normalized or "unknown" in normalized
 
@@ -212,6 +359,7 @@ def _probe_action_info_panel(
 
 
 def _schedule_title_resolution_score(text: str | None, *, index: int) -> float:
+    """处理日程`schedule_title_resolution_score`。"""
     normalized = _normalize_schedule_text(text)
     if not normalized:
         return -100.0
@@ -256,6 +404,16 @@ def _choose_schedule_candidate_title(
     *,
     index: int,
 ) -> tuple[str, str]:
+    """处理choose、日程、候选项、title并返回结果。
+
+    Args:
+        direct_title: 用于提供direct、title相关输入。
+        lookup_texts: 用于提供lookup、texts相关输入。
+        index: 用于提供index相关输入。
+
+    Returns:
+        tuple[str, str]: 返回值类型见注解。
+    """
     normalized_direct = _normalize_schedule_text(direct_title)
     normalized_lookup = [
         text
@@ -282,6 +440,15 @@ def _choose_schedule_candidate_title(
 
 
 def _collect_schedule_lookup_texts(app: "AppProcessor", action_boxes: list) -> list[list[str]]:
+    """收集日程、lookup、texts并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        action_boxes: 用于提供操作、boxes相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0 or not action_boxes:
         return [[] for _ in action_boxes]
@@ -395,6 +562,14 @@ def _collect_schedule_action_boxes(app: "AppProcessor") -> list:
 
 
 def _detect_recommended_kind(app: "AppProcessor") -> str:
+    """检测recommended、kind并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     recommend_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_RECOMMEND_ACTION)
     if not recommend_boxes:
         return "unknown"
@@ -402,6 +577,14 @@ def _detect_recommended_kind(app: "AppProcessor") -> str:
 
 
 def _looks_like_present_support_line(text: str) -> bool:
+    """判断文本是否像“差入れ/支援”类选项描述行。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     normalized = normalize_ocr_jp(str(text or ""))
     return bool(
         string_match(
@@ -419,6 +602,15 @@ def _collect_present_support_candidates(
     app: "AppProcessor",
     ctx: "ProduceContext",
 ) -> List[ScheduleActionCandidate]:
+    """收集present、支援卡、候选项并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0:
         return []
@@ -490,6 +682,16 @@ def collect_schedule_action_candidates(
     *,
     position: str,
 ) -> List[ScheduleActionCandidate]:
+    """收集日程、操作、候选项并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     if position == GameplayPosition.SCHEDULE_PRESENT_SUPPORT:
         return _collect_present_support_candidates(app, ctx)
 
@@ -661,6 +863,17 @@ def decide_schedule_action(
     *,
     position: str,
 ) -> int:
+    """决策日程、操作并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     decision_state = build_decision_state(
         app,
         ctx,
@@ -759,7 +972,16 @@ def _confirm_vacation_modal(
     max_polls: int = 10,
     poll_interval: float = 0.5,
 ) -> bool:
-    """等待并确认「休み確認」模态框。"""
+    """处理confirm、vacation、弹窗并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        max_polls: 用于提供max、polls相关输入。
+        poll_interval: 用于提供poll、interval相关输入。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     for attempt in range(max_polls):
         sleep(poll_interval)
         results = app.latest_results
@@ -782,12 +1004,46 @@ def execute_schedule_step(
     *,
     position: str,
 ) -> ScheduleStepResult | None:
+    """处理execute、日程、步骤并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        ScheduleStepResult | None: 返回值类型见注解。
+    """
     candidates = collect_schedule_action_candidates(app, ctx, position=position)
     if not candidates:
         return None
 
-    target_index = decide_schedule_action(app, ctx, candidates, position=position)
-    target = candidates[target_index]
+    target_index: int
+    if position == GameplayPosition.SCHEDULE_SELECTED:
+        # 确认态应直接确认当前已选中的行动，避免再次触发策略决策。
+        selected_candidate = next((candidate for candidate in candidates if candidate.selected), None)
+        if selected_candidate is not None:
+            target = selected_candidate
+            target_index = target.index
+        elif (
+            ctx.pending_schedule_index is not None
+            and 0 <= ctx.pending_schedule_index < len(candidates)
+        ):
+            target_index = ctx.pending_schedule_index
+            target = candidates[target_index]
+            logger.debug(
+                "schedule: schedule_selected 未检测到 selected 标记，回退 pending 索引 {}",
+                target_index,
+            )
+        else:
+            logger.warning("schedule: schedule_selected 缺少已选中候选，回退到策略决策")
+            target_index = decide_schedule_action(app, ctx, candidates, position=position)
+            target = candidates[target_index]
+    else:
+        target_index = decide_schedule_action(app, ctx, candidates, position=position)
+        target = candidates[target_index]
+    if _is_schedule_action_decision_position(position):
+        _mark_schedule_action_decided(ctx)
 
     logger.debug(
         "schedule step: position={}, target_index={}, title={!r}, kind={}, recommended={}",
@@ -903,9 +1159,31 @@ class ScheduleHandler:
     })
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == "schedule"
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         from src.core.tasks.producer_challenge.gameplay.handler_base import HandlerResult
 
         if position in self._EVENT_POSITIONS:
@@ -985,8 +1263,10 @@ class ScheduleHandler:
             )
 
         if position == GameplayPosition.SCHEDULE_IDLE:
-            cache_key = f"p_notebook_week_{ctx.current_week}"
-            if ctx.handler_state.get(cache_key) is None:
+            if not _ensure_p_notebook_closed_before_decision(app, ctx, position=position):
+                return HandlerResult.no_action("p notebook not confirmed closed before decision")
+            if _should_read_p_notebook_before_decision(ctx, position=position):
+                cache_key = f"p_notebook_week_{ctx.current_week}"
                 try:
                     notebook_entries = read_p_notebook(app, ctx, max_scroll_pages=2)
                     if notebook_entries:
@@ -999,6 +1279,11 @@ class ScheduleHandler:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("schedule: P手帳读取异常，跳过: {}", exc)
                     ctx.handler_state[cache_key] = []
+                if not _ensure_p_notebook_closed_before_decision(app, ctx, position=position):
+                    return HandlerResult.no_action("p notebook not closed after pre-decision read")
+        elif _is_schedule_action_decision_position(position):
+            if not _ensure_p_notebook_closed_before_decision(app, ctx, position=position):
+                return HandlerResult.no_action("p notebook not confirmed closed before decision")
 
         result = execute_schedule_step(app, ctx, position=position)
         if result is None:
@@ -1027,8 +1312,14 @@ class ScheduleHandler:
                 "retry_sleep": float(ctx.handler_state.get("schedule_confirm_unknown_retry_sleep", 0.7) or 0.7),
             }
             ctx.record_schedule_choice(action_name)
+            ctx.handler_state.pop("schedule_action_decided_week", None)
 
         return HandlerResult.ok(f"schedule {result.status}", sleep_after=0.8)
 
     def __repr__(self):
+        """处理repr并返回结果。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         return f"<ScheduleHandler phase={self.phase_tag!r} priority={self.priority}>"

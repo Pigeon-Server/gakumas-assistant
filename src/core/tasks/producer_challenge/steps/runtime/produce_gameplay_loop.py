@@ -117,7 +117,7 @@ def _finish_produce_with_base_ui(
                 logger.debug("produce_finishing: 处理弹窗 (iter={})", iteration)
                 continue
 
-        # 点击可见按钮推进（次へ、完了する、確認等）
+        # 点击可见按钮推进（如“次へ”“完了する”“確認”）。
         buttons = list(results.filter_by_label(BaseUILabels.BUTTON))
         if buttons:
             target = max(buttons, key=lambda b: b.cy)
@@ -147,11 +147,10 @@ def _finish_produce_with_base_ui(
 
 
 def _try_back_button_recovery(app: "AppProcessor") -> bool:
-    """检测并点击 Back Button 以恢复误入的子画面（手牌库等）。
+    """在 UNKNOWN 画面上优先尝试点击返回按钮做轻量恢复。
 
-    当画面处于 UNKNOWN 且检测到 Back Button 时调用。
-    Returns:
-        True 表示已点击 Back Button。
+    适用于误入手牌详情、说明页等 producer 子页面的场景。这类页面通常仍在当前流程里，
+    不需要完整回主页重进，只要能点掉 `BACK_BTN` 就能回到主画面继续识别。
     """
     results = app.latest_results
     if results is None or not hasattr(results, "filter_by_label"):

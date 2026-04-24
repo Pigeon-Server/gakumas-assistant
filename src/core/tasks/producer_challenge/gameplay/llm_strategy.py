@@ -64,6 +64,21 @@ class LLMStrategy:
         think: str = "low",
         num_ctx: int = 8192,
     ):
+        """处理init并返回结果。
+
+        Args:
+            base_url: 用于提供base、url相关输入。
+            model: 用于提供model相关输入。
+            api_key: 用于提供api、key相关输入。
+            timeout: 用于提供timeout相关输入。
+            temperature: 用于提供temperature相关输入。
+            max_tokens: 用于提供max、tokens相关输入。
+            think: 用于提供think相关输入。
+            num_ctx: 用于提供num、ctx相关输入。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
@@ -80,6 +95,11 @@ class LLMStrategy:
         self._last_call_details: _LLMCallDetails | None = None
 
     def _get_client(self) -> OpenAI:
+        """获取client并返回结果。
+
+        Returns:
+            OpenAI: 返回值类型见注解，语义由函数用途决定。
+        """
         if self._client is None:
             self._client = OpenAI(
                 base_url=self.base_url,
@@ -177,7 +197,21 @@ class LLMStrategy:
         fallback_reason: str = "",
         total_elapsed: float = 0.0,
     ):
-        """将决策信息写入 dump 文件。"""
+        """处理dump、decision并返回结果。
+
+        Args:
+            decision_state: 决策快照，包含上下文、候选项与当前理由。
+            chosen_index: 用于提供chosen、index相关输入。
+            resolved_index: 用于提供resolved、index相关输入。
+            resolved_name: 用于提供resolved、name相关输入。
+            resolved_action_id: 业务对象标识符，用于索引或匹配目标实体。
+            fallback_used: 用于提供fallback、used相关输入。
+            fallback_reason: 用于提供fallback、reason相关输入。
+            total_elapsed: 用于提供total、elapsed相关输入。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         try:
             dumper = DecisionDumper.get_instance()
             if not dumper.enabled:
@@ -261,7 +295,15 @@ class LLMStrategy:
 
     @staticmethod
     def _get_candidate_name(state: dict[str, Any], index: int) -> str:
-        """获取指定索引的候选名称。"""
+        """获取候选项、name并返回结果。
+
+        Args:
+            state: 用于提供状态相关输入。
+            index: 用于提供index相关输入。
+
+        Returns:
+            str: 处理后的文本结果。
+        """
         for c in state.get("candidates", []):
             if c.get("index") == index:
                 return c.get("name", c.get("label", f"#{index}"))
@@ -366,24 +408,18 @@ class LLMStrategy:
             if final_text:
                 break  # 成功拿到 content
 
-            # content 为空：判断是否有 reasoning（模型只思考未回答）
-            has_reasoning = bool(details.raw_reasoning and details.raw_reasoning.strip())
-            if not has_reasoning or attempt >= self._EMPTY_CONTENT_MAX_RETRIES:
-                # 无 reasoning 或已达最大重试次数，交给 fallback
-                if attempt > 0:
-                    logger.warning(
-                        "[LLM] 重试 {} 次后 content 仍为空，交给 fallback",
-                        attempt,
-                    )
-                else:
-                    logger.debug("[LLM] 返回空文本，交给 fallback")
+            if attempt >= self._EMPTY_CONTENT_MAX_RETRIES:
+                logger.warning(
+                    "[LLM] 重试 {} 次后 content 仍为空，交给 fallback",
+                    attempt,
+                )
                 details.elapsed_sec = time.monotonic() - t0
                 self._last_call_details = details
                 return None
 
-            # 有 reasoning 但 content 为空 → 追加提示让模型直接输出答案
+            # content 为空即重试：无论是否携带 reasoning，都要求模型直接输出编号。
             logger.warning(
-                "[LLM] content 为空(第{}次)，reasoning 有 {} 字符，追加提示重试",
+                "[LLM] content 为空(第{}次)，reasoning={} 字符，追加提示重试",
                 attempt + 1,
                 len(details.raw_reasoning),
             )
@@ -493,7 +529,15 @@ class LLMStrategy:
 
     @staticmethod
     def _parse_action_index(text: str, legal_actions: list[int]) -> int | None:
-        """从文本中解析动作编号。"""
+        """解析操作、index并返回结果。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+            legal_actions: 用于提供legal、actions相关输入。
+
+        Returns:
+            int | None: 返回值类型见注解。
+        """
         if not text:
             return None
 
@@ -519,7 +563,11 @@ class LLMStrategy:
 
     @property
     def stats(self) -> str:
-        """返回统计摘要。"""
+        """汇总当前策略运行统计信息。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         avg = (self._total_latency / self._call_count) if self._call_count else 0
         return f"calls={self._call_count}, avg_latency={avg:.1f}s"
 

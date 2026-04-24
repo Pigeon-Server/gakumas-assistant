@@ -20,6 +20,7 @@ from src.core.tasks.producer_challenge.ui import (
     go_back_in_gameplay,
     wait_frame_stable,
 )
+from src.entity.Game.Page.Types.index import GamePageTypes
 from src.entity.Yolo import Yolo_Box
 from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
@@ -41,6 +42,15 @@ _GAMEPLAY_SIGNAL_LABELS = (
     ProducerLabels.SKILL_CARD_MENTAL,
     ProducerLabels.SKILL_CARD_TRAP,
     ProducerLabels.P_DRINK,
+)
+_GAMEPLAY_STRONG_SIGNAL_LABELS = (
+    ProducerLabels.PC_SKIP,
+    ProducerLabels.PC_TRAINING_REMAINING,
+    ProducerLabels.SKILL_CARD_ACTIVE,
+    ProducerLabels.SKILL_CARD_MENTAL,
+    ProducerLabels.SKILL_CARD_TRAP,
+    ProducerLabels.P_DRINK,
+    ProducerLabels.PC_MENU,
 )
 _GAMEPLAY_MENU_MARKERS = (
     ProduceText.GAMEPLAY_MENU_SUSPEND,
@@ -74,6 +84,7 @@ def _is_produce_resume_modal(app: "AppProcessor", modal=None) -> bool:
 
 
 def _is_retire_confirmation_title(title: str | None) -> bool:
+    """判断给定弹窗标题是否属于放弃当前培育的确认弹窗。"""
     normalized = normalize_text(title)
     if not normalized:
         return False
@@ -96,6 +107,19 @@ def _build_frame_box(
     *,
     label: str,
 ) -> Yolo_Box | None:
+    """把绝对像素矩形安全裁剪成带截图内容的 Yolo_Box。
+
+    Args:
+        frame: 当前整帧图像。
+        x1: 左上角 x 坐标。
+        y1: 左上角 y 坐标。
+        x2: 右下角 x 坐标。
+        y2: 右下角 y 坐标。
+        label: 调试用标签名称。
+
+    Returns:
+        Yolo_Box | None: 裁剪成功时返回带 frame 切片的检测框；坐标越界或区域为空时返回 None。
+    """
     if frame is None or getattr(frame, "size", 0) <= 0:
         return None
     frame_height, frame_width = frame.shape[:2]
@@ -116,6 +140,19 @@ def _collect_ocr_candidates(
     right_ratio: float,
     bottom_ratio: float,
 ) -> list[tuple[str, Yolo_Box, float]]:
+    """在指定相对区域内执行 OCR，并返回文本、框和置信度候选列表。
+
+    Args:
+        frame: 当前整帧图像。
+        left_ratio: ROI 左边界相对宽度比例。
+        top_ratio: ROI 上边界相对高度比例。
+        right_ratio: ROI 右边界相对宽度比例。
+        bottom_ratio: ROI 下边界相对高度比例。
+
+    Returns:
+        list[tuple[str, Yolo_Box, float]]: 每个候选包含识别文本、对应的绝对坐标框和 OCR 置信度，
+        供菜单识别、恢复弹窗信息提取等流程复用。
+    """
     if frame is None or getattr(frame, "size", 0) <= 0:
         return []
 
@@ -151,6 +188,7 @@ def _pick_ocr_candidate(
     candidates: list[tuple[str, Yolo_Box, float]],
     token: str,
 ) -> Yolo_Box | None:
+    """从 OCR 候选中挑出最像目标 token 的文本框。"""
     normalized_token = normalize_text(token)
     matched: list[tuple[str, Yolo_Box, float]] = []
     for text, box, confidence in candidates:
@@ -173,6 +211,7 @@ def _pick_ocr_candidate(
 
 
 def _find_gameplay_menu_button(frame) -> Yolo_Box | None:
+    """在局内画面右下区域查找打开菜单的圆形按钮。"""
     if frame is None or getattr(frame, "size", 0) <= 0:
         return None
 
@@ -271,6 +310,7 @@ def _find_gameplay_menu_button(frame) -> Yolo_Box | None:
 
 
 def _has_gameplay_retire_menu(frame) -> bool:
+    """判断当前局内底部菜单是否已经展开到可见リタイア文本。"""
     candidates = _collect_ocr_candidates(
         frame,
         left_ratio=0.0,
@@ -302,6 +342,7 @@ def _has_gameplay_retire_menu(frame) -> bool:
 
 
 def _find_gameplay_retire_menu_entry(frame) -> Yolo_Box | None:
+    """在已展开的局内菜单中定位“リタイア”入口文本框。"""
     right_half_candidates = _collect_ocr_candidates(
         frame,
         left_ratio=0.5,
@@ -335,6 +376,7 @@ def _find_gameplay_retire_menu_entry(frame) -> Yolo_Box | None:
 
 
 def _wait_for_gameplay_retire_menu(app: "AppProcessor", *, timeout: float = 3.0) -> bool:
+    """等待局内底部菜单展开到可识别出退出文本。"""
     end_time = time() + timeout
     while time() < end_time:
         frame = getattr(app, "latest_frame", None)
@@ -349,6 +391,7 @@ def _wait_for_modal_relaxed(
     *,
     timeout: float = 4.0,
 ):
+    """以较宽松的头部要求轮询弹窗，兼容退出确认等过渡态弹窗。"""
     end_time = time() + timeout
     while time() < end_time:
         modal = app.game_utils.try_get_modal(no_body=True, require_header=False)
@@ -359,15 +402,48 @@ def _wait_for_modal_relaxed(
 
 
 def _looks_like_active_gameplay(app: "AppProcessor") -> bool:
+    """综合 YOLO、页面位置与菜单特征判断当前是否已在局内 gameplay。"""
+    if _is_on_scenario_page(app):
+        return False
+    if app.latest_results and app.latest_results.exists_label(BaseUILabels.HOME_PRODUCE_BTN):
+        return False
+
+    current_location = app.game_utils.update_current_location()
+    if current_location == GamePageTypes.MAIN_MENU__HOME:
+        return False
+
     results = getattr(app, "latest_results", None)
     if results is not None:
-        for label in _GAMEPLAY_SIGNAL_LABELS:
+        for label in _GAMEPLAY_STRONG_SIGNAL_LABELS:
             if results.exists_label(label):
                 return True
-    return _find_gameplay_menu_button(getattr(app, "latest_frame", None)) is not None
+
+    frame = getattr(app, "latest_frame", None)
+    if frame is None:
+        return False
+
+    if _has_gameplay_retire_menu(frame):
+        return True
+
+    menu_button = _find_gameplay_menu_button(frame)
+    if menu_button is None:
+        return False
+
+    # 仅检测到右下角圆形按钮时，不能直接判定为局内。
+    # 主页等界面也可能存在相似圆形入口，必须结合位置与其它信号收紧判断。
+    frame_height, frame_width = frame.shape[:2]
+    near_bottom_right = (
+        menu_button.cx >= int(frame_width * 0.86)
+        and menu_button.cy >= int(frame_height * 0.88)
+    )
+    return near_bottom_right and current_location not in {
+        GamePageTypes.UNKNOWN,
+        GamePageTypes.MAIN_MENU__HOME,
+    }
 
 
 def _retire_active_gameplay_produce(app: "AppProcessor") -> bool:
+    """执行结束培育`retire_active_gameplay_produce`。"""
     if not _looks_like_active_gameplay(app) and not _has_gameplay_retire_menu(getattr(app, "latest_frame", None)):
         return False
 
@@ -460,7 +536,7 @@ def _extract_resume_modal_info(app: "AppProcessor") -> dict:
             info["challenge_name"] = t.strip()
             break
 
-    # 难度（マスター/レギュラー/プロ/レジェンド）
+    # 难度（マスター/レギュラー/プロ/レジェンド）。
     difficulty_map = ProduceText.DIFFICULTY_LABEL_MAP
     for t, _, _ in texts:
         for jp, en in difficulty_map.items():
@@ -532,11 +608,29 @@ def resume_resumable_produce(app: "AppProcessor", *, timeout: float = 8.0) -> bo
 
 
 class NavigateToProduceStep(ProduceStep):
-    """从主页进入培育入口，并把流程带到后续步骤可接管的稳定页面。"""
+    """从主页或残留局面进入培育入口，并把流程带到稳定可接管的起点页面。"""
 
     step_name = "navigate_to_produce"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """把当前会话导航到剧本选择页，或在恢复模式下直接接管旧局。
+
+        Args:
+            app: 当前应用处理器，用于返回主页、点击入口、识别弹窗以及处理局内退局链。
+            ctx: 培育上下文；当 `resume_interrupted` 为 True 时，会优先尝试恢复旧局或直接接管当前 gameplay。
+
+        Returns:
+            bool: 成功进入剧本选择页，或在恢复模式下成功接管中断培育时返回 True。
+
+        Raises:
+            TimeoutError: 无法进入剧本选择页、无法确认退出弹窗或恢复旧局时抛出。
+
+        Notes:
+            该步骤会根据当前界面状态自动选择三条路径：
+            1. 已在剧本页则直接返回；
+            2. 恢复模式下命中旧局则直接恢复或接管；
+            3. 其余情况先清理残留弹窗、必要时退出旧局，再从主页重新进入培育入口。
+        """
         if _is_on_scenario_page(app):
             logger.debug("已经在培育剧本选择页面")
             return True
@@ -630,7 +724,7 @@ class NavigateToProduceStep(ProduceStep):
         if "difficulty" in resume_info:
             logger.info(f"[恢复培育] 中断难度={resume_info.get('difficulty_jp', resume_info['difficulty'])}")
 
-        # 点击「再開する」恢复旧局
+        # 点击“再開する”恢复旧局。
         if not resume_resumable_produce(app, timeout=8.0):
             logger.warning("[恢复培育] 点击再開する失败，回退到正常流程")
             return False
@@ -661,7 +755,7 @@ class NavigateToProduceStep(ProduceStep):
             for _ in range(5):
                 phase = detect_gameplay_phase(app, ctx)
                 # MODAL / STARTUP_MODALS 也属于 gameplay 内的合法阶段
-                # （例如休み確認、饮料确认等模态都在培育局内）
+                # （例如休息确认、饮料确认等模态都在培育局内）
                 if phase not in {GameplayPhase.UNKNOWN, ""}:
                     ctx.resumed_from_interrupt = True
                     logger.success(

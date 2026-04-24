@@ -30,6 +30,15 @@ _TURN_COLOR_MAP = {
 
 
 def _coerce_int(value: Any, default: int = 0) -> int:
+    """处理coerce、int并返回结果。
+
+    Args:
+        value: 用于提供value相关输入。
+        default: 用于提供default相关输入。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -37,11 +46,27 @@ def _coerce_int(value: Any, default: int = 0) -> int:
 
 
 def _normalize_turn_color(value: Any) -> str:
+    """标准化turn、color并返回结果。
+
+    Args:
+        value: 用于提供value相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     normalized = str(value or "").strip().lower().replace(" ", "").replace("_", "")
     return _TURN_COLOR_MAP.get(normalized, "")
 
 
 def _derive_action_kind(payload: dict[str, Any]) -> str:
+    """处理derive、操作、kind并返回结果。
+
+    Args:
+        payload: 用于提供载荷相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     action_id = str(payload.get("id") or payload.get("action_id") or "")
     if action_id.startswith("produce_card:") or action_id.startswith("produce_card_unknown"):
         return "card"
@@ -59,6 +84,14 @@ def _derive_action_kind(payload: dict[str, Any]) -> str:
 
 
 def _estimate_max_turns(snapshot: dict[str, Any]) -> int:
+    """处理estimate、max、turns并返回结果。
+
+    Args:
+        snapshot: 用于提供snapshot相关输入。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     explicit = _coerce_int(snapshot.get("max_turns"))
     if explicit > 0:
         return explicit
@@ -70,6 +103,14 @@ def _estimate_max_turns(snapshot: dict[str, Any]) -> int:
 
 
 def _build_card_payload(card: dict[str, Any]) -> dict[str, Any]:
+    """构建卡牌、载荷并返回结果。
+
+    Args:
+        card: 用于提供卡牌相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     return {
         "db_id": str(card.get("db_id") or card.get("id") or ""),
         "name": str(card.get("name") or ""),
@@ -87,6 +128,14 @@ def _build_card_payload(card: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_drink_payload(drink: dict[str, Any]) -> dict[str, Any]:
+    """构建饮料、载荷并返回结果。
+
+    Args:
+        drink: 用于提供饮料相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     return {
         "db_id": str(drink.get("db_id") or drink.get("id") or ""),
         "name": str(drink.get("name") or ""),
@@ -101,6 +150,14 @@ def _build_drink_payload(drink: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_legal_action_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """构建legal、操作、载荷并返回结果。
+
+    Args:
+        payload: 用于提供载荷相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     metadata = dict(payload.get("metadata") or {})
     return {
         "index": _coerce_int(payload.get("index")),
@@ -225,6 +282,17 @@ class RLStrategy:
         predict_timeout: float = 10.0,
         deterministic: bool = True,
     ):
+        """处理init并返回结果。
+
+        Args:
+            base_url: 用于提供base、url相关输入。
+            info_timeout: 用于提供info、timeout相关输入。
+            predict_timeout: 用于提供predict、timeout相关输入。
+            deterministic: 用于提供deterministic相关输入。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         self.base_url = base_url.rstrip("/")
         self.deterministic = bool(deterministic)
         self._client = RLInferenceClient(
@@ -240,6 +308,17 @@ class RLStrategy:
         candidates: Sequence[Any],
         decision_state: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        """处理call并返回结果。
+
+        Args:
+            app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+            ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+            candidates: 候选项列表，供策略或规则选择目标动作。
+            decision_state: 决策快照，包含上下文、候选项与当前理由。
+
+        Returns:
+            dict: 结构化结果字典。
+        """
         del app, ctx
         if not candidates or decision_state is None:
             return None

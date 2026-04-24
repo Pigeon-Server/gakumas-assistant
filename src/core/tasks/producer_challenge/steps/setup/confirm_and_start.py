@@ -33,16 +33,25 @@ class ConfirmAndStartStep(ProduceStep):
     skip_on_resume = True
 
     def validate(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """确认当前页面已经是可点击“プロデュース開始”的最终确认页。"""
         return is_final_confirm_page(app)
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
-        # 处理可能残留的弹窗
+        """处理开始前残留弹窗与加成道具，然后正式点击开跑按钮。
+
+        Args:
+            app: 当前应用处理器，用于关闭弹窗、激活加成道具和点击开始按钮。
+            ctx: 培育上下文；函数会读取 `use_boost_items` 决定是否尝试启用开始前道具。
+
+        Returns:
+            bool: 成功点击“プロデュース開始”后返回 True。
+        """
         self._handle_pending_modals(app, ctx)
 
         # 处理加成道具
         self._handle_boost_items(app, ctx)
 
-        # 点击「プロデュース開始」
+        # 点击“プロデュース開始”。
         # OCR 可能读到后缀如 "B 40→25"（AP 消耗），所以用模糊匹配
         app.game_utils.click_button(
             ButtonText.PRODUCE_START,
@@ -92,12 +101,12 @@ class ConfirmAndStartStep(ProduceStep):
 
     @staticmethod
     def _handle_pending_modals(app: "AppProcessor", ctx: "ProduceContext"):
-        """处理确认页可能出现的弹窗。"""
+        """关闭开始确认页上的残留弹窗，优先处理レンタル相关确认。"""
         modal = app.game_utils.try_get_modal(no_body=True)
         if modal is None:
             return
 
-        # レンタル可能 / レンタル確認弹窗
+        # 租借可能 / 租借確認弹窗
         if modal.modal_title and string_match(
             modal.modal_title,
             [ModalText.TITLE.RENTAL_AVAILABLE, ModalText.TITLE.RENTAL_CONFIRMATION],

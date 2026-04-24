@@ -81,7 +81,12 @@ if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
     from src.main import AppProcessor
 
-_MULTIPLIER_RE = re.compile(r"[x×]?\s*(\d+(?:\.\d+)?)")
+_SCORE_BONUS_PARAM_PERCENT_RE = re.compile(
+    r"(?:ボーカル|ダンス|ビジュアル|VO|DA|VI)\D{0,6}(\d{2,6})\s*[%％]",
+    re.IGNORECASE,
+)
+_SCORE_BONUS_PERCENT_RE = re.compile(r"(\d{2,6})\s*[%％]")
+_SCORE_BONUS_X_RE = re.compile(r"[x×X]\s*(\d{1,4}(?:\.\d+)?)")
 _PERCENT_BASED_RESOURCE_PATTERNS = (
     re.compile(
         rf"({'|'.join(ProduceText.STATUS_VALUE_TOKENS)})\s*の\s*\d+\s*[%％]"
@@ -118,6 +123,42 @@ _OFFENSIVE_DESCRIPTION_KEYWORDS = (
     ProduceText.PARAMETER,
 )
 
+
+def _parse_score_bonus_from_bonus_text(
+    bonus_text: str,
+    *,
+    remaining_turns_text: str = "",
+) -> str:
+    """从奖励指示文本中提取分数倍率，优先百分比格式。"""
+    normalized = normalize_ocr_jp(fullwidth_to_halfwidth(str(bonus_text or "")))
+    if not normalized.strip():
+        return ""
+
+    percent_values = [
+        int(value)
+        for value in _SCORE_BONUS_PARAM_PERCENT_RE.findall(normalized)
+    ]
+    if not percent_values:
+        percent_values = [int(value) for value in _SCORE_BONUS_PERCENT_RE.findall(normalized)]
+    valid_values = [value for value in percent_values if 50 <= value <= 9999]
+    if valid_values:
+        bonus_value = max(valid_values)
+        remaining_turns = _extract_first_int(remaining_turns_text)
+        # OCR 粘连时常见 "5"+"519%" => "5519%"，优先剥离前缀回合数。
+        if remaining_turns > 0 and bonus_value >= 1000:
+            bonus_str = str(int(bonus_value))
+            prefix = str(int(remaining_turns))
+            if bonus_str.startswith(prefix) and len(bonus_str) > len(prefix):
+                tail = int(bonus_str[len(prefix):])
+                if 50 <= tail <= 9999:
+                    bonus_value = tail
+        return str(int(bonus_value))
+
+    x_match = _SCORE_BONUS_X_RE.search(normalized)
+    if x_match:
+        return str(x_match.group(1))
+    return ""
+
 _VISUAL_DISABLED_LOWER_HSV = (0, 0, 0)
 _VISUAL_DISABLED_UPPER_HSV = (179, 255, 155)
 _VISUAL_DISABLED_MASK_RATIO = 0.74
@@ -144,6 +185,14 @@ _EFFECT_TERM_HINTS = (
     (ProduceText.GOOD_CONDITION, "会把参数/得分上升量提高50%，并随回合衰减"),
 )
 def _current_idol_plan_payload(ctx: "ProduceContext") -> dict[str, str]:
+    """读取当前偶像卡的养成路线信息并构建载荷。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     idol_card = getattr(ctx, "selected_idol_card", None)
     # 回退: 从主数据库按配置的目标偶像卡 ID 查询
     if idol_card is None:
@@ -215,6 +264,14 @@ def _build_consult_session_summary(ctx: "ProduceContext") -> dict[str, Any]:
 
 
 def _build_effect_term_hints(text: str) -> list[str]:
+    """构建效果、术语、hints并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     remaining_text = fullwidth_to_halfwidth(str(text or ""))
     hints: list[str] = []
     for token, hint in _EFFECT_TERM_HINTS:
@@ -226,6 +283,7 @@ def _build_effect_term_hints(text: str) -> list[str]:
 
 
 def _coerce_candidate_metadata(candidate: Any) -> dict[str, Any]:
+    """转换`candidate_metadata`格式。"""
     metadata = getattr(candidate, "metadata", None)
     if metadata is None:
         metadata = {}
@@ -244,6 +302,7 @@ def mark_candidate_unavailable(candidate: Any, *, reason: str) -> None:
 
 
 def _resolve_card_from_clip(app: "AppProcessor", box: Any) -> CandidateResolution | None:
+    """解析并确定`card_from_clip`。"""
     clip_manager = getattr(app, "clip_manager", None)
     if clip_manager is None or box is None or getattr(box, "frame", None) is None:
         return None
@@ -279,6 +338,7 @@ def _resolve_card_from_clip(app: "AppProcessor", box: Any) -> CandidateResolutio
 
 
 def _resolve_drink_from_clip(app: "AppProcessor", box: Any) -> CandidateResolution | None:
+    """解析并确定`drink_from_clip`。"""
     clip_manager = getattr(app, "clip_manager", None)
     if clip_manager is None or box is None or getattr(box, "frame", None) is None:
         return None
@@ -313,6 +373,7 @@ def _resolve_drink_from_clip(app: "AppProcessor", box: Any) -> CandidateResoluti
 
 
 def _resolve_item_from_clip(app: "AppProcessor", box: Any) -> CandidateResolution | None:
+    """解析并确定`item_from_clip`。"""
     clip_manager = getattr(app, "clip_manager", None)
     if clip_manager is None or box is None or getattr(box, "frame", None) is None:
         return None
@@ -353,6 +414,17 @@ def resolve_produce_card_identity(
     box: Any,
     index: int,
 ) -> CandidateResolution:
+    """解析并补全produce、卡牌、标识并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        title: 用于提供title相关输入。
+        box: 单个检测框对象。
+        index: 用于提供index相关输入。
+
+    Returns:
+        CandidateResolution: 返回值类型见注解。
+    """
     clip_resolution = _resolve_card_from_clip(app, box)
     if clip_resolution is not None:
         return clip_resolution
@@ -392,6 +464,19 @@ def resolve_produce_drink_identity(
     allow_ocr_fallback: bool = True,
     min_ocr_confidence: float = 0.0,
 ) -> CandidateResolution:
+    """解析并补全produce、饮料、标识并返回结果。
+
+    Args:
+        title: 用于提供title相关输入。
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        box: 单个检测框对象。
+        index: 用于提供index相关输入。
+        allow_ocr_fallback: 用于提供allow、OCR、fallback相关输入。
+        min_ocr_confidence: 用于提供min、OCR、confidence相关输入。
+
+    Returns:
+        CandidateResolution: 返回值类型见注解。
+    """
     clip_resolution = _resolve_drink_from_clip(app, box) if app is not None else None
     if clip_resolution is not None:
         return clip_resolution
@@ -451,6 +536,18 @@ def resolve_produce_item_identity(
     index: int,
     lookup_texts: Sequence[str] | None = None,
 ) -> CandidateResolution:
+    """解析并补全produce、道具、标识并返回结果。
+
+    Args:
+        title: 用于提供title相关输入。
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        box: 单个检测框对象。
+        index: 用于提供index相关输入。
+        lookup_texts: 用于提供lookup、texts相关输入。
+
+    Returns:
+        CandidateResolution: 返回值类型见注解。
+    """
     clip_resolution = _resolve_item_from_clip(app, box) if app is not None else None
     if clip_resolution is not None:
         return clip_resolution
@@ -508,6 +605,19 @@ def resolve_produce_entity_identity(
     entity_type_hint: str = "",
 ) -> CandidateResolution:
     # 1. OCR 文本匹配
+    """解析并补全produce、entity、标识并返回结果。
+
+    Args:
+        title: 用于提供title相关输入。
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        box: 单个检测框对象。
+        index: 用于提供index相关输入。
+        icon_box: 用于提供icon、box相关输入。
+        entity_type_hint: 用于提供entity、type、提示相关输入。
+
+    Returns:
+        CandidateResolution: 返回值类型见注解。
+    """
     matched = _match_catalog_entry(title) if title.strip() else None
     if matched is not None:
         kind = str(matched.get("kind") or "")
@@ -568,6 +678,15 @@ def hydrate_card_candidates(
     app: "AppProcessor",
     candidates: Sequence[Any],
 ) -> None:
+    """处理hydrate、卡牌、candidates并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     for candidate in candidates:
         resolution = resolve_produce_card_identity(
             app,
@@ -579,6 +698,15 @@ def hydrate_card_candidates(
 
 
 def hydrate_p_drink_candidates(app: "AppProcessor", candidates: Sequence[Any]) -> None:
+    """处理hydrate、p、饮料、candidates并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     for candidate in candidates:
         resolution = resolve_produce_drink_identity(
             getattr(candidate, "title", ""),
@@ -593,6 +721,15 @@ def hydrate_consult_candidates(
     app: "AppProcessor",
     candidates: Sequence[Any],
 ) -> None:
+    """处理hydrate、consult、candidates并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     for candidate in candidates:
         kind = getattr(candidate, "kind", "")
         title = getattr(candidate, "title", "")
@@ -728,6 +865,16 @@ def _looks_like_visually_disabled_card(box: Any) -> bool:
 
 
 def _annotate_candidates(app: "AppProcessor", *, phase: str, candidates: Sequence[Any]) -> None:
+    """补充标注候选项并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        phase: 当前 gameplay 阶段标识。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     debugger = getattr(app, "debug_tools", None) or DebugTools()
     phase_color = {
         GameplayPhase.SCHEDULE: (255, 215, 0),
@@ -773,6 +920,14 @@ def _annotate_candidates(app: "AppProcessor", *, phase: str, candidates: Sequenc
 
 
 def _extract_hud_state(app: "AppProcessor") -> dict[str, Any]:
+    """提取HUD、状态并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     ctx = getattr(app, "_produce_decision_ctx", None)
     results = getattr(app, "latest_results", None)
     if results is None:
@@ -805,12 +960,31 @@ def _extract_hud_state(app: "AppProcessor") -> dict[str, Any]:
         }
 
     def _ocr_first(label: str) -> str:
+        """处理OCR、first并返回结果。
+
+        Args:
+            label: 用于提供label相关输入。
+
+        Returns:
+            str: 处理后的文本结果。
+        """
         boxes = results.filter_by_label(label)
         if not boxes:
             return ""
         return ocr_text(boxes.first().frame)
 
     def _ocr_region(x1_ratio: float, y1_ratio: float, x2_ratio: float, y2_ratio: float) -> str:
+        """处理OCR、region并返回结果。
+
+        Args:
+            x1_ratio: 用于提供x1、ratio相关输入。
+            y1_ratio: 用于提供y1、ratio相关输入。
+            x2_ratio: 用于提供x2、ratio相关输入。
+            y2_ratio: 用于提供y2、ratio相关输入。
+
+        Returns:
+            str: 处理后的文本结果。
+        """
         frame = getattr(app, "latest_frame", None)
         if frame is None or frame.size == 0:
             return ""
@@ -835,6 +1009,19 @@ def _extract_hud_state(app: "AppProcessor") -> dict[str, Any]:
         y2_ratio: float,
         debug_label: str = "",
     ) -> str:
+        """处理OCR、检测框、region并返回结果。
+
+        Args:
+            box: 单个检测框对象。
+            x1_ratio: 用于提供x1、ratio相关输入。
+            y1_ratio: 用于提供y1、ratio相关输入。
+            x2_ratio: 用于提供x2、ratio相关输入。
+            y2_ratio: 用于提供y2、ratio相关输入。
+            debug_label: 用于提供debug、label相关输入。
+
+        Returns:
+            str: 处理后的文本结果。
+        """
         frame = getattr(box, "frame", None)
         if frame is None or frame.size == 0:
             return ""
@@ -877,6 +1064,25 @@ def _extract_hud_state(app: "AppProcessor") -> dict[str, Any]:
         min_x1_ratio: float,
         debug_label: str = "",
     ) -> str:
+        """处理OCR、检测框、文本、right、of、color、anchor并返回结果。
+
+        Args:
+            box: 单个检测框对象。
+            lower_color: 用于提供lower、color相关输入。
+            upper_color: 用于提供upper、color相关输入。
+            search_y1_ratio: 用于提供search、y1、ratio相关输入。
+            search_y2_ratio: 用于提供search、y2、ratio相关输入。
+            min_area_ratio: 用于提供min、area、ratio相关输入。
+            min_aspect: 用于提供min、aspect相关输入。
+            max_aspect: 用于提供max、aspect相关输入。
+            x_padding: 用于提供x、padding相关输入。
+            y_padding: 用于提供y、padding相关输入。
+            min_x1_ratio: 用于提供min、x1、ratio相关输入。
+            debug_label: 用于提供debug、label相关输入。
+
+        Returns:
+            str: 处理后的文本结果。
+        """
         frame = getattr(box, "frame", None)
         if frame is None or frame.size == 0:
             return ""
@@ -1240,9 +1446,10 @@ def _extract_hud_state(app: "AppProcessor") -> dict[str, Any]:
 
     score_bonus = ""
     if bonus_text:
-        multiplier_match = _MULTIPLIER_RE.search(bonus_text.replace("x", "×"))
-        if multiplier_match:
-            score_bonus = multiplier_match.group(1)
+        score_bonus = _parse_score_bonus_from_bonus_text(
+            bonus_text,
+            remaining_turns_text=remaining_turns_text,
+        )
 
     # 排名从上下文读取（由 exam.py 每回合提取并存入）
     exam_ranking_str = get_exam_ranking_value(ctx) if ctx else ""
@@ -1265,7 +1472,7 @@ def _extract_hud_state(app: "AppProcessor") -> dict[str, Any]:
     )
 
     # ── 解析进度圆圈（课程画面） ──
-    # score_text 可能是 "PERFECTまで175CLEAR" 或 "CLEARまで10"
+    # score_text 可能形如“PERFECTまで175CLEAR”或“CLEARまで10”。
     progress_info = _parse_progress_circle(score_text)
     if progress_info is not None:
         # 进度圆圈模式: 数字是"距离目标的剩余分数"，不是当前累计分数
@@ -1359,6 +1566,14 @@ def sync_visible_planning_context(
 
 
 def _build_hand_snapshot(resolved_entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """构建hand、snapshot并返回结果。
+
+    Args:
+        resolved_entities: 用于提供resolved、entities相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     entries: list[dict[str, Any]] = []
     for entity in resolved_entities:
         metadata = dict(entity.get("metadata", {}) or {})
@@ -1376,6 +1591,14 @@ def _build_hand_snapshot(resolved_entities: list[dict[str, Any]]) -> list[dict[s
 
 
 def _build_initial_deck_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
+    """构建initial、deck、snapshot并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     card_details = dict((ctx.formation_details or {}).get("cards_and_items", {}) or {})
     entries = list(card_details.get("matched_entries", []) or [])
     deck_entries: list[dict[str, Any]] = []
@@ -1454,6 +1677,14 @@ def _build_current_deck_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
 
 
 def _build_produce_item_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
+    """构建produce、道具、snapshot并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     card_details = dict((ctx.formation_details or {}).get("cards_and_items", {}) or {})
     item_ids = list(card_details.get("produce_item_ids", []) or [])
     items: list[dict[str, Any]] = []
@@ -1485,7 +1716,7 @@ def _build_produce_item_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
 
 
 def _build_formation_ability_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
-    """Extract matched support/P-idol abilities from formation details for LLM."""
+    """从编成详情中提取已匹配的支援/P偶像能力，供 LLM 使用。"""
     abilities_data = dict((ctx.formation_details or {}).get("abilities", {}) or {})
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1505,7 +1736,7 @@ def _build_formation_ability_snapshot(ctx: "ProduceContext") -> list[dict[str, A
 
 
 def _build_formation_event_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
-    """Extract support card events from formation details for LLM."""
+    """从编成详情中提取支援卡事件信息，供 LLM 使用。"""
     events_data = dict((ctx.formation_details or {}).get("events", {}) or {})
     support_cards = events_data.get("support_cards") or []
     result: list[dict[str, Any]] = []
@@ -1526,6 +1757,14 @@ def _build_formation_event_snapshot(ctx: "ProduceContext") -> list[dict[str, Any
 
 
 def _build_drink_snapshot(drink_entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """构建饮料、snapshot并返回结果。
+
+    Args:
+        drink_entities: 用于提供饮料、entities相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     drinks: list[dict[str, Any]] = []
     for entity in drink_entities:
         metadata = dict(entity.get("metadata", {}) or {})
@@ -1540,6 +1779,7 @@ def _build_drink_snapshot(drink_entities: list[dict[str, Any]]) -> list[dict[str
 
 
 def _snapshot_card_category_name(value: Any) -> str:
+    """构建快照`snapshot_card_category_name`。"""
     category = str(value or "")
     if category in _SNAPSHOT_CARD_CATEGORY_NAMES:
         return _SNAPSHOT_CARD_CATEGORY_NAMES[category]
@@ -1547,6 +1787,14 @@ def _snapshot_card_category_name(value: Any) -> str:
 
 
 def _is_offensive_snapshot_card(card: dict[str, Any]) -> bool:
+    """判断offensive、snapshot、卡牌是否成立。
+
+    Args:
+        card: 用于提供卡牌相关输入。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     effect_types = [
         str(value or "")
         for value in card.get("effect_types", []) or []
@@ -1563,10 +1811,19 @@ def _is_offensive_snapshot_card(card: dict[str, Any]) -> bool:
 
 
 def _count_offensive_snapshot_cards(cards: list[dict[str, Any]]) -> int:
+    """统计`offensive_snapshot_cards`数量。"""
     return sum(1 for card in cards if _is_offensive_snapshot_card(card))
 
 
 def _build_snapshot_deck_summary(cards: list[dict[str, Any]]) -> str:
+    """构建snapshot、deck、摘要并返回结果。
+
+    Args:
+        cards: 用于提供卡牌相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     if not cards:
         return "(空)"
 
@@ -1595,6 +1852,16 @@ def _build_snapshot_reshuffle_hint(
     grave_cards: list[dict[str, Any]],
     offensive_counts: dict[str, int],
 ) -> str:
+    """构建snapshot、reshuffle、提示并返回结果。
+
+    Args:
+        deck_cards: 用于提供deck、卡牌相关输入。
+        grave_cards: 用于提供grave、卡牌相关输入。
+        offensive_counts: 用于提供offensive、counts相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     if len(deck_cards) <= 2 and grave_cards:
         return f"牌库仅剩{len(deck_cards)}张；下次抽牌大概率会把弃牌堆洗回。"
     if offensive_counts.get("deck", 0) <= 0 and offensive_counts.get("grave", 0) > 0:
@@ -1669,6 +1936,17 @@ def _build_llm_actions(
     position: str,
     stage_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """构建llm、actions并返回结果。
+
+    Args:
+        candidate_payloads: 用于提供候选项、payloads相关输入。
+        phase: 当前 gameplay 阶段标识。
+        position: 当前阶段下的细分画面位置标识。
+        stage_context: 用于提供stage、context相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     actions: list[dict[str, Any]] = []
     for payload in candidate_payloads:
         phase_key = phase.value if hasattr(phase, "value") else str(phase)
@@ -1713,7 +1991,7 @@ def _build_llm_actions(
             phase_key == GameplayPhase.P_DRINK
             and is_produce_drink_action_id(payload.get("id"))
         )
-        # ── おでかけ活動: outing probe 匹配到 DB ID 的選項 ──
+        # ── 外出活動: outing probe 匹配到 DB ID 的選項 ──
         is_outing_entity = (
             str(metadata.get("candidate_type") or "") == "outing_activity"
             and bool(payload.get("db_id"))
@@ -1753,14 +2031,14 @@ def _build_llm_actions(
                 or "信息面板 OCR 已识别名称，但暂未匹配主数据库；按名称进行相对选择。"
             )
         elif is_outing_entity:
-            # おでかけ活動: DB 描述 + P 成本
+            # 外出活動: DB 描述 + P 成本
             display_name = str(
                 metadata.get("display_name")
                 or payload.get("name")
                 or ""
             )
             p_cost = metadata.get("p_cost")
-            # DB マッチ成功時は DB 記述を使用、失敗時は OCR 効果描述を使用
+            # DB 匹配成功时使用 DB 描述，失败时使用 OCR 效果描述。
             outing_db_desc = str(metadata.get("outing_db_description") or "")
             outing_effect = str(metadata.get("outing_effect") or "")
             parts: list[str] = [display_name] if display_name else []
@@ -1893,9 +2171,9 @@ def _build_llm_actions(
                 else f"术语提示：{effect_hint_text}"
             )
 
-        # ── 标签: 实体类用 db_id（RL 对接），おでかけ用可读名（LLM 不需要内部 ID） ──
+        # ── 标签: 实体类用 db_id（RL 对接），外出用可读名（LLM 不需要内部 ID） ──
         if is_outing_entity:
-            # おでかけ: LLM 看到可读名称，db_id 仅供 RL 外部消费
+            # 外出: LLM 看到可读名称，db_id 仅供 RL 外部消费
             label = str(
                 metadata.get("display_name")
                 or payload.get("name")
@@ -1940,6 +2218,16 @@ def _blocked_battle_card_keys(
     phase: str,
     llm_snapshot: dict[str, Any],
 ) -> set[str]:
+    """处理blocked、battle、卡牌、keys并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        phase: 当前 gameplay 阶段标识。
+        llm_snapshot: 用于提供llm、snapshot相关输入。
+
+    Returns:
+        set[str]: 返回值类型见注解。
+    """
     blocked_state = dict(ctx.handler_state.get("battle_blocked_cards", {}) or {})
     current_marker = (
         str(phase or ""),
@@ -1961,6 +2249,7 @@ def _zero_resource_dependency_reason(
     *,
     resources: dict[str, Any],
 ) -> str:
+    """生成`zero_resource_dependency_reason`。"""
     normalized = fullwidth_to_halfwidth(str(description or ""))
     if not normalized:
         return ""
@@ -1985,6 +2274,7 @@ def _insufficient_cost_reason(
     *,
     llm_snapshot: dict[str, Any],
 ) -> str:
+    """生成`insufficient_cost_reason`。"""
     cost = int(metadata.get("cost") or 0)
     if cost <= 0:
         return ""
@@ -2010,6 +2300,20 @@ def _insufficient_cost_reason(
     )
 
 
+def _parse_play_limit_remaining(llm_snapshot: dict[str, Any]) -> int:
+    """解析本回合剩余出牌次数；缺失时默认 1，显式 0 必须保留。"""
+    raw_value = llm_snapshot.get("play_limit_remaining")
+    if raw_value is None:
+        return 1
+    normalized = fullwidth_to_halfwidth(str(raw_value)).strip()
+    if not normalized:
+        return 1
+    match = re.search(r"\d+", normalized)
+    if match is None:
+        return 1
+    return int(match.group())
+
+
 def _annotate_battle_candidate_availability(
     ctx: "ProduceContext",
     *,
@@ -2017,9 +2321,21 @@ def _annotate_battle_candidate_availability(
     candidate_payloads: list[dict[str, Any]],
     llm_snapshot: dict[str, Any],
 ) -> None:
+    """补充标注battle、候选项、availability并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        phase: 当前 gameplay 阶段标识。
+        candidate_payloads: 用于提供候选项、payloads相关输入。
+        llm_snapshot: 用于提供llm、snapshot相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     phase_key = phase.value if hasattr(phase, "value") else str(phase)
     if phase_key not in {GameplayPhase.LESSON, GameplayPhase.EXAM}:
         return
+    play_limit_remaining = _parse_play_limit_remaining(llm_snapshot)
     blocked_keys = _blocked_battle_card_keys(ctx, phase=phase_key, llm_snapshot=llm_snapshot)
     resources = dict(llm_snapshot.get("resources", {}) or {})
     for payload in candidate_payloads:
@@ -2048,7 +2364,7 @@ def _annotate_battle_candidate_availability(
             unavailable_reason = "上一轮已确认当前条件下效果不会发动，本回合先不要再用这张牌"
         elif not bool(payload.get("available", True)):
             unavailable_reason = str(metadata.get("unavailable_reason") or "").strip()
-        elif int(llm_snapshot.get("play_limit_remaining") or 1) <= 0:
+        elif play_limit_remaining <= 0:
             unavailable_reason = "本回合已没有剩余出牌次数，当前不能再打出技能卡"
         else:
             unavailable_reason = _insufficient_cost_reason(
@@ -2078,6 +2394,19 @@ def _build_llm_snapshot(
     resolved_entities: list[dict[str, Any]],
     stage_context: dict[str, Any],
 ) -> dict[str, Any]:
+    """构建llm、snapshot并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        phase: 当前 gameplay 阶段标识。
+        position: 当前阶段下的细分画面位置标识。
+        hud_state: 用于提供HUD、状态相关输入。
+        resolved_entities: 用于提供resolved、entities相关输入。
+        stage_context: 用于提供stage、context相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     phase_key = phase.value if hasattr(phase, "value") else str(phase)
     known_deck = _build_current_deck_snapshot(ctx)
     hand_entries = _build_hand_snapshot(resolved_entities) if phase_key in {GameplayPhase.LESSON, GameplayPhase.EXAM} else []
@@ -2215,6 +2544,36 @@ def _build_llm_snapshot(
     # 考试轮盘队列 + 加成倍率（供 LLM 规划后续回合）
     if phase_key == GameplayPhase.EXAM:
         _append_exam_snapshot_details(snapshot, ctx)
+        wheel_info = dict(snapshot.get("exam_wheel") or {})
+        wheel_bonus = _extract_first_int(str(wheel_info.get("bonus_pct") or ""))
+        hud_bonus = _extract_first_int(str(snapshot.get("score_bonus_multiplier") or ""))
+        wheel_confidence = str(wheel_info.get("confidence") or "low")
+        if wheel_bonus > 0:
+            should_override_bonus = hud_bonus <= 0
+            if not should_override_bonus and hud_bonus > 0:
+                mismatch = abs(hud_bonus - wheel_bonus)
+                if wheel_confidence in {"high", "medium"} and mismatch >= 120:
+                    should_override_bonus = True
+                elif wheel_confidence == "low":
+                    remaining_turns = int(snapshot.get("remaining") or 0)
+                    prefix_suspect = False
+                    if remaining_turns > 0:
+                        hud_bonus_str = str(int(hud_bonus))
+                        turn_prefix = str(int(remaining_turns))
+                        if hud_bonus_str.startswith(turn_prefix) and len(hud_bonus_str) > len(turn_prefix):
+                            tail = int(hud_bonus_str[len(turn_prefix):])
+                            if abs(tail - wheel_bonus) <= 120:
+                                prefix_suspect = True
+                    if prefix_suspect or (hud_bonus >= 2000 and mismatch >= 400):
+                        should_override_bonus = True
+            if should_override_bonus:
+                snapshot["score_bonus_multiplier"] = str(int(wheel_bonus))
+                logger.debug(
+                    "[考试倍率] 使用轮盘倍率覆盖 HUD 值: hud={} wheel={} (confidence={})",
+                    hud_bonus,
+                    wheel_bonus,
+                    wheel_confidence,
+                )
     # 相談 session 操作摘要（告知 LLM 本次相談已做了什么、还能做什么）
     if phase_key == GameplayPhase.CONSULT:
         snapshot["consult_session"] = _build_consult_session_summary(ctx)
@@ -2230,6 +2589,19 @@ def build_decision_state(
     candidates: Sequence[Any],
     reason: str = "decision",
 ) -> dict[str, Any]:
+    """构建决策、状态并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        phase: 当前 gameplay 阶段标识。
+        position: 当前阶段下的细分画面位置标识。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+        reason: 用于提供reason相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     hud_state = _extract_hud_state(app)
     _annotate_candidates(app, phase=phase, candidates=candidates)
     candidate_payloads = [serialize_candidate(candidate, phase=phase) for candidate in candidates]
@@ -2361,7 +2733,7 @@ def build_decision_state(
         hud_state=hud_state,
         candidate_payloads=candidate_payloads,
     )
-    # P手帳 日程データを stage_context に注入（LLM の未来計画参照用）
+    # 将 P 手账日程数据注入 stage_context（供 LLM 未来规划参考）。
     if phase == GameplayPhase.SCHEDULE:
         notebook_entries = list(ctx.handler_state.get("p_notebook_schedule") or [])
         if notebook_entries:

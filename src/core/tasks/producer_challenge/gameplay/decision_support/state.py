@@ -13,20 +13,45 @@ if TYPE_CHECKING:
 
 
 def is_produce_card_action_id(action_id: Any) -> bool:
+    """判断 action_id 是否表示出牌操作。
+
+    Args:
+        action_id: 业务对象标识符，用于索引或匹配目标实体。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     normalized = str(action_id or "")
     return normalized.startswith("produce_card:") or normalized.startswith("produce_card_unknown")
 
 
 def is_produce_drink_action_id(action_id: Any) -> bool:
+    """判断 action_id 是否表示使用饮料操作。
+
+    Args:
+        action_id: 业务对象标识符，用于索引或匹配目标实体。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     normalized = str(action_id or "")
     return normalized.startswith("produce_drink:") or normalized.startswith("produce_drink_unknown")
 
 
 def is_end_turn_action_id(action_id: Any) -> bool:
+    """判断 action_id 是否表示回合结束操作。
+
+    Args:
+        action_id: 业务对象标识符，用于索引或匹配目标实体。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     return str(action_id or "").strip() == "end_turn"
 
 
 def _serialize_box(box: Any) -> list[int] | None:
+    """序列化`serialize_box`。"""
     if box is None:
         return None
     x = int(getattr(box, "x", 0))
@@ -39,6 +64,15 @@ def _serialize_box(box: Any) -> list[int] | None:
 
 
 def serialize_candidate(candidate: Any, *, phase: str) -> dict[str, Any]:
+    """处理serialize、候选项并返回结果。
+
+    Args:
+        candidate: 单个候选项对象。
+        phase: 当前 gameplay 阶段标识。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     title = getattr(candidate, "title", "") or getattr(candidate, "label", "") or getattr(candidate, "kind", "")
     metadata = dict(getattr(candidate, "metadata", {}) or {})
     payload = {
@@ -70,7 +104,14 @@ def serialize_candidate(candidate: Any, *, phase: str) -> dict[str, Any]:
 
 
 def _compute_remaining_weeks(ctx: "ProduceContext") -> int | None:
-    """从 P手帳 数据推算剩余可操作周数。"""
+    """处理compute、remaining、weeks并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        int | None: 返回值类型见注解。
+    """
     notebook = list(ctx.handler_state.get("p_notebook_schedule") or [])
     if not notebook:
         return None
@@ -91,6 +132,17 @@ def _build_stage_context(
     hud_state: dict[str, Any],
     candidate_payloads: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """构建stage、context并返回结果。
+
+    Args:
+        phase: 当前 gameplay 阶段标识。
+        position: 当前阶段下的细分画面位置标识。
+        hud_state: 用于提供HUD、状态相关输入。
+        candidate_payloads: 用于提供候选项、payloads相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     phase_key = phase.value if hasattr(phase, "value") else str(phase)
     position_key = position.value if hasattr(position, "value") else str(position)
     has_progress_hud = bool(hud_state.get("has_progress_hud"))
@@ -306,6 +358,7 @@ def _describe_candidate_operation(
     position: str,
     stage_context: dict[str, Any],
 ) -> str:
+    """生成`describe_candidate_operation`。"""
     phase_key = phase.value if hasattr(phase, "value") else str(phase)
     position_key = position.value if hasattr(position, "value") else str(position)
     label = str(payload.get("name") or payload.get("label") or f"动作{payload.get('index', 0)}")
@@ -452,6 +505,7 @@ _SIM_DESTINATION_LOST_KEYWORDS = ("除外", "削除", "消去")
 
 
 def _default_virtual_battle_state() -> dict[str, Any]:
+    """构建默认`default_virtual_battle_state`。"""
     return {
         "version": 1,
         "initialized": False,
@@ -481,6 +535,14 @@ def _default_virtual_battle_state() -> dict[str, Any]:
 
 
 def _get_virtual_battle_state(ctx: "ProduceContext") -> dict[str, Any]:
+    """获取virtual、battle、状态并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     state = ctx.handler_state.get("virtual_battle_state")
     if not isinstance(state, dict) or state.get("version") != 1:
         state = _default_virtual_battle_state()
@@ -489,6 +551,16 @@ def _get_virtual_battle_state(ctx: "ProduceContext") -> dict[str, Any]:
 
 
 def _new_virtual_card_instance(state: dict[str, Any], entry: dict[str, Any], *, source: str) -> dict[str, Any]:
+    """处理new、virtual、卡牌、instance并返回结果。
+
+    Args:
+        state: 用于提供状态相关输入。
+        entry: 用于提供entry相关输入。
+        source: 用于提供source相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     state["instance_seq"] += 1
     return {
         "instance_key": f"{entry.get('id') or entry.get('name') or 'card'}#{state['instance_seq']}",
@@ -502,6 +574,15 @@ def _new_virtual_card_instance(state: dict[str, Any], entry: dict[str, Any], *, 
 
 
 def _bootstrap_virtual_deck(state: dict[str, Any], known_deck: list[dict[str, Any]]) -> None:
+    """处理bootstrap、virtual、deck并返回结果。
+
+    Args:
+        state: 用于提供状态相关输入。
+        known_deck: 用于提供known、deck相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     if state["initialized"]:
         return
     state["zones"]["deck"] = [
@@ -512,6 +593,7 @@ def _bootstrap_virtual_deck(state: dict[str, Any], known_deck: list[dict[str, An
 
 
 def _normalize_card_identity(card: dict[str, Any]) -> str:
+    """规范化`card_identity`。"""
     return str(card.get("id") or card.get("name") or "").strip()
 
 
@@ -519,6 +601,15 @@ def _find_virtual_card(
     state: dict[str, Any],
     observed: dict[str, Any],
 ) -> tuple[str, dict[str, Any]] | None:
+    """查找virtual、卡牌并返回结果。
+
+    Args:
+        state: 用于提供状态相关输入。
+        observed: 用于提供observed相关输入。
+
+    Returns:
+        tuple[str, dict[str, Any]] | None: 返回值类型见注解。
+    """
     observed_id = _normalize_card_identity(observed)
     observed_name = str(observed.get("name") or "").strip()
     for zone_name in ("hand", "deck", "grave", "hold", "lost"):
@@ -531,6 +622,15 @@ def _find_virtual_card(
 
 
 def _remove_virtual_card_from_all_zones(state: dict[str, Any], instance_key: str) -> None:
+    """处理remove、virtual、卡牌、from、all、zones并返回结果。
+
+    Args:
+        state: 用于提供状态相关输入。
+        instance_key: 用于提供instance、key相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     for zone_name in ("deck", "hand", "grave", "hold", "lost"):
         state["zones"][zone_name] = [
             card
@@ -543,6 +643,15 @@ def _sync_virtual_hand(
     state: dict[str, Any],
     observed_hand: list[dict[str, Any]],
 ) -> None:
+    """同步virtual、hand并返回结果。
+
+    Args:
+        state: 用于提供状态相关输入。
+        observed_hand: 用于提供observed、hand相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     if not observed_hand:
         state["zones"]["hand"] = []
         return
@@ -579,6 +688,16 @@ def _sync_virtual_hand(
 
 
 def _extract_simulated_delta(text: str, keyword: str, *, allow_turn_suffix: bool = True) -> int:
+    """提取simulated、delta并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+        keyword: 用于提供keyword相关输入。
+        allow_turn_suffix: 用于提供allow、turn、suffix相关输入。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     raw = str(text or "")
     if not raw or keyword not in raw:
         return 0
@@ -595,6 +714,7 @@ def _extract_simulated_delta(text: str, keyword: str, *, allow_turn_suffix: bool
 
 
 def _infer_virtual_destination(card: dict[str, Any]) -> str:
+    """推断`virtual_destination`。"""
     description = str(card.get("description") or "")
     if any(keyword in description for keyword in _SIM_DESTINATION_HOLD_KEYWORDS):
         return "hold"
@@ -604,6 +724,7 @@ def _infer_virtual_destination(card: dict[str, Any]) -> str:
 
 
 def _apply_virtual_card_effects(state: dict[str, Any], card: dict[str, Any]) -> None:
+    """应用`virtual_card_effects`。"""
     description = str(card.get("description") or "")
     state["resources"]["parameter_buff"] += _extract_simulated_delta(
         description,
@@ -657,6 +778,15 @@ def _apply_virtual_card_effects(state: dict[str, Any], card: dict[str, Any]) -> 
 
 
 def _find_card_in_hand_by_operation(state: dict[str, Any], operation: Any) -> dict[str, Any] | None:
+    """查找卡牌、in、hand、by、operation并返回结果。
+
+    Args:
+        state: 用于提供状态相关输入。
+        operation: 用于提供operation相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     details = dict(getattr(operation, "details", {}) or {})
     target = str(getattr(operation, "target", "") or "")
     db_id = str(details.get("db_id") or "")
@@ -669,6 +799,7 @@ def _find_card_in_hand_by_operation(state: dict[str, Any], operation: Any) -> di
 
 
 def _apply_virtual_operations(ctx: "ProduceContext", state: dict[str, Any]) -> None:
+    """应用`virtual_operations`。"""
     operations = list(ctx.operation_history)
     start_index = int(state.get("last_operation_count", 0) or 0)
     for operation in operations[start_index:]:
@@ -686,6 +817,7 @@ def _apply_virtual_operations(ctx: "ProduceContext", state: dict[str, Any]) -> N
 
 
 def _advance_virtual_turn(state: dict[str, Any], turns: int = 1) -> None:
+    """推进`virtual_turn`流程。"""
     for _ in range(max(int(turns), 0)):
         for key in _SIM_DECAY_KEYS:
             state["resources"][key] = max(int(state["resources"].get(key, 0) or 0) - 1, 0)
@@ -695,6 +827,15 @@ def _advance_virtual_turn(state: dict[str, Any], turns: int = 1) -> None:
 
 
 def _sync_virtual_turn_boundary(state: dict[str, Any], hud_state: dict[str, Any]) -> None:
+    """同步virtual、turn、boundary并返回结果。
+
+    Args:
+        state: 用于提供状态相关输入。
+        hud_state: 用于提供HUD、状态相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     current_remaining = int(hud_state.get("remaining_turns") or 0)
     last_remaining = state.get("last_remaining_turns")
     if last_remaining is None:
@@ -708,6 +849,7 @@ def _sync_virtual_turn_boundary(state: dict[str, Any], hud_state: dict[str, Any]
 
 
 def _merge_realtime_virtual_overrides(ctx: "ProduceContext", state: dict[str, Any]) -> None:
+    """合并`realtime_virtual_overrides`。"""
     realtime = ctx.handler_state.get("realtime_battle_state", {})
     for key, value in dict(realtime.get("resources", {}) or {}).items():
         if key in state["resources"] and value is not None:
@@ -726,6 +868,17 @@ def _sync_virtual_battle_state(
     known_deck: list[dict[str, Any]],
     observed_hand: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """同步virtual、battle、状态并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        hud_state: 用于提供HUD、状态相关输入。
+        known_deck: 用于提供known、deck相关输入。
+        observed_hand: 用于提供observed、hand相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     state = _get_virtual_battle_state(ctx)
     _bootstrap_virtual_deck(state, known_deck)
     _apply_virtual_operations(ctx, state)
@@ -739,6 +892,7 @@ def _append_exam_snapshot_details(
     snapshot: dict[str, Any],
     ctx: "ProduceContext",
 ) -> None:
+    """追加`exam_snapshot_details`。"""
     wheel_info = get_exam_wheel_info(ctx)
     if wheel_info:
         snapshot["exam_wheel"] = {

@@ -74,6 +74,14 @@ def _extract_ordinal_digit(text: str) -> Optional[int]:
       2. 数字混淆：OCR 把 "6th" 读成 "Oth" → "0th"（0→6）
     """
     def _try_extract(t: str) -> Optional[int]:
+        """处理try、extract并返回结果。
+
+        Args:
+            t: 用于提供t相关输入。
+
+        Returns:
+            Optional[int]: 返回值类型见注解。
+        """
         m = _FIRST_DIGIT_RE.search(t)
         if not m:
             return None
@@ -168,7 +176,7 @@ def extract_exam_ranking(
         return None
 
     # 4. 用 y 坐标 + 文本模式过滤出序号候选
-    ordinals: list[tuple[int, int, str]] = []  # (digit, area, raw_text)
+    ordinals: list[tuple[int, int, str]] = []  # (数字, 面积, 原始文本)
 
     for r in ocr_results.results:
         # y 范围过滤
@@ -222,12 +230,27 @@ def extract_exam_ranking(
 
 
 def store_exam_ranking(ctx: "ProduceContext", info: dict) -> None:
-    """将排名信息存入上下文。"""
+    """保存考试、排名并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        info: 用于提供info相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     ctx.handler_state["exam_ranking_info"] = info
 
 
 def get_exam_ranking(ctx: "ProduceContext") -> Optional[dict]:
-    """从上下文读取排名信息。"""
+    """获取考试、排名并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        Optional[dict]: 返回值类型见注解，语义由函数用途决定。
+    """
     return ctx.handler_state.get("exam_ranking_info")
 
 

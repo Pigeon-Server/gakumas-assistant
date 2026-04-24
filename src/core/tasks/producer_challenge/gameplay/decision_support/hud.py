@@ -11,6 +11,14 @@ _STAMINA_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
 
 
 def _extract_first_int(text: str) -> int:
+    """提取first、int并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     match = _NUMBER_RE.search(text or "")
     return int(match.group()) if match else 0
 
@@ -89,6 +97,16 @@ def _parse_stamina_text(
     previous_stamina: int = 0,
     previous_max_stamina: int = 0,
 ) -> tuple[int, int]:
+    """解析stamina、text并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+        previous_stamina: 用于提供previous、stamina相关输入。
+        previous_max_stamina: 用于提供previous、max、stamina相关输入。
+
+    Returns:
+        tuple[int, int]: 返回值类型见注解。
+    """
     normalized = fullwidth_to_halfwidth(str(text or ""))
     match = _STAMINA_RE.search(normalized)
     if match:
@@ -145,6 +163,15 @@ def _build_noisy_hud_value_candidates(digits: str) -> list[tuple[int, int]]:
     seen: set[int] = set()
 
     def _add(value: int, priority: int) -> None:
+        """处理add并返回结果。
+
+        Args:
+            value: 用于提供value相关输入。
+            priority: 用于提供priority相关输入。
+
+        Returns:
+            None: 仅产生副作用，不返回业务值。
+        """
         if value in seen:
             return
         seen.add(value)
@@ -281,10 +308,52 @@ def _extract_planning_parameter_value(
     upper_bound: int = 0,
 ) -> tuple[int | None, bool]:
     """提取周规划 HUD 参数值，并利用数据库上限抑制粘连脏 OCR。"""
+    filtered_texts: list[str] = []
+    for text in texts:
+        normalized = fullwidth_to_halfwidth(str(text or ""))
+        if not normalized.strip():
+            continue
+        # 百分比片段（如 31.4%）若不包含上限锚点，通常不是参数本体值，避免污染。
+        if upper_bound > 0 and ("%" in normalized or "％" in normalized):
+            digit_groups = re.findall(r"\d+", normalized)
+            has_upper_anchor = any(int(group) == upper_bound for group in digit_groups if group)
+            if "/" not in normalized and not has_upper_anchor:
+                continue
+        filtered_texts.append(normalized)
+
+    if not filtered_texts:
+        return None, False
+
+    if upper_bound > 0:
+        for normalized in filtered_texts:
+            slash_match = re.search(r"(\d+)\s*/\s*(\d+)", normalized)
+            if slash_match:
+                current_value = int(slash_match.group(1))
+                max_value = int(slash_match.group(2))
+                if max_value == upper_bound and 0 < current_value <= upper_bound:
+                    return current_value, True
+            digit_groups = re.findall(r"\d+", normalized)
+            if not digit_groups:
+                continue
+            for index, group in enumerate(digit_groups):
+                if int(group) != upper_bound or index <= 0:
+                    continue
+                prev_group = digit_groups[index - 1]
+                if not prev_group:
+                    continue
+                candidate = int(prev_group)
+                if 0 < candidate <= upper_bound:
+                    return candidate, True
+            first_group = digit_groups[0]
+            # 三位及以上数值优先按“主参数值”处理，避免被历史值吸附到 70/31 这类截断结果。
+            if len(first_group) >= 3:
+                candidate = int(first_group)
+                if 0 < candidate <= upper_bound:
+                    return candidate, True
+
     max_digits = len(str(upper_bound)) if upper_bound > 0 else 0
     if previous_value <= 0 and max_digits > 0:
-        for text in texts:
-            normalized = fullwidth_to_halfwidth(str(text or ""))
+        for normalized in filtered_texts:
             digit_groups = re.findall(r"\d+", normalized)
             if not digit_groups:
                 continue
@@ -297,7 +366,7 @@ def _extract_planning_parameter_value(
                     return candidate, True
 
     value, has_digits = _extract_noisy_hud_value(
-        *texts,
+        *filtered_texts,
         previous_value=previous_value,
         upper_bound=upper_bound,
     )
@@ -307,6 +376,14 @@ def _extract_planning_parameter_value(
 
 
 def _extract_first_int_from_texts(*texts: str) -> int:
+    """提取first、int、from、texts并返回结果。
+
+    Args:
+        *texts: 用于提供texts相关输入。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     for text in texts:
         value = _extract_first_int(text)
         if value > 0:
@@ -315,6 +392,14 @@ def _extract_first_int_from_texts(*texts: str) -> int:
 
 
 def _build_parameter_stats_payload(ctx: Any) -> dict[str, Any]:
+    """构建parameter、stats、结构化载荷并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     parameter_limit = int(getattr(ctx, "parameter_growth_limit", 0) or 0)
     return {
         "vocal": ctx.parameter_state.get("vocal", "") or "",

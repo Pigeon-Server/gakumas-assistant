@@ -22,6 +22,24 @@ if TYPE_CHECKING:
 
 @dataclass
 class ScheduleActionCandidate:
+    """周行程选择画面中的单个行程候选项。
+
+    每个行程选项（如课程、对话、咨询等）对应一个该类的实例，
+    包含 OCR 识别的标题、参数类型、是否推荐等信息，供决策策略选择使用。
+
+    Attributes:
+        index: 候选项在画面中的序号，从上到下依次为 0, 1, 2。
+        title: 行程选项的 OCR 识别文本，如「レッスン」或「相談」。
+        kind: 参数类型标签，如 vocal、dance、visual、unknown 等。
+        recommended: 是否为系统推荐行程，通过比对 PC_RECOMMEND_ACTION 检测框判断。
+        selected: 用户是否已点击选中该项，仅在 schedule_selected 位置时为 True。
+        box: YOLO 检测框对象，用于计算点击坐标和可视化调试。
+        action_id: 标准化动作标识，用于决策层与执行层之间的关联。
+        db_id: 数据库中该行程实体的主键 ID，为空表示尚未完成识别。
+        source: 候选项数据来源，如 ocr、db、fallback 等。
+        confidence: 识别或匹配的置信度分数，数值越高越可靠。
+        metadata: 扩展元数据字典，保存决策辅助字段。
+    """
     index: int
     title: str
     kind: str
@@ -37,6 +55,12 @@ class ScheduleActionCandidate:
 
 @dataclass
 class ScheduleStepResult:
+    """单次行程选择步骤的执行结果。
+
+    Attributes:
+        status: 步骤状态，"selected" 表示已选中待确认，"confirmed" 表示已确认完成。
+        candidate: 本步骤选中的行程候选项对象，包含标题、类型、索引等信息。
+    """
     status: str
     candidate: ScheduleActionCandidate
 
@@ -55,6 +79,17 @@ def _collect_schedule_action_boxes(app: "AppProcessor") -> list:
 
 
 def _detect_recommended_kind(app: "AppProcessor") -> str:
+    """检测画面中系统推荐行程的参数类型。
+
+    通过 YOLO 检测 PC_RECOMMEND_ACTION 标签的按钮，对其裁剪区域做 OCR，
+    再根据 OCR 文本推断参数类型（vocal/dance/visual/unknown）。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        str: 推荐行程的参数类型标识，未检测到推荐按钮时返回 "unknown"。
+    """
     recommend_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_RECOMMEND_ACTION)
     if not recommend_boxes:
         return "unknown"
@@ -67,6 +102,20 @@ def collect_schedule_action_candidates(
     *,
     position: str,
 ) -> List[ScheduleActionCandidate]:
+    """收集周行程选择画面中的所有行程候选项。
+
+    通过 YOLO 检测 PC_ACTION 或 UNIVERSAL_OPTIONS 标签获取候选框，
+    对每个框做 OCR 识别标题并推断参数类型，同时标记推荐项和已选中项。
+    最后调用 hydrate_schedule_candidates 补充 action_id 和 db_id 等字段。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识，"schedule_selected" 表示已选中待确认。
+
+    Returns:
+        List[ScheduleActionCandidate]: 行程候选项列表，按垂直位置从上到下排序。
+    """
     action_boxes = _collect_schedule_action_boxes(app)
     recommended_kind = _detect_recommended_kind(app)
     selected_index = ctx.pending_schedule_index if position == "schedule_selected" else None
@@ -96,6 +145,24 @@ def decide_schedule_action(
     *,
     position: str,
 ) -> int:
+    """决策本周应该选择哪个行程。
+
+    决策优先级：
+    1. 外部注入的 schedule_strategy 回调（如 RL 策略），返回策略选中的索引。
+    2. ctx.pending_schedule_index，即上一轮已选中待确认的行程索引。
+    3. 与系统推荐行程参数类型匹配的候选项。
+    4. 标记为 recommended 的第一个候选项。
+    5. 兜底选择索引 0（第一个行程）。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        int: 选中的候选项在 candidates 列表中的索引。
+    """
     decision_state = build_decision_state(
         app,
         ctx,
@@ -134,6 +201,21 @@ def execute_schedule_step(
     *,
     position: str,
 ) -> ScheduleStepResult | None:
+    """执行单次行程选择步骤：收集候选项、做出决策、点击目标行程。
+
+    根据 position 区分两种行为：
+    - schedule_selected：已经是确认页，点击后记录为 confirmed，更新周计数。
+    - 其他：点击后记录为 selected，保存 pending 索引等待确认页出现。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        ScheduleStepResult | None: 包含状态和选中候选项的结果对象；
+        未检测到候选框时返回 None。
+    """
     candidates = collect_schedule_action_candidates(app, ctx, position=position)
     if not candidates:
         return None
@@ -182,7 +264,7 @@ def execute_schedule_step(
 
 
 # ────────────────────────────────────────────────────────────
-# Handler
+# 处理器
 # ────────────────────────────────────────────────────────────
 
 class ScheduleHandler:
@@ -204,12 +286,41 @@ class ScheduleHandler:
     })
 
     def can_handle(self, app, ctx, phase, position):
+        """当当前画面阶段为 schedule 时返回 True，表示由该处理器接管行程选择。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: phase 等于 "schedule" 时返回 True。
+        """
         return phase == "schedule"
 
     def handle(self, app, ctx, phase, position):
+        """处理行程选择与行程事件对话的主逻辑。
+
+        根据 position 区分三种场景：
+        - schedule_event_options：行程事件中的对话选项，委托给 dialogue 逻辑处理。
+        - schedule_event_dialogue：行程事件中的对话文本推进，仅点击推进、不快进。
+        - 其他：常规行程选择，委托给 execute_schedule_step。
+
+        当连续多帧无候选行动时（如活动补给宝箱画面），回退点击画面上方安全区域推进。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            HandlerResult: 包含操作状态、描述和等待时间的结果对象。
+        """
         from src.core.tasks.producer_challenge.gameplay.handler_base import HandlerResult
 
-        # ── 行程事件对话选项（おでかけ等の選択肢） ──
+        # ── 行程事件对话选项（如外出等）──
         if position == "schedule_event_options":
             from src.core.tasks.producer_challenge.gameplay.dialogue import (
                 execute_dialogue_step,
@@ -229,7 +340,7 @@ class ScheduleHandler:
         # ── 常规行程选择 ──
         result = execute_schedule_step(app, ctx, position=position)
         if result is None:
-            # 无候选行动（如活動支給の宝箱领取画面）——
+            # 无候选行动（如活动补给宝箱领取画面）——
             # 连续无候选时点击画面上方安全区域以推进（避免误触底栏按钮）
             no_action_key = "schedule_no_action_count"
             count = ctx.handler_state.get(no_action_key, 0) + 1
@@ -256,4 +367,9 @@ class ScheduleHandler:
         return HandlerResult.ok(f"schedule {result.status}", sleep_after=0.8)
 
     def __repr__(self):
+        """返回处理器的字符串表示，包含阶段标签和优先级，便于日志输出和调试。
+
+        Returns:
+            str: 格式为 `<ScheduleHandler phase='schedule' priority=50>` 的字符串。
+        """
         return f"<ScheduleHandler phase={self.phase_tag!r} priority={self.priority}>"

@@ -81,10 +81,32 @@ class ExamHandler(GameplayHandler):
     priority = 55  # 略高于 lesson，确保可检测时优先处理
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == "exam"
 
     def handle(self, app, ctx, phase, position):
         # ── 考试准备页面：提取加成倍率后点击继续 ──
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         if position == GameplayPosition.EXAM_PREP:
             return self._handle_exam_prep(app, ctx)
 
@@ -114,7 +136,7 @@ class ExamHandler(GameplayHandler):
         if result.status == "end_turn":
             return HandlerResult.ok("exam: end_turn", sleep_after=0.8)
         if result.status == "all_unplayable":
-            # 所有卡片不可用 → 尝试点击スキップ按钮
+            # 所有卡片不可用时，尝试点击“スキップ”按钮。
             if _try_click_skip(app):
                 return HandlerResult.ok("exam: skip (all_unplayable)", sleep_after=1.0)
             return HandlerResult.ok("exam: all_unplayable", sleep_after=0.5)
@@ -138,7 +160,7 @@ class ExamHandler(GameplayHandler):
         else:
             logger.warning("[考试准备] 加成倍率提取失败，继续推进")
 
-        # 点击画面继续（「タップして次へ」）
+        # 点击画面继续（“タップして次へ”）。
         click_relative_point(app, x_ratio=0.5, y_ratio=0.5, label="exam_prep_continue")
         return HandlerResult.ok("exam_prep: extracted bonuses, tap to continue", sleep_after=2.0)
 

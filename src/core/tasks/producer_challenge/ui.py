@@ -27,10 +27,27 @@ _PRESET_INDEX_PATTERN = re.compile(r"(\d+)\s*/\s*(\d+)")
 
 
 def get_buttons(app: "AppProcessor") -> ButtonList:
+    """获取buttons并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        ButtonList: 返回值类型见注解，语义由函数用途决定。
+    """
     return ButtonList(app.latest_results)
 
 
 def parse_preset_index(text: str | None) -> tuple[int, int] | None:
+    """从按钮文本中解析当前编组页签编号。
+
+    Args:
+        text: 按钮或标签上的原始文本，通常形如 `1 / 3`。
+
+    Returns:
+        tuple[int, int] | None: 解析成功时返回 `(当前编号, 总数)`；
+        当文本为空或不符合编号格式时返回 None。
+    """
     normalized = str(text or "").replace(" ", "")
     if not normalized:
         return None
@@ -41,6 +58,15 @@ def parse_preset_index(text: str | None) -> tuple[int, int] | None:
 
 
 def get_current_preset_index(app: "AppProcessor") -> tuple[int, int] | None:
+    """从当前页面按钮中读取正在显示的编组编号。
+
+    Args:
+        app: 当前应用处理器，用于访问最新一帧的按钮检测结果。
+
+    Returns:
+        tuple[int, int] | None: 识别到形如 `当前/总数` 的编号时返回解析结果；
+        若页面上没有可识别的编号按钮则返回 None。
+    """
     for button in get_buttons(app):
         if parsed := parse_preset_index(button.text):
             return parsed
@@ -52,6 +78,16 @@ def build_preset_swipe_paths(
     *,
     frame_width: int,
 ) -> list[tuple[int, int, int, int]]:
+    """根据卡片区域构建横向切换编组的滑动轨迹。
+
+    Args:
+        boxes: 当前页面中可作为编组区域锚点的检测框列表。
+        frame_width: 当前画面宽度，用于限制滑动起止点不要超出屏幕边界。
+
+    Returns:
+        list[tuple[int, int, int, int]]: 若干条 `(start_x, start_y, end_x, end_y)` 滑动路径。
+        每一行候选框会生成一条横滑轨迹，供预设切换时轮流尝试，降低单一路径失效概率。
+    """
     if not boxes:
         return []
 
@@ -91,6 +127,7 @@ def get_preset_swipe_paths(
     *,
     card_labels: Sequence[str],
 ) -> list[tuple[int, int, int, int]]:
+    """提取当前页面可用于切换预设的滑动路径。"""
     boxes = list(app.latest_results.filter_by_labels(list(card_labels)))
     if not boxes:
         boxes = list(app.latest_results.filter_by_label(BaseUILabels.BLANK_SLOT))
@@ -112,6 +149,26 @@ def select_preset_by_horizontal_swipe(
     description: str,
     max_swipes: int | None = None,
 ) -> bool:
+    """通过横向滑动把当前页面切换到指定编组。
+
+    Args:
+        app: 当前应用处理器，用于执行滑动、读取按钮文本和等待页面稳定。
+        target_index: 目标编组编号，从 1 开始计数。
+        card_labels: 用来定位编组卡片区域的 YOLO 标签集合；若缺失会退回空槽标签。
+        description: 当前页面说明文本，会写入日志和异常信息，便于定位是支援卡页还是记忆页。
+        max_swipes: 允许尝试的最大滑动次数；不传时按当前编号与目标编号距离自动估算。
+
+    Returns:
+        bool: 成功切换到目标编组时返回 True。
+
+    Raises:
+        TimeoutError: 无法识别当前编号、找不到滑动区域，或在允许次数内仍未切换成功时抛出。
+        ValueError: 目标编号超出当前页面可用编组总数时抛出。
+
+    Notes:
+        该函数会根据滑动后的编号变化自动推断“左滑是否让编号递增”，
+        并在连续卡住时翻转方向假设，避免不同页面的滑动方向不一致导致死循环。
+    """
     current_info = get_current_preset_index(app)
     if current_info is None:
         raise TimeoutError(f"{description}页面未识别到编组编号")
@@ -181,6 +238,17 @@ def find_button(
     fuzz_threshold: float = 70,
     use_contains: bool = True,
 ) -> Button | None:
+    """按文本在当前页面按钮列表中查找目标按钮。
+
+    Args:
+        app: 当前应用处理器，用于读取最新按钮检测结果。
+        text: 需要匹配的按钮文本。
+        fuzz_threshold: 模糊匹配阈值，数值越高越严格。
+        use_contains: 是否允许使用包含关系辅助命中，适合 OCR 存在少量缺字的场景。
+
+    Returns:
+        Button | None: 命中时返回按钮对象，未找到时返回 None。
+    """
     return get_buttons(app).get_button_by_text(
         text,
         match_config=MatchConfig(fuzz_threshold=fuzz_threshold, use_contains=use_contains, normalize=True),
@@ -194,10 +262,12 @@ def has_button(
     fuzz_threshold: float = 70,
     use_contains: bool = True,
 ) -> bool:
+    """判断当前页面是否存在指定文本按钮。"""
     return find_button(app, text, fuzz_threshold=fuzz_threshold, use_contains=use_contains) is not None
 
 
 def wait_frame_stable(app: "AppProcessor", timeout: float = 4.0) -> None:
+    """在关键操作后等待画面稳定，降低 OCR 和按钮判定抖动。"""
     app.game_utils.wait_frame_stable(
         threshold=0.985,
         stable_count=2,
@@ -217,12 +287,7 @@ def inertial_swipe(
     hold_end: float = 0.15,
     ease: str | None = "out_quad",
 ) -> None:
-    """执行带惯性抑制的滑动。
-
-    通过 ease="out_quad" 使手指到达终点前逐渐减速（缓出曲线），
-    再通过 hold_end 在终点短暂驻留后才松开手指，
-    让游戏物理引擎将触点速度归零，从而消除惯性滑过。
-    """
+    """执行带惯性抑制的滑动，避免页面惯性过冲。"""
     app.device.swipe(
         start_x, start_y, end_x, end_y,
         duration=duration, offset_y=0,
@@ -233,6 +298,12 @@ def inertial_swipe(
 
 
 def is_final_confirm_page(app: "AppProcessor") -> bool:
+    """判断当前是否处于最终确认开跑页面。
+
+    Returns:
+        bool: 同时满足“存在编成详情与开跑按钮”且页面上仍可见支援卡/记忆/道具区域时返回 True。
+        该判定用于区分最终确认页与前面的记忆编成页、编成详情页等相似页面。
+    """
     if has_button(app, ButtonText.AUTO_SELECT, fuzz_threshold=75):
         return False
     if has_button(app, ButtonText.NEXT, fuzz_threshold=75):
@@ -254,6 +325,15 @@ def is_final_confirm_page(app: "AppProcessor") -> bool:
 
 
 def wait_for_final_confirm_page(app: "AppProcessor", timeout: float = 15.0) -> bool:
+    """轮询等待页面进入最终确认开跑页。
+
+    Args:
+        app: 当前应用处理器。
+        timeout: 最长等待时间，超时后返回 False。
+
+    Returns:
+        bool: 在超时前识别到最终确认页时返回 True，否则返回 False。
+    """
     end_time = time() + timeout
     while time() < end_time:
         if is_final_confirm_page(app):
@@ -264,6 +344,7 @@ def wait_for_final_confirm_page(app: "AppProcessor", timeout: float = 15.0) -> b
 
 
 def is_memory_selection_page(app: "AppProcessor") -> bool:
+    """判断当前是否处于记忆编成页面。"""
     if has_button(app, ButtonText.PRODUCE_START, fuzz_threshold=65):
         return False
     if not has_button(app, ButtonText.NEXT, fuzz_threshold=75):
@@ -278,6 +359,7 @@ def is_memory_selection_page(app: "AppProcessor") -> bool:
 
 
 def wait_for_memory_selection_page(app: "AppProcessor", timeout: float = 12.0) -> bool:
+    """轮询等待页面进入记忆编成页，并在命中后额外等待画面稳定。"""
     end_time = time() + timeout
     while time() < end_time:
         if is_memory_selection_page(app):
@@ -296,6 +378,20 @@ def click_modal_action_with_retry(
     timeout: float = 5.0,
     action_name: str = "modal action",
 ) -> bool:
+    """在弹窗上重复尝试点击可执行按钮，直到弹窗消失或重试耗尽。
+
+    Args:
+        app: 当前应用处理器，用于读取弹窗和执行点击。
+        modal: 已经识别出的弹窗对象；不传时函数会在每轮重试前自行重新识别。
+        prefer_confirm: 为 True 时优先点击确认按钮，否则优先点击取消按钮。
+        retries: 最大尝试次数。
+        timeout: 每次点击后等待弹窗过渡完成的超时时间。
+        action_name: 当前动作说明，会写入日志，帮助定位失败的是哪一种弹窗处理。
+
+    Returns:
+        bool: 成功点击并等待弹窗过渡完成时返回 True；没有弹窗可处理时也返回 True；
+        弹窗缺少可点击按钮或多次点击后仍未发生过渡时返回 False。
+    """
     current_modal = modal
     for attempt in range(1, retries + 1):
         if current_modal is None:
@@ -330,8 +426,15 @@ def click_modal_action_with_retry(
 
 
 def click_top_right_action(app: "AppProcessor", *, timeout: float = 6.0) -> bool:
+    """点击右上角最靠前的可操作按钮，常用于推进剧情或关闭提示。"""
     buttons = get_buttons(app)
-    candidates = [button for button in buttons if button.cx >= 720 and button.cy <= 280]
+    frame = app.latest_frame
+    if frame is None or frame.size == 0:
+        return False
+    height, width = frame.shape[:2]
+    cx_threshold = int(width * 0.66)
+    cy_threshold = int(height * 0.12)
+    candidates = [button for button in buttons if button.cx >= cx_threshold and button.cy <= cy_threshold]
     candidates.sort(key=lambda button: (button.cy, -button.cx))
     if not candidates:
         return False
@@ -343,7 +446,7 @@ def click_top_right_action(app: "AppProcessor", *, timeout: float = 6.0) -> bool
 # ──────────────────────────────────────────────────────────
 
 def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> str:
-    """根据 PRODUCER YOLO 结果判定当前 gameplay phase。"""
+    """根据 YOLO 结果判定当前 gameplay 阶段。"""
     if results is None:
         return "unknown"
 
@@ -382,7 +485,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
     # 相談交换页：出现兑换卡、強化、削除任一元素
     if (has_card_exchange or has_enhancement or has_remove) and not has_training_score:
         return "consult"
-    # 相談子流程（強化/削除预览页）与 skill_reward 外观相似，需要借助上一个稳定位置反解。
+    # 相談子流程（强化/删除预览页）与 skill_reward 外观相似，需要借助上一个稳定位置反解。
     if (
         ctx is not None
         and last_consult_position.startswith("consult")
@@ -408,16 +511,19 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
     if has_recommend and has_progress and not has_options:
         return "schedule"
     if has_p_drink and not has_action and not has_skill_card:
-        frame_height = results.frame.shape[0] if getattr(results, "frame", None) is not None else 2340
-        p_drink_boxes = results.filter_by_label(ProducerLabels.P_DRINK)
-        if any(box.cy < frame_height * 0.85 for box in p_drink_boxes):
-            return "p_drink"
+        frame = getattr(results, "frame", None)
+        if frame is not None:
+            frame_height = frame.shape[0]
+            p_drink_boxes = results.filter_by_label(ProducerLabels.P_DRINK)
+            if any(box.cy < frame_height * 0.85 for box in p_drink_boxes):
+                return "p_drink"
     if has_skip_button and not has_action and not has_skill_card:
         return "result"
     return "unknown"
 
 
 def detect_gameplay_phase(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str:
+    """从 App 中读取当前 gameplay 阶段。"""
     return classify_gameplay_phase(app.latest_results, ctx=ctx)
 
 
@@ -428,6 +534,17 @@ def classify_pipeline_position(
     final_confirm: bool = False,
     ctx: "ProduceContext | None" = None,
 ) -> str:
+    """判定流水线、position并返回结果。
+
+    Args:
+        results: 用于提供results相关输入。
+        modal_title: 用于提供弹窗、title相关输入。
+        final_confirm: 用于提供final、confirm相关输入。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     if final_confirm:
         return "final_confirm"
 
@@ -533,6 +650,15 @@ def classify_pipeline_position(
 
 
 def get_pipeline_position(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str:
+    """获取流水线、position并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     modal_title: str | None = None
     results = app.latest_results
     if results and results.exists_label(ProducerLabels.MODAL_HEADER):
@@ -548,6 +674,15 @@ def get_pipeline_position(app: "AppProcessor", ctx: "ProduceContext | None" = No
 
 
 def click_recommend_action(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
+    """点击recommend、操作并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        str | None: 返回值类型见注解，语义由函数用途决定。
+    """
     if ctx is None:
         return None
     from src.core.tasks.producer_challenge.gameplay.schedule import execute_schedule_step
@@ -557,6 +692,15 @@ def click_recommend_action(app: "AppProcessor", ctx: "ProduceContext | None" = N
 
 
 def handle_skill_card_selection(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
+    """处理handle、skill、卡牌、selection并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        str | None: 返回值类型见注解。
+    """
     if ctx is None:
         return None
     from src.core.tasks.producer_challenge.gameplay.lesson import execute_lesson_step
@@ -566,6 +710,14 @@ def handle_skill_card_selection(app: "AppProcessor", ctx: "ProduceContext | None
 
 
 def _click_preferred_confirmation(app: "AppProcessor") -> bool:
+    """点击preferred、confirmation并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     confirm_boxes = app.latest_results.filter_by_label(ProducerLabels.CONFIRM_BUTTON)
     if confirm_boxes:
         app.device.click_element(confirm_boxes.first())
@@ -579,6 +731,15 @@ def _click_preferred_confirmation(app: "AppProcessor") -> bool:
 
 
 def handle_p_drink_select(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
+    """处理handle、p、饮料、select并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        str | None: 返回值类型见注解。
+    """
     position = get_pipeline_position(app)
     if position not in {"p_drink_idle", "p_drink_selected"}:
         return None
@@ -620,6 +781,15 @@ def handle_p_drink_select(app: "AppProcessor", ctx: "ProduceContext | None" = No
 
 
 def handle_skill_reward_selection(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str | None:
+    """处理handle、skill、奖励、selection并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        str | None: 返回值类型见注解。
+    """
     position = get_pipeline_position(app)
     if position not in {"skill_reward_idle", "skill_reward_selected"}:
         return None
@@ -669,6 +839,7 @@ def handle_skill_reward_selection(app: "AppProcessor", ctx: "ProduceContext | No
 
 
 def go_back_in_gameplay(app: "AppProcessor") -> bool:
+    """在 gameplay 中尝试返回上一层。"""
     position = get_pipeline_position(app)
     if position in {
         "startup_modal_voice",
@@ -710,6 +881,7 @@ def go_back_in_gameplay(app: "AppProcessor") -> bool:
 
 
 def go_home_from_gameplay(app: "AppProcessor", *, max_try: int = 4) -> bool:
+    """尽量从 gameplay 画面返回主页。"""
     for _ in range(max_try):
         if app.latest_results.exists_label(BaseUILabels.TAB_HOME):
             return True

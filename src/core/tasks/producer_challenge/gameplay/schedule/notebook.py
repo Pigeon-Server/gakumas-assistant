@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from src.constants.game.text.produce_text import ProduceText
+from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.inference.ocr_engine import OCRService
 from src.utils.logger import logger
@@ -228,8 +229,39 @@ def _detect_p_notebook_button(app: "AppProcessor"):
     return button
 
 
+def _detect_p_notebook_close_button(app: "AppProcessor"):
+    """检测 P手帳 面板关闭按钮（优先使用 YOLO 的通用关闭按钮标签）。"""
+    results = getattr(app, "latest_results", None)
+    if results is None:
+        return None
+    close_boxes = list(results.filter_by_label(BaseUILabels.CLOSE_BUTTON))
+    if not close_boxes:
+        return None
+    frame = getattr(results, "frame", None)
+    frame_height = int(frame.shape[0]) if frame is not None else 0
+    if frame_height > 0:
+        close_boxes = [
+            box for box in close_boxes
+            if int(getattr(box, "cy", 0)) >= int(frame_height * 0.65)
+        ] or close_boxes
+    button = max(close_boxes, key=lambda box: int(getattr(box, "cy", 0)))
+    logger.debug(
+        "P手帳: 检测到关闭按钮 cx={}, cy={}",
+        getattr(button, "cx", 0),
+        getattr(button, "cy", 0),
+    )
+    return button
+
+
 def _open_p_notebook(app: "AppProcessor") -> bool:
-    """点击 P手帳 按钮打开日程一览。"""
+    """打开p、手账并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     button = _detect_p_notebook_button(app)
     if button is None:
         logger.debug("P手帳: 未检测到按钮，跳过")
@@ -243,16 +275,37 @@ def _open_p_notebook(app: "AppProcessor") -> bool:
     return True
 
 
-def _close_p_notebook(app: "AppProcessor") -> None:
-    """关闭 P手帳 面板。"""
+def _close_p_notebook(app: "AppProcessor", *, allow_fallback: bool = True) -> bool:
+    """关闭p、手账并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        allow_fallback: 用于提供allow、fallback相关输入。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     from time import sleep
+
+    close_button = _detect_p_notebook_close_button(app)
+    if close_button is not None:
+        sleep(0.3)
+        app.device.click_element(close_button)
+        logger.debug("P手帳: 点击检测到的关闭按钮")
+        sleep(0.8)
+        return True
+
+    if not allow_fallback:
+        logger.debug("P手帳: 未检测到关闭按钮，且已禁用坐标回退")
+        return False
 
     from src.core.tasks.producer_challenge.shared.common import click_relative_point
 
     sleep(0.3)
     click_relative_point(app, x_ratio=0.50, y_ratio=0.944, label="p-notebook-close-x")
-    logger.debug("P手帳: 点击 × 关闭按钮")
+    logger.debug("P手帳: 未检测到关闭按钮，回退点击 × 区域")
     sleep(0.8)
+    return True
 
 
 def _read_notebook_schedule_page(app: "AppProcessor") -> list[dict[str, Any]]:

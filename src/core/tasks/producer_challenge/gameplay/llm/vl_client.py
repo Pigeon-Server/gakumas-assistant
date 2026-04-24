@@ -23,12 +23,25 @@ class VLClient:
     """封装 OpenAI 兼容 Vision API 的客户端。"""
 
     def __init__(self):
+        """处理init并返回结果。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         self._client: Optional[OpenAI] = None
         self._last_base_url: Optional[str] = None
         self._last_api_key: Optional[str] = None
         self._last_timeout: Optional[float] = None
 
     def _ensure_client(self, cfg: dict) -> OpenAI:
+        """处理ensure、client并返回结果。
+
+        Args:
+            cfg: 用于提供cfg相关输入。
+
+        Returns:
+            OpenAI: 返回值类型见注解。
+        """
         if (
             self._client is not None
             and cfg["base_url"] == self._last_base_url
@@ -47,6 +60,11 @@ class VLClient:
         return self._client
 
     def _recreate_client(self):
+        """处理recreate、client并返回结果。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         logger.debug("VL: 重建 API 客户端连接")
         self._client = None
 
@@ -144,6 +162,14 @@ class VLClient:
 
     @staticmethod
     def _extract_content(resp) -> Optional[str]:
+        """提取content并返回结果。
+
+        Args:
+            resp: 用于提供resp相关输入。
+
+        Returns:
+            Optional[str]: 返回值类型见注解。
+        """
         if not resp.choices:
             return None
         msg = resp.choices[0].message

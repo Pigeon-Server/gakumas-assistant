@@ -1,4 +1,4 @@
-from time import sleep
+from time import sleep, time
 from typing import TYPE_CHECKING
 
 from src.constants.game.text.button_text import ButtonText
@@ -8,7 +8,7 @@ from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.contest_overlay_tools import detect_contest_grade_up_splash, detect_contest_season_overlay
 from src.utils.game_tools import get_modal
-from src.utils.string_tools import MatchConfig
+from src.utils.string_tools import MatchConfig, string_match
 from src.utils.task_debug_tools import record_task_step
 
 if TYPE_CHECKING:
@@ -16,6 +16,44 @@ if TYPE_CHECKING:
 
 
 _CONTEST_ENTRY_BUTTON_MATCH = MatchConfig(fuzz_threshold=80, normalize=True)
+_CONTEST_ENTRY_STATUS_MATCH = MatchConfig(fuzz_threshold=55, normalize=True)
+
+
+def _looks_like_contest_entry_text(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    if ButtonText.CHALLENGE in normalized:
+        return True
+    if ButtonText.MAIN_MENU__CONTEST.CONTEST in normalized:
+        return True
+    if ButtonText.MAIN_MENU__CONTEST.CHALLENGING in normalized:
+        return True
+    if string_match(normalized, ButtonText.START_CHALLENGE, _CONTEST_ENTRY_STATUS_MATCH):
+        return True
+    if string_match(normalized, ButtonText.BATTLE_START, _CONTEST_ENTRY_STATUS_MATCH):
+        return True
+    return False
+
+
+def _wait_for_contest_entry_button(
+    app: "AppProcessor",
+    *,
+    timeout: float = 4.0,
+    interval: float = 0.25,
+):
+    """等待竞技场入口按钮出现，规避切页后一两帧的检测空窗。"""
+    deadline = time() + timeout
+    button = _get_contest_entry_button(app)
+    if button is not None:
+        return button
+    while time() < deadline:
+        sleep(interval)
+        button = _get_contest_entry_button(app)
+        if button is not None:
+            return button
+    return None
+
 
 def _dismiss_contest_season_overlay_if_present(app: "AppProcessor", reason: str) -> bool:
     """
@@ -203,8 +241,20 @@ def goto__contest_page(app: "AppProcessor"):
 
     last_error: TimeoutError | None = None
     for attempt in range(2):
-        contest_button = _get_contest_entry_button(app)
+        contest_button = _wait_for_contest_entry_button(app)
         if contest_button is None:
+            record_task_step(
+                app,
+                "goto_contest.entry_button_missing",
+                attempt=attempt + 1,
+                location=app.game_utils.update_current_location(),
+            )
+            if app.game_utils.update_current_location() == GamePageTypes.CONTEST_TAB.ARENA:
+                _settle_contest_blocking_layers(app, f"attempt_{attempt + 1}_already_arena")
+                record_task_step(app, "goto_contest.entered_arena_without_entry_button", attempt=attempt + 1)
+                return
+            if attempt == 0:
+                continue
             raise TimeoutError("Timeout waiting for contest entry button to appear.")
 
         record_task_step(
@@ -274,6 +324,22 @@ def _get_contest_entry_button(app: "AppProcessor"):
     ):
         return button
 
+    text_candidates = []
+    for button in buttons:
+        if button is None or button.is_disabled():
+            continue
+        if _looks_like_contest_entry_text(getattr(button, "text", "")):
+            text_candidates.append(button)
+    if text_candidates:
+        return max(
+            text_candidates,
+            key=lambda item: (
+                int(item.w - item.x),
+                int(item.h - item.y),
+                int(item.cy),
+            ),
+        )
+
     frame_height, frame_width = app.latest_frame.shape[:2]
     min_width = int(frame_width * 0.35)
     min_height = int(frame_height * 0.10)
@@ -295,6 +361,18 @@ def _get_contest_entry_button(app: "AppProcessor"):
             continue
         candidates.append(button)
 
+    if not candidates:
+        # 新版布局可能只有左侧「挑戦中」卡片入口，补充一层宽松几何兜底。
+        for button in buttons:
+            if button is None or button.is_disabled():
+                continue
+            button_width = int(button.w - button.x)
+            button_height = int(button.h - button.y)
+            if button_width < int(frame_width * 0.22) or button_height < int(frame_height * 0.08):
+                continue
+            if not int(frame_height * 0.50) <= int(button.cy) <= int(frame_height * 0.88):
+                continue
+            candidates.append(button)
     if not candidates:
         return None
     return max(candidates, key=lambda item: (int(item.w - item.x), int(item.cx), int(item.cy)))

@@ -31,6 +31,7 @@ _PRODUCE_ROUTE_MAP: dict[tuple[str, str], tuple[str, str]] = {
 
 @dataclass(frozen=True)
 class ProduceRouteDefinition:
+    """单条剧本路线定义，描述剧本与难度对应的培育元数据。"""
     scenario: str
     difficulty: str
     produce_id: str
@@ -41,6 +42,7 @@ class ProduceRouteDefinition:
     parameter_growth_limit: int
 
     def to_context_dict(self) -> dict[str, Any]:
+        """把剧本定义转换成上下文可直接写入的字典。"""
         return {
             "scenario": self.scenario,
             "difficulty": self.difficulty,
@@ -55,6 +57,7 @@ class ProduceRouteDefinition:
 
 @dataclass(frozen=True)
 class CatalogEntry:
+    """目录项抽象，统一承载可被 OCR 文本匹配的游戏实体。"""
     kind: str
     id: str
     display_name: str
@@ -63,6 +66,16 @@ class CatalogEntry:
 
 
 def _score_lookup_match(source: str, candidate: str) -> float:
+    """计算两段归一化文本的匹配分数。
+
+    Args:
+        source: 需要匹配的 OCR 文本或输入文本。
+        candidate: 目录项中某个候选查找文本。
+
+    Returns:
+        float: 0 到 100 左右的匹配分数。完全相等时直接给高分，
+        包含关系会根据覆盖率追加偏置，其余情况退回 fuzzy ratio，供目录匹配函数挑选最佳候选。
+    """
     if not source or not candidate:
         return 0.0
     if source == candidate:
@@ -76,6 +89,7 @@ def _score_lookup_match(source: str, candidate: str) -> float:
 
 
 def _dedupe_strings(values: Iterable[str]) -> tuple[str, ...]:
+    """按原顺序去重字符串序列，并丢弃空字符串。"""
     seen: set[str] = set()
     deduped: list[str] = []
     for value in values:
@@ -92,6 +106,7 @@ def _best_match_for_texts(
     threshold: float,
     preferred_group_id: str | None = None,
 ) -> tuple[CatalogEntry | None, str | None, float]:
+    """在候选目录中找出与给定文本最匹配的一项。"""
     best_entry: CatalogEntry | None = None
     best_text: str | None = None
     best_score = 0.0
@@ -134,6 +149,7 @@ def _match_lines_against_catalog(
     threshold: float,
     preferred_group_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    """把多行 OCR 文本与目录逐行匹配并返回结果。"""
     matched: list[dict[str, Any]] = []
     seen_pairs: set[tuple[str, str]] = set()
 
@@ -162,6 +178,17 @@ def _match_lines_against_catalog(
 
 @lru_cache(maxsize=1)
 def get_produce_route_definitions() -> dict[tuple[str, str], ProduceRouteDefinition]:
+    """从游戏数据库构建剧本路线映射表。
+
+    Returns:
+        dict[tuple[str, str], ProduceRouteDefinition]: 以 `(scenario, difficulty)` 为键的
+        路线定义字典，供 `resolve_produce_route` 和 `ProduceContext.__post_init__`
+        复用，避免重复访问数据库。
+
+    Raises:
+        KeyError: 数据库中缺失 Produce 或 ProduceGroup 条目时抛出。
+        ValueError: Produce 与 ProduceGroup 关系不一致时抛出。
+    """
     produce_db = get_game_database("Produce")
     produce_group_db = get_game_database("ProduceGroup")
     definitions: dict[tuple[str, str], ProduceRouteDefinition] = {}
@@ -190,6 +217,19 @@ def get_produce_route_definitions() -> dict[tuple[str, str], ProduceRouteDefinit
 
 
 def resolve_produce_route(scenario: str, difficulty: str) -> ProduceRouteDefinition:
+    """根据剧本与难度解析出唯一的培育路线定义。
+
+    Args:
+        scenario: 剧本标识，例如 `hajime`、`nia`。
+        difficulty: 难度标识，例如 `regular`、`pro`、`master`。
+
+    Returns:
+        ProduceRouteDefinition: 包含 Produce / ProduceGroup 主键、显示名和属性成长上限的
+        路线定义对象，可直接写入上下文。
+
+    Raises:
+        ValueError: 传入的剧本与难度组合不受当前任务支持时抛出。
+    """
     key = ((scenario or "").lower(), (difficulty or "").lower())
     try:
         return get_produce_route_definitions()[key]
@@ -199,6 +239,14 @@ def resolve_produce_route(scenario: str, difficulty: str) -> ProduceRouteDefinit
 
 @lru_cache(maxsize=1)
 def get_memory_tag_catalog() -> tuple[CatalogEntry, ...]:
+    """从游戏数据库构建记忆标签目录，供 OCR 文本匹配使用。
+
+    遍历 MemoryTag 数据库中的所有条目，提取日文名和 localized 名称，
+    去重后组装为 CatalogEntry。每个条目包含 asset_id 和 order 等元数据。
+
+    Returns:
+        tuple[CatalogEntry, ...]: 记忆标签目录项元组，可用于 match_memory_tags 匹配。
+    """
     memory_tag_db = get_game_database("MemoryTag")
     entries: list[CatalogEntry] = []
     for tag in memory_tag_db.get_all_item():
@@ -227,6 +275,7 @@ def get_memory_tag_catalog() -> tuple[CatalogEntry, ...]:
 
 @lru_cache(maxsize=1)
 def get_memory_ability_catalog() -> tuple[CatalogEntry, ...]:
+    """构建记忆能力目录，并按描述聚合相同条目。"""
     memory_ability_db = get_game_database("MemoryAbility")
     produce_skill_db = GakumasDatabase_ProduceSkillDataUtils()
     by_description: dict[str, dict[str, Any]] = {}
@@ -238,7 +287,7 @@ def get_memory_ability_catalog() -> tuple[CatalogEntry, ...]:
             continue
         source = skill.localization if getattr(skill, "localization", None) else skill
         description = _concat_produce_descriptions(getattr(source, "produceDescriptions", []))
-        # Also collect Japanese description for OCR matching
+        # 同时保留日文描述，提升 OCR 匹配命中率
         description_ja = ""
         if getattr(skill, "localization", None):
             description_ja = _concat_produce_descriptions(getattr(skill, "produceDescriptions", []))
@@ -294,13 +343,32 @@ def get_memory_ability_catalog() -> tuple[CatalogEntry, ...]:
 
 @lru_cache(maxsize=1)
 def get_card_item_catalog() -> tuple[CatalogEntry, ...]:
+    """从游戏数据库构建卡牌/道具/饮料的合并目录。
+
+    遍历 ProduceCard、ProduceItem、ProduceDrink 三个数据库，提取每张卡/道具/饮料的
+    名称（含日文和 localized 名），去重后组装为 CatalogEntry。相同展示名的条目
+    会合并到同一个 entry 的 candidate_ids 中，方便 OCR 匹配时消歧。
+
+    Returns:
+        tuple[CatalogEntry, ...]: 包含 produce_card、produce_item、produce_drink 三类
+        目录项的元组，可用于 match_card_and_item_entries 匹配。
+    """
     produce_card_db = GakumasDatabase_ProduceCardDataUtils()
     produce_item_db = GakumasDatabase_ProduceItemDataUtils()
     produce_drink_db = GakumasDatabase_ProduceDrinkDataUtils()
     entries: dict[tuple[str, str], CatalogEntry] = {}
 
     def _collect_lookup_names(obj: Any) -> tuple[str, tuple[str, ...]]:
-        """Return (display_name, lookup_texts) including both JP and localized names."""
+        """从数据对象中提取展示名和查找名列表。
+
+        Args:
+            obj: 数据库对象（ProduceCard/ProduceItem/ProduceDrink 等），
+                需具备 name 和 localization.name 属性。
+
+        Returns:
+            tuple[str, tuple[str, ...]]: 第一个元素为展示名（优先 localized 名），
+            第二个元素为去重后的查找名元组。
+        """
         raw_name = getattr(obj, "name", "") or ""
         loc_name = getattr(getattr(obj, "localization", None), "name", None) or ""
         display = loc_name or raw_name
@@ -308,6 +376,7 @@ def get_card_item_catalog() -> tuple[CatalogEntry, ...]:
         return display, names
 
     def add_entry(kind: str, obj: Any, display_name: str, lookup_texts: tuple[str, ...], metadata: dict[str, Any]):
+        """按 kind 与展示名把条目写入缓存表。"""
         key = (kind, display_name)
         if key in entries:
             existing = entries[key]
@@ -379,6 +448,15 @@ def get_card_item_catalog() -> tuple[CatalogEntry, ...]:
 
 @lru_cache(maxsize=1)
 def get_support_ability_catalog() -> tuple[CatalogEntry, ...]:
+    """从游戏数据库构建支援卡能力目录，供 OCR 文本匹配使用。
+
+    遍历支援卡的所有技能描述（含日文和 localized 描述），按归一化后的描述文本
+    聚合相同条目。每个目录项包含 support_card_ids 和来源信息（order、卡等级、技能等级），
+    方便匹配时追溯是哪张支援卡的哪个技能。
+
+    Returns:
+        tuple[CatalogEntry, ...]: 支援卡能力目录项元组，可用于 match_support_abilities 匹配。
+    """
     skill_descs = build_support_card_skill_descriptions()
     by_description: dict[str, dict[str, Any]] = {}
 
@@ -434,6 +512,15 @@ def get_support_ability_catalog() -> tuple[CatalogEntry, ...]:
 
 @lru_cache(maxsize=1)
 def get_support_event_catalog() -> tuple[CatalogEntry, ...]:
+    """从游戏数据库构建支援卡事件目录，供 OCR 文本匹配使用。
+
+    遍历支援卡的所有事件标题（含日文和 localized 标题），按归一化后的标题文本
+    聚合相同条目。每个目录项包含 support_card_ids 和候选信息（事件编号、支援卡等级、
+    事件描述、评价文本），方便匹配时追溯是哪张支援卡的哪个事件。
+
+    Returns:
+        tuple[CatalogEntry, ...]: 支援卡事件目录项元组，可用于 match_support_events 匹配。
+    """
     events = build_support_card_events()
     by_title: dict[str, dict[str, Any]] = {}
 
@@ -487,6 +574,19 @@ def get_support_event_catalog() -> tuple[CatalogEntry, ...]:
 
 
 def match_memory_tags(texts: Sequence[str], threshold: float = 70) -> list[dict[str, Any]]:
+    """将 OCR 文本与记忆标签目录进行匹配。
+
+    用于编成详情页面中记忆卡标签的识别。将 OCR 提取的多行文本与预构建的记忆标签
+    目录逐项比对，返回匹配分数达到阈值的标签条目。
+
+    Args:
+        texts: OCR 提取的文本行列表，每行对应画面中一个待识别的标签文本。
+        threshold: 最低匹配分数阈值（0-100），低于此分的候选将被过滤。默认 70。
+
+    Returns:
+        list[dict[str, Any]]: 匹配成功的标签列表，每个元素包含 kind、id、name、
+        matched_text、score 和 metadata 字段。
+    """
     return _match_lines_against_catalog(texts, get_memory_tag_catalog(), threshold)
 
 
@@ -495,6 +595,21 @@ def match_memory_abilities(
     produce_group_id: str | None = None,
     threshold: float = 72,
 ) -> list[dict[str, Any]]:
+    """将 OCR 文本与记忆能力目录进行匹配。
+
+    用于编成详情页面中记忆卡能力描述的识别。将 OCR 提取的多行文本与预构建的记忆能力
+    目录逐项比对，支持通过 produce_group_id 对当前剧本组进行加权偏置，提高匹配准确率。
+
+    Args:
+        texts: OCR 提取的文本行列表，每行对应画面中一个待识别的能力描述文本。
+        produce_group_id: 当前培育剧本组 ID。传入后，属于该组的候选会获得 +4 分偏置，
+            不属于的扣 -2 分，帮助在多个相似描述中选出正确条目。
+        threshold: 最低匹配分数阈值（0-100），低于此分的候选将被过滤。默认 72。
+
+    Returns:
+        list[dict[str, Any]]: 匹配成功的能力列表，每个元素包含 kind、id、name、
+        matched_text、score 和 metadata 字段。metadata 中包含 candidates 和 produce_group_ids。
+    """
     return _match_lines_against_catalog(
         texts,
         get_memory_ability_catalog(),
@@ -504,25 +619,63 @@ def match_memory_abilities(
 
 
 def match_card_and_item_entries(texts: Sequence[str], threshold: float = 72) -> list[dict[str, Any]]:
+    """将 OCR 文本与卡牌/道具/饮料合并目录进行匹配。
+
+    用于识别画面中出现的技能卡、P 道具、P 饮料等实体的名称。将 OCR 提取的多行文本
+    与预构建的合并目录逐项比对，返回匹配分数达到阈值的条目，覆盖三种 kind 类型。
+
+    Args:
+        texts: OCR 提取的文本行列表，每行对应画面中一个待识别的名称文本。
+        threshold: 最低匹配分数阈值（0-100），低于此分的候选将被过滤。默认 72。
+
+    Returns:
+        list[dict[str, Any]]: 匹配成功的条目列表，每个元素包含 kind（produce_card/produce_item/produce_drink）、
+        id、name、matched_text、score 和 metadata 字段。
+    """
     return _match_lines_against_catalog(texts, get_card_item_catalog(), threshold)
 
 
 def match_support_abilities(texts: Sequence[str], threshold: float = 74) -> list[dict[str, Any]]:
+    """将 OCR 文本与支援卡能力目录进行匹配。
+
+    用于识别支援卡编成详情页面中显示的能力描述文本。将 OCR 提取的多行文本与预构建的
+    支援卡能力目录逐项比对，返回匹配分数达到阈值的条目。
+
+    Args:
+        texts: OCR 提取的文本行列表，每行对应画面中一个待识别的能力描述文本。
+        threshold: 最低匹配分数阈值（0-100），低于此分的候选将被过滤。默认 74。
+
+    Returns:
+        list[dict[str, Any]]: 匹配成功的能力列表，每个元素包含 kind、id、name、
+        matched_text、score 和 metadata 字段。metadata 中包含 support_card_ids 和 sources。
+    """
     return _match_lines_against_catalog(texts, get_support_ability_catalog(), threshold)
 
 
 def match_support_events(texts: Sequence[str], threshold: float = 65) -> list[dict[str, Any]]:
+    """将 OCR 文本与支援卡事件目录进行匹配。
+
+    用于识别支援卡编成详情页面中显示的事件标题文本。将 OCR 提取的多行文本与预构建的
+    支援卡事件目录逐项比对，返回匹配分数达到阈值的条目。
+
+    Args:
+        texts: OCR 提取的文本行列表，每行对应画面中一个待识别的事件标题文本。
+        threshold: 最低匹配分数阈值（0-100），低于此分的候选将被过滤。默认 65。
+
+    Returns:
+        list[dict[str, Any]]: 匹配成功的事件列表，每个元素包含 kind、id、name、
+        matched_text、score 和 metadata 字段。metadata 中包含 support_card_ids 和 candidates。
+    """
     return _match_lines_against_catalog(texts, get_support_event_catalog(), threshold)
 
 
 # ---------------------------------------------------------------------------
-# Support card name catalog — matches OCR'd support card names from the
-# イベント tab yellow bars to database support card IDs.
+# 支援卡名称目录：将事件页黄色条中的 OCR 名称映射到数据库中的支援卡 ID。
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
 def get_support_card_name_catalog() -> tuple[CatalogEntry, ...]:
-    """Build a catalog of support card names for OCR matching."""
+    """构建用于 OCR 匹配的支援卡名称目录。"""
     db = GakumasDatabase_SupportCardDataUtils()
     events_map = build_support_card_events()
     entries: list[CatalogEntry] = []
@@ -568,5 +721,5 @@ def get_support_card_name_catalog() -> tuple[CatalogEntry, ...]:
 
 
 def match_support_card_names(texts: Sequence[str], threshold: float = 68) -> list[dict[str, Any]]:
-    """Match OCR texts against support card names. Used for the event tab."""
+    """将 OCR 文本与支援卡名称进行匹配。"""
     return _match_lines_against_catalog(texts, get_support_card_name_catalog(), threshold)

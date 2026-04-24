@@ -809,6 +809,23 @@ class _Task:
                 order=82,
             ),
         )
+        # 行程决策阶段 P手帳 读取策略
+        schedule_notebook_mode = ConfigItem(
+            default_value="before_decision",
+            data_type=str,
+            verify=r"disabled|before_decision",
+            use_verify=True,
+            ui=ConfigItemUI(
+                label="P手帐读取策略",
+                hint="disabled：不读取；before_decision：仅在周行动自动决策前读取（决策后不再触发）",
+                component="select",
+                options=[
+                    {"title": "关闭读取", "value": "disabled"},
+                    {"title": "仅决策前读取", "value": "before_decision"},
+                ],
+                order=83,
+            ),
+        )
         # 记忆卡面（フォト）选择模式
         memory_photo_mode = ConfigItem(
             default_value="first",

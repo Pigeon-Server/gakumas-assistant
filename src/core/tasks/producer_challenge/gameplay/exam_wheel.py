@@ -57,6 +57,14 @@ def _resolve_wheel_roi(
     if not boxes:
         return frame, 0, 0
     def _anchor_sort_key(box) -> tuple[int, int, float]:
+        """处理anchor、sort、key并返回结果。
+
+        Args:
+            box: 单个检测框对象。
+
+        Returns:
+            tuple[int, int, float]: 返回值类型见注解。
+        """
         x = int(getattr(box, "x", 0) or 0)
         y = int(getattr(box, "y", 0) or 0)
         conf = float(getattr(box, "confidence", 0.0) or 0.0)
@@ -276,6 +284,15 @@ def _detect_segments(
 
     # 按段中心角排序
     def _center(s: int, e: int) -> float:
+        """处理center并返回结果。
+
+        Args:
+            s: 用于提供s相关输入。
+            e: 用于提供e相关输入。
+
+        Returns:
+            float: 计算得到的浮点数结果。
+        """
         return ((s + e) / 2) % 360
 
     colored.sort(key=lambda x: _center(x[0], x[1]))
@@ -368,7 +385,7 @@ def _ocr_wheel_area(
     )
     bonus_text = fullwidth_to_halfwidth(ocr_text(bonus_big))
 
-    # “残りターン N”位于轮盘上方，单独读取，避免与倍率文本互相污染。
+    # “残りターン N”位于轮盘上方，需单独读取，避免与倍率文本互相干扰。
     turns_x1 = max(0, cx - int(inner_r * 1.2))
     turns_x2 = min(w, cx + int(inner_r * 1.2))
     turns_y1 = max(0, cy - inner_r - margin_top)
@@ -421,7 +438,7 @@ def _ocr_wheel_area(
             break
 
     # 从「参数名 + 百分比%」中提取倍率，白色「+N」识别为附加回合
-    # 注意: 考试进行中 "ダンス527%" 整体是倍率，不含回合数
+    # 注意：考试进行中“ダンス527%”整体为倍率，不包含回合数。
     # 目标: 倍率按最高有效百分比输出；+1/+2/+3 仅用于附加回合，不参与倍率。
     ocr_turns = None
     bonus_pct = None
@@ -445,7 +462,7 @@ def _ocr_wheel_area(
     if valid_extra_turns:
         extra_turns = max(valid_extra_turns)
 
-    # 也尝试从 "残りターン" 后提取回合数
+    # 也尝试从“残りターン”后提取回合数。
     if ocr_turns is None:
         for variant in ProduceText.REMAINING_TURNS_OCR_VARIANTS:
             m3 = re.search(re.escape(variant) + r"\s*(\d{1,2})", turns_text)
@@ -594,6 +611,14 @@ def _extract_compact_wheel_text_info(
     extra_turns = max((value for value in extra_turn_candidates if 1 <= value <= 20), default=0)
 
     def _valid_bonus(value: int | None) -> bool:
+        """处理valid、bonus并返回结果。
+
+        Args:
+            value: 用于提供value相关输入。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return value is not None and 50 <= int(value) <= 9999
 
     # 左侧 OCR 粗读回合
@@ -743,6 +768,7 @@ def extract_exam_wheel_info(frame: np.ndarray, yolo_results=None) -> Optional[di
         wheel_hint: tuple[int, int, int, int] | None = None,
     ) -> Optional[dict]:
         # 先尝试“带轮盘提示”的局部回退，再尝试锚点 ROI / 全图回退。
+        """尝试使用紧凑策略解析轮盘文本回退结果。"""
         candidate_calls: list[tuple[np.ndarray, tuple[int, int, int, int] | None]] = []
         if wheel_hint is not None:
             candidate_calls.append((frame, wheel_hint))
@@ -817,9 +843,27 @@ def extract_exam_wheel_info(frame: np.ndarray, yolo_results=None) -> Optional[di
 
     # 4. 找指针所在的段（当前回合）
     def _center(s: int, e: int) -> float:
+        """处理center并返回结果。
+
+        Args:
+            s: 用于提供s相关输入。
+            e: 用于提供e相关输入。
+
+        Returns:
+            float: 计算得到的浮点数结果。
+        """
         return ((s + e) / 2) % 360
 
     def _angle_dist(a1: float, a2: float) -> float:
+        """处理angle、dist并返回结果。
+
+        Args:
+            a1: 用于提供a1相关输入。
+            a2: 用于提供a2相关输入。
+
+        Returns:
+            float: 计算得到的浮点数结果。
+        """
         d = abs(a1 - a2) % 360
         return min(d, 360 - d)
 
@@ -939,6 +983,14 @@ def extract_exam_wheel_validated(
     from collections import Counter
 
     def _signature(r: dict) -> tuple:
+        """处理signature并返回结果。
+
+        Args:
+            r: 用于提供r相关输入。
+
+        Returns:
+            tuple: 返回值类型见注解。
+        """
         return (r["remaining_turns"], tuple(r["queue"]))
 
     sig_counter = Counter(_signature(r) for r in results)
@@ -969,10 +1021,25 @@ def extract_exam_wheel_validated(
 
 
 def store_exam_wheel_info(ctx: "ProduceContext", info: dict) -> None:
-    """将轮盘信息存入上下文。"""
+    """保存考试、轮盘、info并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        info: 用于提供info相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     ctx.handler_state["exam_wheel_info"] = info
 
 
 def get_exam_wheel_info(ctx: "ProduceContext") -> Optional[dict]:
-    """从上下文读取轮盘信息。"""
+    """获取考试、轮盘、info并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        Optional[dict]: 返回值类型见注解，语义由函数用途决定。
+    """
     return ctx.handler_state.get("exam_wheel_info")

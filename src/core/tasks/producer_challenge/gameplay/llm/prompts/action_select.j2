@@ -2,7 +2,7 @@
 
 ## 合法动作
 {% for a in actions -%}
-{{ a.index }}: {{ a.label }}{% if a.kind %} ({{ a.kind }}){% endif %}{% if a.recommended %} [系统推荐]{% endif %}{% if a.selected %} [已选中]{% endif %}{% if not a.available %} [当前不可用]{% endif %}{% if a.description %} - {{ a.description }}{% endif %}{% if a.operation_meaning %}；操作含义：{{ a.operation_meaning }}{% endif %}{{ '' }}
+{{ a.index }}: {{ a.label }}{% if a.kind %} ({{ a.kind }}){% endif %}{% if a.selected %} [已选中]{% endif %}{% if not a.available %} [当前不可用]{% endif %}{% if a.description %} - {{ a.description }}{% endif %}{% if a.operation_meaning %}；操作含义：{{ a.operation_meaning }}{% endif %}{{ '' }}
 {% endfor %}
 
 ## 决策要求

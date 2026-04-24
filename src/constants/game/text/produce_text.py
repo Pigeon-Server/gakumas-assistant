@@ -155,6 +155,7 @@ class ProduceText:
     RECEIVE_COMPLETE = "受取完了"  # 领取完成
     P_DRINK_SELECT = "受け取るPドリンクを選んでください"  # P饮料选择提示
     P_ITEM_SELECT = "受け取るPアイテムを選んでください"  # P物品选择提示
+    SKILL_REWARD_SELECT = "受け取るスキルカードを選んでください"  # 技能卡奖励选择提示
     P_DRINK = "Pドリンク"  # P 饮料
     P_DRINK_DISCARD = "捨てる"  # P饮料详情模态内的丢弃按钮
     P_DRINK_DISCARD_CONFIRM = "廃棄確認"  # P饮料丢弃确认弹窗标题

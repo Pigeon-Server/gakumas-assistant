@@ -59,9 +59,20 @@ def _try_back_button_recovery(app: "AppProcessor") -> bool:
 
 
 class ProduceGameplayLoopStep(ProduceStep):
+    """定义 ProduceGameplayLoopStep 的结构化数据。
+    """
     step_name = "produce_gameplay_loop"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """执行当前步骤的完整流程。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         logger.info("进入培育主循环")
         ctx.set_phase(GameplayPhase.SCHEDULE)
         ctx.last_pipeline_step = self.step_name

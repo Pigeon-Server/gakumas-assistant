@@ -211,6 +211,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 游戏文本翻译
 - **[Gakumas_Launcher](https://github.com/a4nqi3n/Gakumas_Launcher)**  
 脱离DMMPlayer启动游戏
+- **[学园偶像大师-萌娘百科Wiki页面](https://zh.moegirl.org.cn/%E5%AD%A6%E5%9B%AD%E5%81%B6%E5%83%8F%E5%A4%A7%E5%B8%88)｜[学园偶像大师板块-GameKee](https://www.gamekee.com/gakumas/) ｜ [学园偶像大师板块-WikiWiki(日语)](https://wikiwiki.jp/gakumas/)**  
+游戏术语/逻辑补充
 - **[Ultralytics](https://github.com/ultralytics/ultralytics)**  
 YOLO 训练、导出与推理工具链
 - **[RapidOCR](https://github.com/RapidAI/RapidOCR)**  
@@ -226,7 +228,8 @@ Web UI 基础设施
 
 随包分发的二进制依赖来源与版权说明见 [bin/THIRD_PARTY_NOTICES.md](./bin/THIRD_PARTY_NOTICES.md)。
 
-## 交流群
+## 联系方式
+Email: **skyfsj@qq.com**  
 QQ Group: **328346267**
 ![](./docs/qq_group.jpg)
 

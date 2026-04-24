@@ -63,17 +63,39 @@ class EffectChainHandler(GameplayHandler):
     priority = 10  # 高于 fallback AdvanceHandler，低于所有常规 handler
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         if phase != GameplayPhase.UNKNOWN:
             return False
         return position in TRANSITION_POSITIONS or _has_hud_elements(app)
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         depth = ctx.handler_state.get("effect_chain_depth", 0) + 1
         ctx.handler_state["effect_chain_depth"] = depth
 
         logger.debug(f"effect_chain: advancing (depth={depth}, position={position})")
 
-        # 优先点击检测到的按钮（如結果画面的「次へ」）
+        # 优先点击检测到的按钮（如结果画面的“次へ”）。
         results = app.latest_results
         confirm_btn = results.filter_by_label(ProducerLabels.CONFIRM_BUTTON)
         if confirm_btn:

@@ -20,18 +20,45 @@ _VISUAL_TOKENS = (ProduceText.VISUAL, "visual", "vi")
 
 
 def ocr_text(image) -> str:
+    """对图像执行 OCR 识别，返回合并后的全部文本。
+
+    Args:
+        image: 待识别的 OpenCV 图像对象（numpy array）。为 None 或空图像时返回空字符串。
+
+    Returns:
+        str: 所有 OCR 识别结果的拼接文本，识别失败时返回空字符串。
+    """
     if image is None or getattr(image, "size", 0) <= 0:
         return ""
     return "".join(item.text for item in _ocr_service.ocr(image))
 
 
 def normalize_text(text: str | None) -> str:
-    """压平成便于 contains/fuzzy 判断的紧凑文本。"""
+    """将文本归一化为紧凑的小写字符串，便于子串匹配和模糊比较。
+
+    处理方式：转为字符串 -> 小写 -> 按空白分割 -> 拼接（去除所有空白字符）。
+
+    Args:
+        text: 待归一化的文本，为 None 时视为空字符串。
+
+    Returns:
+        str: 归一化后的紧凑小写字符串。
+    """
     return "".join(str(text or "").lower().split())
 
 
 def normalize_lookup_text(text: str | None) -> str:
-    """统一 producer 任务里的 OCR/目录查找文本归一化方式。"""
+    """统一 producer 任务中的 OCR/目录查找文本归一化方式。
+
+    处理流水线：全角转半角 -> OCR 日文归一化 -> 去除标点符号和分隔符 -> 小写 -> 去首尾空白。
+    适用于需要在不同来源的 OCR 文本之间进行稳定匹配的场景。
+
+    Args:
+        text: 待归一化的文本，为 None 或空时返回空字符串。
+
+    Returns:
+        str: 归一化后的紧凑文本。
+    """
     if not text:
         return ""
     normalized = normalize_ocr_jp(fullwidth_to_halfwidth(str(text)))
@@ -40,6 +67,15 @@ def normalize_lookup_text(text: str | None) -> str:
 
 
 def infer_param_kind(text: str | None) -> str:
+    """根据 OCR 文本推断属性类型。
+
+    Args:
+        text: 从页面标签、按钮或 OCR 结果中提取的原始文本。
+
+    Returns:
+        str: `vocal`、`dance`、`visual` 或 `unknown`。
+        该结果通常用于记忆属性采集、属性加成识别等需要把文本映射为统一枚举值的场景。
+    """
     normalized = normalize_text(text)
     if any(token in normalized for token in _VOCAL_TOKENS):
         return "vocal"
@@ -51,9 +87,19 @@ def infer_param_kind(text: str | None) -> str:
 
 
 def get_frame_size(app) -> tuple[int, int]:
+    """获取当前画面帧的尺寸。
+
+    从 app.latest_frame 中读取图像的宽高，当 frame 不存在时返回 None。
+
+    Args:
+        app: 应用处理器实例，需具有 latest_frame 属性（OpenCV 图像对象）。
+
+    Returns:
+        tuple[int, int] | None: (宽度, 高度)，单位为像素；无法获取时返回 None。
+    """
     frame = getattr(app, "latest_frame", None)
-    if frame is None:
-        return 1080, 2340
+    if frame is None or frame.size == 0:
+        return None
     height, width = frame.shape[:2]
     return int(width), int(height)
 
@@ -65,7 +111,24 @@ def detect_bottom_white_modal_region(
     debug_tools: Any = None,
     debug_label: str = "white_modal",
 ) -> tuple[int, int, int, int] | None:
-    """基于同一行候选框，检测底部白色模态区域。"""
+    """基于同一行候选框锚定，检测画面底部的白色弹窗区域。
+
+    处理流程：
+    1. 过滤有效检测框，仅保留靠近底部的一行
+    2. 计算行的包围盒作为锚定区域
+    3. 基于锚定区域扩展出期望矩形
+    4. 对画面做 HSV 白色阈值分割 + 形态学处理
+    5. 遍历白色轮廓，与锚定区域计算重叠度和 IoU，打分选出最佳匹配
+
+    Args:
+        frame: OpenCV 图像对象（BGR）。
+        row_boxes: 候选检测框序列（如底部按钮行），用于锚定弹窗区域。
+        debug_tools: 可选的调试工具，用于绘制检测框可视化。
+        debug_label: 调试标注的前缀标签。
+
+    Returns:
+        tuple[int, int, int, int] | None: 最佳匹配的白色弹窗区域 (x1, y1, x2, y2)，未检测到返回 None。
+    """
     if frame is None or getattr(frame, "size", 0) <= 0 or not row_boxes:
         return None
 
@@ -226,6 +289,20 @@ def click_relative_point(
     y_ratio: float,
     label: str = "",
 ) -> tuple[int, int]:
+    """按画面相对比例坐标点击指定位置。
+
+    将相对坐标（0.0-1.0）转换为实际像素坐标后进行点击，坐标会自动约束在
+    画面范围内。
+
+    Args:
+        app: 应用处理器实例，提供 latest_frame（获取尺寸）和 device.click。
+        x_ratio: X 轴相对位置（0.0=左边缘，1.0=右边缘）。
+        y_ratio: Y 轴相对位置（0.0=上边缘，1.0=下边缘）。
+        label: 点击操作的标识标签，透传给 device.click。
+
+    Returns:
+        tuple[int, int]: 实际点击的像素坐标 (x, y)。
+    """
     width, height = get_frame_size(app)
     x = max(0, min(width - 1, int(round(width * x_ratio))))
     y = max(0, min(height - 1, int(round(height * y_ratio))))
@@ -251,7 +328,7 @@ def probe_fast_forward_enabled_state(
     if frame is None or getattr(frame, "size", 0) <= 0:
         return None, 0.0
 
-    # 早送り按钮开启态是高饱和橙色；阈值放宽以提升 JPG 噪声下稳定性。
+    # 快进按钮开启态是高饱和橙色；阈值放宽以提升 JPG 噪声下的稳定性。
     status = check_status_detection(
         frame,
         threshold=0.10,
@@ -289,6 +366,22 @@ def invoke_decision_strategy(
     *,
     decision_state: Any = None,
 ) -> Any:
+    """按策略函数实际签名调用自动决策回调。
+
+    Args:
+        strategy: 外部注入的决策函数，可接受 app、ctx、candidates、decision_state 的不同组合。
+        app: 当前应用处理器。
+        ctx: 培育上下文。
+        candidates: 当前阶段可供选择的候选列表。
+        decision_state: 已构建好的决策快照；当策略签名更偏向状态输入时优先传入该对象。
+
+    Returns:
+        Any: 策略返回的原始决策结果，不在此处做结构限制。
+
+    Notes:
+        该函数会根据参数个数与最后一个参数名自适应调用方式，兼容旧策略接口与新的
+        无状态决策接口，避免调用侧在各个 handler 中重复写签名分支判断。
+    """
     if strategy is None:
         return None
     try:
@@ -337,6 +430,23 @@ def resolve_candidate_index(
     *,
     default_index: int = 0,
 ) -> int:
+    """把策略输出解析为候选列表中的有效索引。
+
+    Args:
+        decision: 策略返回值，可以是整数索引、带索引字段的对象、字典，或候选名称/ID 文本。
+        candidates: 当前阶段可供选择的候选列表。
+        default_index: 当 decision 无法可靠解析时回退使用的索引。
+
+    Returns:
+        int: 最终落地的候选索引，保证落在 `candidates` 范围内。
+
+    Raises:
+        ValueError: 候选列表为空时抛出，因为此时无法生成任何合法索引。
+
+    Notes:
+        解析顺序依次为显式索引、对象属性、字典字段、名称/ID 文本匹配；
+        这样可以兼容 LLM、规则策略和 RL 策略返回的不同结构。
+    """
     if not candidates:
         raise ValueError("候选列表为空")
 
@@ -385,6 +495,17 @@ def _match_candidate_key(
     *,
     already_normalized: bool = False,
 ) -> int | None:
+    """按候选对象上的关键字段匹配文本，并返回首个命中索引。
+
+    Args:
+        value: 需要匹配的文本，可为动作 ID、名称、标签等。
+        candidates: 候选对象列表。
+        already_normalized: 为 True 时表示 `value` 已经做过 `normalize_text` 处理，
+            可以跳过重复归一化。
+
+    Returns:
+        int | None: 命中候选时返回索引，否则返回 None。
+    """
     normalized_value = value if already_normalized else normalize_text(value)
     if not normalized_value:
         return None
@@ -401,6 +522,15 @@ def _match_candidate_key(
 
 
 def first_matching_index(candidates: Iterable[Any], *, kind: str) -> int | None:
+    """返回候选列表中第一个 kind 属性与目标值相同的索引。
+
+    Args:
+        candidates: 候选对象可迭代集合，每个对象需具有 kind 属性。
+        kind: 目标 kind 值，用于精确匹配。
+
+    Returns:
+        int | None: 匹配到的索引，未找到返回 None。
+    """
     for idx, candidate in enumerate(candidates):
         if getattr(candidate, "kind", "") == kind:
             return idx

@@ -10,6 +10,14 @@ _LOW_STAMINA_RATIO = 0.32
 
 
 def _schedule_payload_family(payload: dict[str, Any]) -> str:
+    """处理日程、载荷、family并返回结果。
+
+    Args:
+        payload: 用于提供载荷相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     metadata = dict(payload.get("metadata", {}) or {})
     family = str(metadata.get("schedule_family") or "").strip()
     if family:
@@ -30,6 +38,14 @@ def _schedule_payload_family(payload: dict[str, Any]) -> str:
 def _select_low_stamina_recovery_action(
     decision_state: dict[str, Any],
 ) -> tuple[int, str] | None:
+    """选择low、stamina、recovery、操作并返回结果。
+
+    Args:
+        decision_state: 决策快照，包含上下文、候选项与当前理由。
+
+    Returns:
+        tuple[int, str] | None: 返回值类型见注解，语义由函数用途决定。
+    """
     economy = dict(decision_state.get("economy", {}) or {})
     stamina = int(economy.get("stamina") or 0)
     max_stamina = int(economy.get("max_stamina") or 0)
@@ -87,6 +103,16 @@ def _annotate_low_stamina_recovery_preference(
     preferred_index: int,
     reason: str,
 ) -> None:
+    """补充标注low、stamina、recovery、preference并返回结果。
+
+    Args:
+        decision_state: 决策快照，包含上下文、候选项与当前理由。
+        preferred_index: 用于提供preferred、index相关输入。
+        reason: 用于提供reason相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     payloads = list(decision_state.get("candidates", []) or [])
     label = f"候选 {preferred_index}"
     for payload in payloads:

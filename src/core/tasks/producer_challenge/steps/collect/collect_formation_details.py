@@ -49,7 +49,7 @@ _ITEM_LABELS = frozenset({BaseUILabels.SPECIAL_ITEMS})
 _ALL_CARD_ITEM_LABELS = _SKILL_CARD_LABELS | _ITEM_LABELS
 _CLIP_BOX_MIN_SIZE = 40
 _CLIP_BOX_OVERLAP_THRESHOLD = 0.6
-_SHOWCASE_DRIFT_TOLERANCE = 0.05  # fraction of frame height
+_SHOWCASE_DRIFT_TOLERANCE = 0.05  # 占画面高度的比例
 
 _TAB_CARD_ITEM = ProduceText.TAB_CARD_ITEM
 _TAB_ABILITY = ProduceText.TAB_ABILITY
@@ -81,9 +81,27 @@ class CollectFormationDetailsStep(ProduceStep):
     skip_on_resume = True
 
     def validate(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """确认当前仍停留在可打开「編成詳細」的开始确认页。
+
+        本步骤只能从最终确认页进入；若页面已经进入正式 gameplay 或仍停留在
+        记忆编成页，后续的「編成詳細」按钮和三子页签结构都不成立。
+        """
         return is_final_confirm_page(app)
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """采集「編成詳細」三子页签，并把结果写回上下文。
+
+        处理流程如下：
+        1. 打开开始确认页的「編成詳細」浮层。
+        2. 依次采集「カード/アイテム」「アビリティ」「イベント」页签文本与视觉信息。
+        3. 用数据库匹配结果构造 `ctx.formation_details`，并从中汇总出
+           `ctx.memory_attributes` 作为后续决策的记忆摘要。
+        4. 关闭浮层并回到开始确认页。
+
+        Returns:
+            bool: 采集完成或在无法打开浮层时安全跳过，均返回 True；真正的失败通过
+                浮层打开/页面切换超时等异常向上抛出。
+        """
         if not self._open_formation_details(app):
             logger.warning("无法打开編成詳細，跳过开始前详情采集")
             return True
@@ -139,7 +157,7 @@ class CollectFormationDetailsStep(ProduceStep):
         else:
             logger.warning("切换到イベント 子页签失败")
 
-        # Supplement P-items that CLIP couldn't identify, using the game DB
+        # 用游戏数据库补全 CLIP 未识别的 P-item。
         card_details = details.get("cards_and_items")
         if card_details is not None:
             support_card_ids = (
@@ -170,6 +188,11 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _open_formation_details(app: "AppProcessor") -> bool:
+        """从开始确认页打开「編成詳細」浮层。
+
+        会重复尝试查找并点击「編成詳細」按钮；只有在点击后成功识别到浮层结构
+        （关闭按钮 / 返回按钮 / TAB_BAR）时才视为成功，避免把普通按钮闪烁误判为已进入详情页。
+        """
         for _ in range(5):
             if button := find_button(app, ProduceText.FORMATION_DETAILS, fuzz_threshold=68):
                 if app.game_utils.click_element_and_wait_trigger(button, retries=2, timeout=2.5, interval=0.1):
@@ -181,6 +204,15 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _wait_for_formation_overlay(app: "AppProcessor", timeout: float = 6.0) -> bool:
+        """等待「編成詳細」浮层稳定出现。
+
+        Args:
+            app: 当前应用处理器。
+            timeout: 最长等待时间；超过后由调用方决定是否跳过该步骤。
+
+        Returns:
+            bool: 在时限内识别到详情浮层并完成稳帧等待时返回 True，否则返回 False。
+        """
         end_time = time() + timeout
         while time() < end_time:
             if CollectFormationDetailsStep._is_formation_overlay_page(app):
@@ -191,6 +223,12 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _is_formation_overlay_page(app: "AppProcessor") -> bool:
+        """判断当前是否已经进入「編成詳細」浮层。
+
+        判定逻辑分两层：
+        1. 若仍能看到开始确认页的「プロデュース開始」或「編成詳細」按钮，说明浮层尚未覆盖成功。
+        2. 若上述按钮消失，同时出现关闭按钮、返回按钮或 TAB_BAR 之一，则认为已经进入浮层。
+        """
         if has_button(app, ButtonText.PRODUCE_START, fuzz_threshold=65):
             return False
         if has_button(app, ProduceText.FORMATION_DETAILS, fuzz_threshold=68):
@@ -203,6 +241,20 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _click_tab(app: "AppProcessor", tab_name: str, tab_index: int) -> bool:
+        """切换「編成詳細」浮层中的目标页签。
+
+        优先使用 TAB_BAR 的几何位置直接点击第 `tab_index` 个页签；这样对 OCR 波动更稳。
+        若当前机型没有稳定识别出 TAB_BAR，则回退为 OCR 匹配页签文字并点击对应文本中心。
+
+        Args:
+            app: 当前应用处理器。
+            tab_name: 目标页签文本，用于 OCR 回退匹配。
+            tab_index: 目标页签在三联标签中的序号，从 0 开始。
+
+        Returns:
+            bool: 点击后完成稳帧等待时返回 True；若既无法定位 TAB_BAR 也无法匹配页签文本，
+                返回 False。
+        """
         tab_bars = app.latest_results.filter_by_label(BaseUILabels.TAB_BAR)
         if tab_bars:
             tab_bar = tab_bars.first()
@@ -228,6 +280,19 @@ class CollectFormationDetailsStep(ProduceStep):
         return False
 
     def _collect_tab_with_scroll(self, app: "AppProcessor", section_label: str) -> list[str]:
+        """滚动采集当前页签中的全部 OCR 文本。
+
+        每一轮都会先抽取当前视口中的去重文本，再执行一次短距离惯性滑动。
+        滚动后通过裁剪区域的 SSIM 比较判断画面是否还在变化；若相似度过高，说明已经滚到底部，
+        立即停止，避免反复采同一屏内容。
+
+        Args:
+            app: 当前应用处理器。
+            section_label: 调试日志中的章节标记，便于区分是哪个页签滚动到了底部。
+
+        Returns:
+            list[str]: 按出现顺序收集到的去重 OCR 文本列表。
+        """
         from src.utils.opencv_tools import compute_ssim_score
 
         all_texts: list[str] = []
@@ -282,11 +347,11 @@ class CollectFormationDetailsStep(ProduceStep):
     def _collect_card_items_with_clip_and_scroll(
         self, app: "AppProcessor", section_label: str = "formation:card_item",
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        """Collect card/item entries using CLIP identification + OCR text.
+        """使用 CLIP 识别与 OCR 文本联合收集卡片/道具条目。
 
-        Returns ``(clip_entries, ocr_texts)`` where *clip_entries* are DB
-        records identified via CLIP visual matching and *ocr_texts* are the
-        raw OCR strings (same format as ``_collect_tab_with_scroll``).
+        返回 ``(clip_entries, ocr_texts)``：
+        * ``clip_entries`` 为通过 CLIP 视觉匹配到的数据库条目；
+        * ``ocr_texts`` 为原始 OCR 文本列表（格式与 ``_collect_tab_with_scroll`` 一致）。
         """
         from src.utils.opencv_tools import compute_ssim_score
 
@@ -304,14 +369,14 @@ class CollectFormationDetailsStep(ProduceStep):
                 sleep(0.4)
                 continue
 
-            # ---- CLIP identification of visible card/item icons ----
+            # ---- 使用 CLIP 识别当前可见卡片/道具图标 ----
             if clip_manager is not None:
                 _new_clip, showcase_center = self._clip_identify_visible_cards(
                     app, frame, clip_manager, clip_entries, seen_clip_ids,
                     showcase_center,
                 )
 
-            # ---- OCR text collection (same as _collect_tab_with_scroll) ----
+            # ---- 采集 OCR 文本（与 _collect_tab_with_scroll 相同）----
             for text in self._extract_unique_texts(frame):
                 if text in seen_texts:
                     continue
@@ -321,7 +386,7 @@ class CollectFormationDetailsStep(ProduceStep):
             if scroll_round == _MAX_SCROLL_ROUNDS - 1:
                 break
 
-            # ---- Scroll ----
+            # ---- 执行滚动 ----
             prev_crop = self._crop_scroll_area(frame)
             height, width = frame.shape[:2]
             swipe_start_y = int(height * 0.70)
@@ -360,14 +425,15 @@ class CollectFormationDetailsStep(ProduceStep):
         seen_clip_ids: set[str],
         showcase_center: tuple[float, float] | None = None,
     ) -> tuple[bool, tuple[float, float] | None]:
-        """Run YOLO detection + CLIP retrieval on visible card/item icons.
+        """对可见卡片/道具图标执行 YOLO 检测与 CLIP 检索。
 
-        When CLIP retrieval misses, falls back to OCR on the card image and
-        triggers auto-learning so the card is recognised by CLIP next time.
+        当 CLIP 检索未命中时，会回退到卡面 OCR，并触发自动学习，
+        使该卡片在后续流程中可被 CLIP 直接识别。
 
-        Mutates *clip_entries* and *seen_clip_ids* in place; returns
-        ``(found_new, showcase_center)`` where *showcase_center* is the cached
-        center of the showcase card (or ``None`` if not yet detected).
+        该函数会原地更新 ``clip_entries`` 与 ``seen_clip_ids``，
+        返回 ``(found_new, showcase_center)``：
+        * ``found_new`` 表示本轮是否新增识别条目；
+        * ``showcase_center`` 为展示卡中心点缓存（未检测到时为 ``None``）。
         """
         results = app.latest_results
         if results is None:
@@ -382,8 +448,8 @@ class CollectFormationDetailsStep(ProduceStep):
         unmatched_cards: list[dict[str, Any]] = []
         drift_tol = h_frame * _SHOWCASE_DRIFT_TOLERANCE
 
-        # Anchor check: detect address bar above / button below to identify
-        # the showcase display area (not a grid card).
+        # 锚点检查：通过上方地址栏与下方按钮判断是否为展示区。
+        # 该区域为展示卡，不是网格卡片。
         anchors_above = results.filter_by_labels([BaseUILabels.CURRENT_LOCATION])
         anchors_below = results.filter_by_labels([BaseUILabels.BUTTON])
 
@@ -398,13 +464,13 @@ class CollectFormationDetailsStep(ProduceStep):
 
             cx, cy = float(box.cx), float(box.cy)
 
-            # Fast path: match against cached showcase position
+            # 快速路径：用缓存的展示区位置直接匹配。
             if showcase_center is not None:
                 if (abs(cx - showcase_center[0]) < drift_tol
                         and abs(cy - showcase_center[1]) < drift_tol):
                     continue
 
-            # Slow path: anchor-based detection for first occurrence
+            # 慢速路径：首次出现时用锚点规则检测。
             if showcase_center is None:
                 has_bar_above = any(int(a.h) <= y1 + bh for a in anchors_above)
                 has_btn_below = any(int(b.y) >= y2 - bh for b in anchors_below)
@@ -449,7 +515,7 @@ class CollectFormationDetailsStep(ProduceStep):
                         f"(id={matched.id}) at ({box.cx},{box.cy})"
                     )
             else:
-                # --- OCR fallback on thumbnail ---
+                # --- 缩略图 OCR 回退 ---
                 ocr_entry = CollectFormationDetailsStep._ocr_fallback_and_learn(
                     app, card_img, entry_kind, clip_manager,
                 )
@@ -465,7 +531,7 @@ class CollectFormationDetailsStep(ProduceStep):
                         color=(0, 200, 255), alpha=0.4, duration=3.0,
                     )
                 else:
-                    # Collect for click + detail-OCR fallback
+                    # 加入“点击后详情 OCR”回退队列。
                     unmatched_cards.append({
                         "box": box,
                         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
@@ -473,9 +539,9 @@ class CollectFormationDetailsStep(ProduceStep):
                         "entry_kind": entry_kind,
                     })
 
-        # --- Second pass: click unmatched skill cards for detail OCR ---
-        # P-items are skipped here (detail OCR layout differs); they will be
-        # supplemented from the game database instead.
+        # --- 第二轮：点击未匹配技能卡做详情 OCR ---
+        # 此处跳过 P-item（详情 OCR 布局不同）；
+        # 改为后续由游戏数据库补全。
         for info in unmatched_cards:
             box = info["box"]
             if info["entry_kind"] == "produce_item":
@@ -510,7 +576,7 @@ class CollectFormationDetailsStep(ProduceStep):
         return found_new, showcase_center
 
     # ------------------------------------------------------------------
-    # OCR fallback helpers
+    # OCR 回退辅助函数
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -520,9 +586,9 @@ class CollectFormationDetailsStep(ProduceStep):
         entry_kind: str | None,
         clip_manager: Any,
     ) -> dict[str, Any] | None:
-        """OCR the card image, match against catalog, and auto-learn into CLIP.
+        """对卡面执行 OCR，与目录匹配后自动学习到 CLIP。
 
-        Returns a ``clip_entries``-compatible dict on success, or ``None``.
+        成功时返回与 ``clip_entries`` 兼容的条目字典，失败时返回 ``None``。
         """
         try:
             ocr_result = ocr_service.ocr(card_img)
@@ -543,13 +609,13 @@ class CollectFormationDetailsStep(ProduceStep):
         if not catalog_match:
             return None
 
-        # Pick the best scoring catalog match
+        # 选择得分最高的目录匹配项
         catalog_match.sort(key=lambda e: float(e.get("score") or 0), reverse=True)
         best = catalog_match[0]
         card_id = str(best["id"])
         card_name = str(best.get("name") or card_id)
 
-        # Auto-learn into CLIP memory
+        # 自动写入 CLIP 记忆库
         CollectFormationDetailsStep._learn_clip_from_ocr(
             app, card_img, card_id, best["kind"], clip_manager,
         )
@@ -574,7 +640,7 @@ class CollectFormationDetailsStep(ProduceStep):
         kind: str,
         clip_manager: Any,
     ) -> None:
-        """Register the card image into CLIP memory so future hits are instant."""
+        """将卡面注册到 CLIP 记忆库，后续可直接命中。"""
         try:
             if kind == "produce_card":
                 from src.utils.game_database_tools import GakumasDatabase_ProduceCardDataUtils
@@ -606,7 +672,7 @@ class CollectFormationDetailsStep(ProduceStep):
         card_img: np.ndarray,
         clip_manager: Any,
     ) -> dict[str, Any] | None:
-        """Click a card thumbnail and OCR the detail area to identify it.
+        """点击卡片缩略图并 OCR 详情区域完成识别。
 
         After clicking, uses the topmost YOLO-detected card/item icon as an
         anchor (the detail-area card icon), then OCRs the rectangular region
@@ -624,28 +690,28 @@ class CollectFormationDetailsStep(ProduceStep):
 
         h, w = frame.shape[:2]
 
-        # Find the detail card icon: topmost YOLO card/item box in the
-        # top portion of the screen (detail area above the grid).
+        # 查找详情卡片图标：取上半区域最靠上的 YOLO 卡片/道具框。
+        # 该区域位于网格上方的详情区。
         anchor_box = None
         top_limit = h * 0.28
         if results is not None:
             detail_boxes = results.filter_by_labels(list(_ALL_CARD_ITEM_LABELS))
             for box in sorted(detail_boxes, key=lambda b: b.y):
-                # Both top and bottom edges must be within the detail area
+                # 要求框的上下边都位于详情区内。
                 if box.y < top_limit and box.h < top_limit:
                     anchor_box = box
                     break
 
         if anchor_box is not None:
-            # OCR the region to the right of the card icon
-            # w axis → right edge of icon to 80% of screen width
-            # y axis → icon top to icon bottom
+            # 对卡片图标右侧区域执行 OCR。
+            # w 轴：图标右边界到屏宽 80%。
+            # y 轴：图标上边界到下边界。
             ocr_x1 = min(w, int(anchor_box.w))
             ocr_y1 = max(0, int(anchor_box.y))
             ocr_x2 = int(w * 0.80)
             ocr_y2 = min(h, int(anchor_box.h))
         else:
-            # Fallback: fixed region for the detail card name area
+            # 回退：使用固定的详情卡名区域。
             ocr_x1 = int(w * 0.16)
             ocr_y1 = int(h * 0.04)
             ocr_x2 = int(w * 0.65)
@@ -666,7 +732,7 @@ class CollectFormationDetailsStep(ProduceStep):
         except Exception:  # noqa: BLE001
             return None
 
-        # Collect texts sorted by confidence (highest first)
+        # 按置信度收集文本（从高到低）。
         candidates = [
             (item.text.strip(), item.confidence or 0)
             for item in ocr_result.results
@@ -691,7 +757,7 @@ class CollectFormationDetailsStep(ProduceStep):
         best = catalog_match[0]
         card_id = str(best["id"])
 
-        # Auto-learn the original thumbnail into CLIP
+        # 将原始缩略图自动学习进 CLIP。
         CollectFormationDetailsStep._learn_clip_from_ocr(
             app, card_img, card_id, best["kind"], clip_manager,
         )
@@ -713,9 +779,15 @@ class CollectFormationDetailsStep(ProduceStep):
         texts: list[str],
         clip_entries: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        """合并 OCR 与 CLIP 识别结果，构造卡片/道具页签的结构化摘要。
+
+        该摘要既保留原始 OCR 文本，也保留数据库匹配条目，并按类型拆出
+        `produce_card_ids`、`produce_item_ids`、`produce_drink_ids`，供后续记忆汇总与
+        gameplay 决策直接消费。若同一条目同时被 CLIP 和 OCR 识别到，会优先保留 CLIP 结果。
+        """
         ocr_matched_entries = match_card_and_item_entries(texts)
 
-        # Merge CLIP entries with OCR matches, preferring CLIP for dedup
+        # 合并 CLIP 与 OCR 结果，去重时优先 CLIP。
         if clip_entries:
             clip_ids = {e["id"] for e in clip_entries}
             merged: list[dict[str, Any]] = [
@@ -756,11 +828,11 @@ class CollectFormationDetailsStep(ProduceStep):
         ctx: "ProduceContext",
         support_card_ids: list[str] | None = None,
     ) -> None:
-        """Supplement produce_item_ids with DB-derived P-items.
+        """用数据库推导出的 P-item 补全 produce_item_ids。
 
-        Sources:
-        1. Idol card → ``beforeProduceItemId``, ``afterProduceItemId``
-        2. Support card events → P-items granted by support card events
+        来源：
+        1. 偶像卡：``beforeProduceItemId``、``afterProduceItemId``
+        2. 支援卡事件：事件奖励的 P-item
         """
         from src.utils.game_database_tools import (
             GakumasDatabase_IdolCardDataUtils,
@@ -771,7 +843,7 @@ class CollectFormationDetailsStep(ProduceStep):
         existing_ids: set[str] = set(card_details.get("produce_item_ids", []))
         added: list[str] = []
 
-        # --- 1. Idol card P-items ---
+        # --- 1. 偶像卡来源 P-item ---
         idol_card_id = ctx.target_idol_card_id
         if idol_card_id:
             idol_db = GakumasDatabase_IdolCardDataUtils()
@@ -783,7 +855,7 @@ class CollectFormationDetailsStep(ProduceStep):
                         existing_ids.add(pid)
                         added.append(pid)
 
-        # --- 2. Support card event P-items ---
+        # --- 2. 支援卡事件来源 P-item ---
         if support_card_ids:
             event_items = build_support_card_event_items()
             for sc_id in support_card_ids:
@@ -795,7 +867,7 @@ class CollectFormationDetailsStep(ProduceStep):
                             added.append(pid)
 
         if added:
-            # Resolve names via DB for matched_entries
+            # 通过数据库补齐 matched_entries 的名称。
             item_db = GakumasDatabase_ProduceItemDataUtils()
             for pid in added:
                 card_details["produce_item_ids"].append(pid)
@@ -822,6 +894,19 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _build_ability_details(texts: list[str], ctx: "ProduceContext") -> dict[str, Any]:
+        """解析「アビリティ」页签文本，并按来源分组映射到数据库。
+
+        该页签会混合出现 Pアイドル 自身能力、授课支援、支援卡能力以及记忆能力。
+        函数先按章节标题切段，再分别调用对应目录匹配函数；其中记忆能力匹配会在
+        分段失败时回退到全量文本，提高 OCR 噪声下的召回率。
+
+        Args:
+            texts: 当前页签滚动收集到的全部 OCR 文本。
+            ctx: 培育上下文；主要读取 `produce_group_id`，用于约束记忆能力匹配范围。
+
+        Returns:
+            dict[str, Any]: 包含各章节原始文本、匹配条目与条目 ID 的结构化结果。
+        """
         sections = {
             "p_idol_abilities": [],
             "lesson_support": [],
@@ -830,9 +915,9 @@ class CollectFormationDetailsStep(ProduceStep):
         }
         current_section: str | None = None
 
-        # Strict matching for section headers: disable substring fallback
-        # to prevent content like "...スキルカードサポート発生率..." from
-        # being misidentified as a section header.
+        # 章节标题采用严格匹配：禁用子串回退。
+        # 防止诸如“...スキルカードサポート発生率...”这类正文内容被
+        # 防止正文被误识别为章节标题。
         _header_cfg = MatchConfig(fuzz_threshold=_SECTION_FUZZ, use_contains=False)
 
         for text in texts:
@@ -914,6 +999,16 @@ class CollectFormationDetailsStep(ProduceStep):
         *,
         produce_group_id: str | None,
     ) -> list[dict[str, Any]]:
+        """构建记忆、fallback并返回结果。
+
+        Args:
+            card_details: 用于提供卡牌、details相关输入。
+            ability_details: 用于提供ability、details相关输入。
+            produce_group_id: 业务对象标识符，用于索引或匹配目标实体。
+
+        Returns:
+            list: 结果列表，元素类型见返回注解。
+        """
         fallback: list[dict[str, Any]] = []
         matched_entries = ability_details.get("memory_abilities", {}).get("matched_entries", [])
         memory_raw_texts = ability_details.get("memory_abilities", {}).get("raw_texts", [])
@@ -1038,6 +1133,14 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _extract_memory_skill_card_summaries(texts: list[str]) -> list[dict[str, Any]]:
+        """提取记忆、skill、卡牌、summaries并返回结果。
+
+        Args:
+            texts: 用于提供texts相关输入。
+
+        Returns:
+            list: 结果列表，元素类型见返回注解。
+        """
         summaries: list[dict[str, Any]] = []
         current_source_kind: str | None = None
         current_source_text = ""
@@ -1191,6 +1294,7 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _classify_card_source_header(text: str) -> str | None:
+        """分类判定`card_source_header`。"""
         for source_kind, candidates in _CARD_SOURCE_HEADERS.items():
             if any(string_match(text, candidate, MatchConfig(fuzz_threshold=68)) for candidate in candidates):
                 return source_kind
@@ -1198,16 +1302,41 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _is_phase_like_text(text: str) -> bool:
+        """判断文本是否像阶段标识文本。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         if len(text) < 4:
             return False
         return any(keyword in text for keyword in _PHASE_KEYWORDS)
 
     @staticmethod
     def _is_formation_noise_text(text: str) -> bool:
+        """判断文本是否属于编队识别噪声。
+
+        Args:
+            text: 待处理文本，通常来源于 OCR 或配置。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return any(string_match(text, noise, MatchConfig(fuzz_threshold=70)) for noise in _FORMATION_NOISE_TEXTS)
 
     @staticmethod
     def _classify_gain_timing(phase_texts: list[str], source_kind: str | None) -> str | None:
+        """判定gain、timing并返回结果。
+
+        Args:
+            phase_texts: 用于提供phase、texts相关输入。
+            source_kind: 用于提供source、kind相关输入。
+
+        Returns:
+            str | None: 返回值类型见注解。
+        """
         joined = "".join(phase_texts)
         if ProduceText.MID_EXAM in joined or ProduceText.MID_REVIEW in joined:
             if ProduceText.FIRST_AUDITION in joined:
@@ -1223,6 +1352,14 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _dedupe_texts(texts: list[str]) -> list[str]:
+        """处理dedupe、texts并返回结果。
+
+        Args:
+            texts: 用于提供texts相关输入。
+
+        Returns:
+            list: 结果列表，元素类型见返回注解。
+        """
         deduped: list[str] = []
         seen: set[str] = set()
         for text in texts:
@@ -1234,6 +1371,15 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _collect_entry_ids(entries: list[dict[str, Any]], kind: str | None = None) -> list[str]:
+        """收集entry、ids并返回结果。
+
+        Args:
+            entries: 用于提供entries相关输入。
+            kind: 用于提供kind相关输入。
+
+        Returns:
+            list: 结果列表，元素类型见返回注解。
+        """
         ids: list[str] = []
         seen: set[str] = set()
         for entry in entries:
@@ -1248,6 +1394,14 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _extract_unique_texts(frame) -> list[str]:
+        """提取unique、texts并返回结果。
+
+        Args:
+            frame: 待识别图像帧。
+
+        Returns:
+            list: 结果列表，元素类型见返回注解。
+        """
         ocr_result = ocr_service.ocr(frame)
         texts: list[str] = []
         seen: set[str] = set()
@@ -1263,6 +1417,7 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _crop_scroll_area(frame):
+        """裁剪`crop_scroll_area`。"""
         height, width = frame.shape[:2]
         top = int(height * 0.18)
         bottom = int(height * 0.86)
@@ -1272,6 +1427,14 @@ class CollectFormationDetailsStep(ProduceStep):
 
     @staticmethod
     def _close_overlay(app: "AppProcessor") -> None:
+        """关闭overlay并返回结果。
+
+        Args:
+            app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+        Returns:
+            None: 仅产生副作用，不返回业务值。
+        """
         close_boxes = app.latest_results.filter_by_label(BaseUILabels.CLOSE_BUTTON)
         if close_boxes:
             app.game_utils.click_element_and_wait_trigger(close_boxes.first(), retries=2, timeout=2.0)

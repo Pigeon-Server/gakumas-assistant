@@ -86,7 +86,12 @@ _TASK_REWARD_TOKENS = (
 
 @dataclass(frozen=True)
 class _Rect:
-    """统一使用 x1/y1/x2/y2 语义，避免和 Yolo_Box 的 x/w 命名混淆。"""
+    """统一的矩形区域描述。
+
+    本文件会在 YOLO 检测框、OCR token 区域和手工推导区域之间来回转换坐标。
+    使用 `_Rect` 统一 `x1/y1/x2/y2` 语义，可以避免和 `Yolo_Box` 的 `x/w/y/h`
+    命名混淆，减少区域裁剪与调试框绘制时的坐标误用。
+    """
 
     x1: int
     y1: int
@@ -95,28 +100,52 @@ class _Rect:
 
     @property
     def width(self) -> int:
+        """返回矩形宽度，供区域筛选与相对坐标换算使用。"""
         return max(0, self.x2 - self.x1)
 
     @property
     def height(self) -> int:
+        """返回矩形高度，供区域筛选与相对坐标换算使用。"""
         return max(0, self.y2 - self.y1)
 
     @property
     def cx(self) -> int:
+        """返回矩形中心点 x 坐标，便于点击和对齐 OCR 行。"""
         return self.x1 + self.width // 2
 
     @property
     def cy(self) -> int:
+        """返回矩形中心点 y 坐标，便于点击和按行聚类 OCR token。"""
         return self.y1 + self.height // 2
 
     @classmethod
     def from_yolo_box(cls, box: Yolo_Box) -> "_Rect":
+        """根据 YOLO 检测框构建 Rect 对象。"""
         return cls(int(box.x), int(box.y), int(box.w), int(box.h))
 
     def translate(self, dx: int, dy: int) -> "_Rect":
+        """处理translate并返回结果。
+
+        Args:
+            dx: 用于提供dx相关输入。
+            dy: 用于提供dy相关输入。
+
+        Returns:
+            '_Rect': 返回值类型见注解。
+        """
         return _Rect(self.x1 + dx, self.y1 + dy, self.x2 + dx, self.y2 + dy)
 
     def expand(self, padding_x: int, padding_y: int, frame_shape: Sequence[int]) -> "_Rect":
+        """处理expand并返回结果。
+
+        Args:
+            padding_x: 用于提供padding、x相关输入。
+            padding_y: 用于提供padding、y相关输入。
+            frame_shape: 用于提供frame、shape相关输入。
+
+        Returns:
+            '_Rect': 返回值类型见注解。
+        """
         frame_h, frame_w = frame_shape[:2]
         return _Rect(
             max(0, self.x1 - padding_x),
@@ -128,6 +157,11 @@ class _Rect:
 
 @dataclass(frozen=True)
 class _OcrToken:
+    """单个 OCR token 的标准化表示。
+
+    除了文本本身，还保留识别框与置信度，方便后续按位置聚合成行，或在调试时回溯
+    某段文本是从哪个局部区域识别出来的。
+    """
     text: str
     rect: _Rect
     confidence: float
@@ -135,16 +169,23 @@ class _OcrToken:
 
 @dataclass(frozen=True)
 class _OcrLine:
+    """由多个 OCR token 聚合而成的一行文本。
+
+    推荐效果与育成信息的解析都更依赖“行”而不是单个词，因此这里会保留整行文本、
+    行级包围框以及组成该行的 token 列表，供后续做规则匹配与点击区域推导。
+    """
     text: str
     rect: _Rect
     tokens: Tuple[_OcrToken, ...]
 
 
 def _normalize_text(text: str) -> str:
+    """压缩多余空白，统一 OCR 文本的比较格式。"""
     return re.sub(r"\s+", " ", (text or "").strip())
 
 
 def _safe_confidence(value: Any) -> float:
+    """将 OCR 置信度安全转换为 0-1 浮点数。"""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -152,6 +193,11 @@ def _safe_confidence(value: Any) -> float:
 
 
 def _union_rect(rects: Iterable[_Rect]) -> _Rect | None:
+    """合并多个矩形为最小包围框。
+
+    常用于把一组 OCR token 的局部框聚合成行级区域，后续可直接用于裁剪、点击或绘制调试框。
+    空输入返回 `None`，由调用方决定是否跳过该区域。
+    """
     rects = list(rects)
     if not rects:
         return None
@@ -164,10 +210,12 @@ def _union_rect(rects: Iterable[_Rect]) -> _Rect | None:
 
 
 def _crop(frame: np.ndarray, rect: _Rect) -> np.ndarray:
+    """按给定矩形裁剪图像区域。"""
     return frame[rect.y1:rect.y2, rect.x1:rect.x2]
 
 
 def _relative_rect(parent: _Rect, left: float, top: float, right: float, bottom: float) -> _Rect:
+    """在父区域内按相对比例构造子矩形。"""
     return _Rect(
         parent.x1 + int(parent.width * left),
         parent.y1 + int(parent.height * top),
@@ -184,6 +232,7 @@ def _add_debug_box(
     alpha: float = 0.18,
     duration: float = 8.0,
 ) -> None:
+    """把矩形区域绘制到 DebugTools 上，便于核对识别范围。"""
     _debugger.add_box(
         rect.x1,
         rect.y1,
@@ -203,6 +252,17 @@ def _extract_ocr_tokens(
     scale: float = _OCR_SCALE,
     min_confidence: float = _OCR_MIN_CONFIDENCE,
 ) -> list[_OcrToken]:
+    """提取OCR、tokens并返回结果。
+
+    Args:
+        frame: 待识别图像帧。
+        region: 用于提供region相关输入。
+        scale: 用于提供scale相关输入。
+        min_confidence: 用于提供min、confidence相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     crop = _crop(frame, region)
     if crop.size == 0:
         return []
@@ -236,6 +296,7 @@ def _extract_ocr_tokens(
 
 
 def _tokens_to_lines(tokens: Sequence[_OcrToken], y_gap: int = _LINE_MERGE_Y_GAP) -> list[_OcrLine]:
+    """将 OCR token 聚合成按行排列的文本。"""
     if not tokens:
         return []
 
@@ -264,6 +325,7 @@ def _tokens_to_lines(tokens: Sequence[_OcrToken], y_gap: int = _LINE_MERGE_Y_GAP
 
 
 def _dedupe_preserve_order(texts: Iterable[str]) -> list[str]:
+    """对`preserve_order`去重。"""
     seen: set[str] = set()
     deduped: list[str] = []
     for text in texts:
@@ -276,6 +338,15 @@ def _dedupe_preserve_order(texts: Iterable[str]) -> list[str]:
 
 
 def _get_bottom_button_boxes(results: Yolo_Results | None, frame_height: int) -> list[Yolo_Box]:
+    """获取bottom、按钮、boxes并返回结果。
+
+    Args:
+        results: 用于提供results相关输入。
+        frame_height: 用于提供frame、height相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     if not results:
         return []
     buttons = results.filter_by_label(BaseUILabels.BUTTON)
@@ -399,6 +470,11 @@ def _build_recommended_effect_candidate_points(
     anchor_lines: Sequence[_OcrLine],
     recommend_region: _Rect,
 ) -> list[tuple[int, int]]:
+    """根据推荐效果文本行推导一组可点击探测点。
+
+    推荐效果的提示气泡并不总是与文本严格对齐，因此这里会围绕每一行文本的右侧、中心
+    以及整组文本的联合区域生成多个候选点，后续按顺序点击探测，直到成功弹出 tooltip。
+    """
     rects = [line.rect for line in anchor_lines]
     union = _union_rect(rects) or recommend_region
     raw_points: list[tuple[int, int]] = []
@@ -480,6 +556,7 @@ def _extract_recommended_effect_lines_from_frame(
 
 
 def _extract_training_body_tokens(body_frame: np.ndarray) -> list[_OcrToken]:
+    """对育成信息弹窗正文区域做 OCR，并返回标准化 token 列表。"""
     full_rect = _Rect(0, 0, body_frame.shape[1], body_frame.shape[0])
     return _extract_ocr_tokens(body_frame, full_rect, scale=_OCR_SCALE)
 
@@ -495,6 +572,14 @@ def _locate_training_task_region(body_frame: np.ndarray) -> _Rect:
 
 
 def _read_exam_criteria_from_body(body_frame: np.ndarray) -> Dict[str, Any]:
+    """从育成信息弹窗正文中提取审查基准摘要。
+
+    当前会解析两类信息：
+    - `target_score`：审查分数目标。
+    - `priority`：按横向位置推导出的属性优先级顺序。
+
+    这些信息会和育成课题一起写入 `ctx.idol_page_info`，供后续诊断和策略分析使用。
+    """
     tokens = _extract_training_body_tokens(body_frame)
     task_heading_top = min(
         (token.rect.y1 for token in tokens if ProduceText.TRAINING_TASKS in token.text),
@@ -537,6 +622,7 @@ def _parse_tasks_from_body_frame(
     body_frame: np.ndarray,
     seen_conditions: set[str],
 ) -> tuple[list[Dict[str, Any]], _Rect]:
+    """解析`tasks_from_body_frame`。"""
     task_region = _locate_training_task_region(body_frame)
     task_lines = _tokens_to_lines(_extract_ocr_tokens(body_frame, task_region, scale=_OCR_SCALE))
 
@@ -586,6 +672,7 @@ def _parse_tasks_from_body_frame(
 
 
 def _resize_pair_for_ssim(first: np.ndarray, second: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """将两张图缩放到可比较尺寸以计算 SSIM。"""
     height = min(first.shape[0], second.shape[0])
     width = min(first.shape[1], second.shape[1])
     if height <= 0 or width <= 0:
@@ -600,6 +687,12 @@ def _resize_pair_for_ssim(first: np.ndarray, second: np.ndarray) -> tuple[np.nda
 def _get_training_info_modal_body(
     app: "AppProcessor",
 ) -> tuple[Any, _Rect, np.ndarray] | None:
+    """获取育成信息弹窗的正文区域与对应截图。
+
+    Returns:
+        tuple[Any, _Rect, np.ndarray] | None: 返回原始 modal、正文区域矩形以及正文截图副本；
+            若当前没有弹窗、没有正文框，或正文区域无效，则返回 None。
+    """
     modal = app.game_utils.try_get_modal(no_body=True)
     if modal is None or modal.body_box is None or modal.body_box.frame is None:
         return None
@@ -639,6 +732,11 @@ def _resolve_modal_overlay_dismiss_point(modal: Any, frame_shape: Sequence[int])
 
 
 def _is_idol_page_layout_visible(results: Yolo_Results | None) -> bool:
+    """判断当前检测结果是否仍像偶像卡选择页的布局。
+
+    只要能看到当前已选偶像卡，或同时看到 vocal/dance/visual 三个属性条，
+    就认为页面仍停留在偶像卡页，可继续执行推荐效果与育成信息采集。
+    """
     if not results:
         return False
     if results.exists_label(BaseUILabels.PRODUCT_CARD_SELECTED):
@@ -658,9 +756,16 @@ class CollectIdolPageInfoStep(ProduceStep):
     step_name = "collect_idol_page_info"
 
     def validate(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """确认当前页面仍是可采集信息的偶像卡选择页。"""
         return _is_idol_page_layout_visible(getattr(app, "latest_results", None))
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """采集偶像页的推荐效果与育成信息，然后推进到支援卡编成页。
+
+        这是一个带诊断性质的补充步骤：即便其中某项采集失败，也不会中断主流程，
+        而是记录告警后继续点击「次へ」。只有在页面迟迟没有进入支援卡编成页时，
+        才会抛出超时异常。
+        """
         try:
             self._collect_recommended_effects(app, ctx)
         except Exception as exc:
@@ -671,7 +776,7 @@ class CollectIdolPageInfoStep(ProduceStep):
         except Exception as exc:
             logger.warning(f"育成情報采集失败: {exc}")
 
-        # 点击「次へ」进入支援卡编成
+        # 点击“次へ”进入支援卡编成。
         app.game_utils.click_button(
             ButtonText.NEXT,
             match_config=MatchConfig(fuzz_threshold=80),
@@ -690,6 +795,14 @@ class CollectIdolPageInfoStep(ProduceStep):
         raise TimeoutError("等待支援卡编成页超时")
 
     def _clear_recommendation_tooltip(self, app: "AppProcessor") -> None:
+        """处理clear、recommendation、tooltip并返回结果。
+
+        Args:
+            app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+        Returns:
+            None: 仅产生副作用，不返回业务值。
+        """
         dismiss_point = _resolve_tooltip_dismiss_point(getattr(app, "latest_results", None))
         if dismiss_point is None:
             logger.debug("未找到选中偶像卡框，跳过 tooltip 清场点击")
@@ -713,7 +826,7 @@ class CollectIdolPageInfoStep(ProduceStep):
         has_close_label = bool(results and results.exists_label(BaseUILabels.CLOSE_BUTTON))
         if has_next and _is_idol_page_layout_visible(results) and not (has_modal_header or has_close_label):
             return False
-        app.device.click(close_btn.cx, close_btn.cy, "close-recommend-detail-overlay")
+        app.device.click_element(close_btn)
         sleep(0.5)
         wait_frame_stable(app, timeout=2.0)
         return True
@@ -724,7 +837,7 @@ class CollectIdolPageInfoStep(ProduceStep):
         cancel_btn = find_button(app, ButtonText.CANCEL, fuzz_threshold=70)
         confirm_btn = find_button(app, ButtonText.CONFIRM, fuzz_threshold=70)
         if cancel_btn is not None and confirm_btn is not None:
-            app.device.click(cancel_btn.cx, cancel_btn.cy, "cancel-recommend-selection-modal")
+            app.device.click_element(cancel_btn)
             sleep(0.5)
             wait_frame_stable(app, timeout=2.5)
             return True
@@ -817,7 +930,7 @@ class CollectIdolPageInfoStep(ProduceStep):
             logger.warning("未找到育成情報按钮")
             return
 
-        app.device.click(btn.cx, btn.cy)
+        app.device.click_element(btn)
         sleep(1.0)
         wait_frame_stable(app, timeout=3.0)
 
@@ -947,11 +1060,18 @@ class CollectIdolPageInfoStep(ProduceStep):
         return all_tasks
 
     def _close_training_info(self, app: "AppProcessor") -> None:
-        """关闭育成情報面板。"""
+        """关闭training、info并返回结果。
+
+        Args:
+            app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+        Returns:
+            None: 仅产生副作用，不返回业务值。
+        """
 
         btn = find_button(app, ButtonText.CLOSE, fuzz_threshold=70)
         if btn is not None:
-            app.device.click(btn.cx, btn.cy)
+            app.device.click_element(btn)
             sleep(0.5)
             wait_frame_stable(app, timeout=2.0)
             return
@@ -969,6 +1089,16 @@ def _finalize_task(
     tasks: List[Dict[str, Any]],
     seen: set[str],
 ) -> None:
+    """处理finalize、task并返回结果。
+
+    Args:
+        task: 用于提供task相关输入。
+        tasks: 用于提供tasks相关输入。
+        seen: 用于提供seen相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     cond = task.get("condition", "")
     if cond and cond not in seen:
         seen.add(cond)

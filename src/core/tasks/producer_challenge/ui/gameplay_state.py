@@ -30,9 +30,25 @@ if TYPE_CHECKING:
     from src.main import AppProcessor
 
 _DIALOGUE_TEXT_CHAR_RE = re.compile(r"[ぁ-んァ-ヶ一-龯]")
+_SKILL_REWARD_LAYOUT_DUP_TOLERANCE = 56
 
 
 def _call_ui_attr(name: str, fallback, *args, **kwargs):
+    """动态调用 UI 模块中的函数，支持运行时替换实现。
+
+    优先从 `src.core.tasks.producer_challenge.ui` 模块中按名称获取函数，
+    如果不存在或模块未加载则回退到 fallback。该机制主要用于调试时替换
+    OCR 等函数而不修改调用方代码。
+
+    Args:
+        name: 要在 UI 模块中查找的函数名。
+        fallback: 默认实现函数，当 UI 模块中找不到 name 时使用。
+        *args: 位置参数，透传给目标函数。
+        **kwargs: 关键字参数，透传给目标函数。
+
+    Returns:
+        目标函数的返回值，类型取决于被调用的函数。
+    """
     ui_module = sys.modules.get("src.core.tasks.producer_challenge.ui")
     if ui_module is not None:
         candidate = getattr(ui_module, name, fallback)
@@ -42,6 +58,17 @@ def _call_ui_attr(name: str, fallback, *args, **kwargs):
 
 
 def _button_like_boxes(results) -> list:
+    """从 YOLO 检测结果中提取所有按钮类检测框（去重后）。
+
+    聚合 BUTTON、CONFIRM_BUTTON、CANCEL_BUTTON、PLOT_FAST_FORWARD_BUTTON、SKIP_BUTTON
+    五种标签的检测框，基于坐标+标签进行去重。
+
+    Args:
+        results: YOLO 检测结果对象，提供 filter_by_label 方法。为 None 时返回空列表。
+
+    Returns:
+        list: 去重后的检测框对象列表。
+    """
     if results is None:
         return []
     boxes = []
@@ -65,6 +92,17 @@ def _button_like_boxes(results) -> list:
 
 
 def collect_button_like_texts(results) -> list[str]:
+    """对画面中所有按钮类检测框进行 OCR，收集识别出的文本。
+
+    遍历 _button_like_boxes 返回的检测框，对每个框的 frame 做 OCR 识别，
+    同时通过 DebugTools 添加可视化标注框以便调试。
+
+    Args:
+        results: YOLO 检测结果对象，提供 filter_by_label 方法。
+
+    Returns:
+        list[str]: 各按钮框 OCR 识别出的非空文本列表。
+    """
     texts: list[str] = []
     debugger = DebugTools()
     for box in _button_like_boxes(results):
@@ -86,12 +124,32 @@ def collect_button_like_texts(results) -> list[str]:
 
 
 def collect_frame_text(results) -> str:
+    """对整帧画面进行 OCR，返回识别出的全部文本。
+
+    Args:
+        results: YOLO 检测结果对象，其 frame 属性为待识别的图像。为 None 时返回空字符串。
+
+    Returns:
+        str: 整帧 OCR 识别结果，识别失败时返回空字符串。
+    """
     if results is None:
         return ""
     return _call_ui_attr("ocr_text", ocr_text, getattr(results, "frame", None))
 
 
 def _contains_text(text: str, *tokens: str) -> bool:
+    """判断文本中是否包含任意一个目标 token（归一化后比较）。
+
+    将输入文本和所有 token 都通过 normalize_text 归一化（全角转半角、去空白等），
+    然后检查是否有任一 token 是归一化后文本的子串。
+
+    Args:
+        text: 待检查的源文本，通常来自 OCR 结果。
+        *tokens: 一个或多个待匹配的子串 token。
+
+    Returns:
+        bool: 包含任一 token 返回 True，文本为空或全部不匹配返回 False。
+    """
     normalized = normalize_text(text)
     if not normalized:
         return False
@@ -99,10 +157,34 @@ def _contains_text(text: str, *tokens: str) -> bool:
 
 
 def _button_text_matches(button_texts: list[str], *tokens: str) -> bool:
+    """判断按钮文本列表中是否有任一文本包含任意一个目标 token。
+
+    对 button_texts 中的每个文本调用 _contains_text，只要有一个文本命中任一 token
+    即返回 True。
+
+    Args:
+        button_texts: 按钮 OCR 文本列表。
+        *tokens: 一个或多个待匹配的子串 token。
+
+    Returns:
+        bool: 有匹配返回 True，全部不匹配返回 False。
+    """
     return any(_contains_text(text, *tokens) for text in button_texts)
 
 
 def _looks_like_dialogue_text(frame_text: str) -> bool:
+    """判断 OCR 文本是否像对话正文（而非 UI 元素或按钮文本）。
+
+    通过统计日文字符（平假名/片假名/汉字）数量并检查是否包含对话常见结尾
+    标记（です/ます/。/！等）来判断。字符数 >= 8 且含对话标记，或字符数 >= 14
+    时判定为对话文本。
+
+    Args:
+        frame_text: 整帧 OCR 识别出的文本。
+
+    Returns:
+        bool: 判定为对话正文返回 True，否则返回 False。
+    """
     normalized = normalize_text(frame_text)
     if not normalized:
         return False
@@ -115,6 +197,22 @@ def _looks_like_dialogue_text(frame_text: str) -> bool:
 
 
 def _looks_like_present_support_selection(frame_text: str, results) -> bool:
+    """判断当前页面是否为「活動支給」支援卡选择页。
+
+    综合 OCR 文本和 YOLO 标签进行判断：
+    - OCR 包含「活動支給」文本
+    - OCR 包含选择提示（「選択」等）
+    - OCR 包含 3 个以上的 "+数字" 加成数值
+    - YOLO 检测到至少 2 个参数标签（VOCAL/DANCE/VISUAL）
+    - OCR 包含审查条件（「審査基準」）
+
+    Args:
+        frame_text: 整帧 OCR 识别出的文本。
+        results: YOLO 检测结果对象，用于检查参数标签是否存在。
+
+    Returns:
+        bool: 满足所有条件返回 True，否则返回 False。
+    """
     normalized = normalize_text(frame_text)
     if not normalized:
         return False
@@ -220,6 +318,17 @@ def _looks_like_present_support_showcase(frame_text: str, results) -> bool:
 
 
 def _looks_like_loading_screen(results) -> bool:
+    """判断当前画面是否为 loading 加载页面。
+
+    裁剪画面右下角区域（78%-100% 高度，60%-100% 宽度）进行 OCR，
+    检查是否包含 LOADING_TOKENS 中的加载相关文本（如 "LOADING"）。
+
+    Args:
+        results: YOLO 检测结果对象，其 frame 属性为待识别的图像。
+
+    Returns:
+        bool: 判定为 loading 页面返回 True，否则返回 False。
+    """
     frame = getattr(results, "frame", None)
     if frame is None or not hasattr(frame, "shape"):
         return False
@@ -263,10 +372,23 @@ def _looks_like_exam_prep_screen(results) -> bool:
 
 
 def _has_center_p_drink_boxes(results) -> bool:
+    """判断画面中是否存在位于中上区域的 P 饮料检测框。
+
+    筛选 P_DRINK 标签的检测框，检查是否有任一框的中心 Y 坐标小于画面高度
+    的 85%。用于区分行程栏底部的 P 饮料图标和 P 饮料选择弹窗中的选项。
+
+    Args:
+        results: YOLO 检测结果对象，提供 filter_by_label 方法。
+
+    Returns:
+        bool: 存在中上区域的 P 饮料框返回 True，否则返回 False。
+    """
     if results is None:
         return False
     frame = getattr(results, "frame", None)
-    frame_height = frame.shape[0] if frame is not None and hasattr(frame, "shape") else 2340
+    if frame is None or not hasattr(frame, "shape"):
+        return False
+    frame_height = frame.shape[0]
     p_drink_boxes = results.filter_by_label(ProducerLabels.P_DRINK)
     return any(box.cy < frame_height * 0.85 for box in p_drink_boxes)
 
@@ -276,7 +398,18 @@ def _looks_like_p_drink_receive_confirmation(
     *,
     ctx: "ProduceContext | None" = None,
 ) -> bool:
-    """识别已选定 P 饮料后的领取确认页。"""
+    """判断当前界面是否为 P 饮料领取确认页。
+
+    要求上一个稳定位置是 P 饮料选择阶段（P_DRINK_SELECTION_POSITIONS），
+    且 OCR 文本中包含「受取」关键字。
+
+    Args:
+        frame_text: 整帧 OCR 识别出的文本。
+        ctx: 培育上下文对象，用于获取 last_stable_position 判断阶段连续性。
+
+    Returns:
+        bool: 判定为 P 饮料领取确认页返回 True，否则返回 False。
+    """
     normalized = normalize_text(frame_text)
     if not normalized:
         return False
@@ -388,14 +521,130 @@ def _looks_like_skill_reward_showcase(results, frame_text: str) -> bool:
     if results is None:
         return False
 
-    skill_card_count = sum(
-        len(results.filter_by_label(label))
-        for label in (
-            ProducerLabels.SKILL_CARD_ACTIVE,
-            ProducerLabels.SKILL_CARD_MENTAL,
-            ProducerLabels.SKILL_CARD_TRAP,
+       def _collect_reward_layout_boxes(labels: tuple[str, ...]) -> list[tuple[str, object]]:
+            """按指定标签收集检测框，返回 (label, box) 元组列表。
+
+            Args:
+                labels: 要查询的 YOLO 标签名称元组。
+
+            Returns:
+                list[tuple[str, object]]: 每个匹配检测框与其标签的元组列表。
+            """
+        collected: list[tuple[str, object]] = []
+        for label in labels:
+            for box in results.filter_by_label(label):
+                collected.append((label, box))
+        return collected
+
+       def _box_area(box) -> int:
+            """计算检测框的面积（宽高乘积）。
+
+            Args:
+                box: 检测框对象，需具有 x, y, w, h 属性。
+
+            Returns:
+                int: 检测框面积，宽高为负时返回 0。
+            """
+        return max(0, int(getattr(box, "w", 0) - getattr(box, "x", 0))) * max(
+            0, int(getattr(box, "h", 0) - getattr(box, "y", 0))
+        )
+
+      def _dedup_reward_layout_boxes(boxes: list[tuple[str, object]]) -> list[tuple[str, object]]:
+            """对技能奖励检测框进行去重，保留优先级更高的框。
+
+            以中心点坐标为基准，在容差范围（56px）内的框视为重复。去重策略：
+            - 非 INFO 标签优先替换 INFO 标签（具体类型优先于通用类型）
+            - 同类标签时面积更大的优先保留
+
+            Args:
+                boxes: (label, box) 元组列表。
+
+            Returns:
+                list[tuple[str, object]]: 去重后的元组列表。
+            """
+        deduped: list[tuple[str, object]] = []
+        for label, box in boxes:
+            cx = int(getattr(box, "cx", 0))
+            cy = int(getattr(box, "cy", 0))
+            replaced = False
+            for idx, (kept_label, kept_box) in enumerate(deduped):
+                kept_cx = int(getattr(kept_box, "cx", 0))
+                kept_cy = int(getattr(kept_box, "cy", 0))
+                if (
+                    abs(cx - kept_cx) <= _SKILL_REWARD_LAYOUT_DUP_TOLERANCE
+                    and abs(cy - kept_cy) <= _SKILL_REWARD_LAYOUT_DUP_TOLERANCE
+                ):
+                    kept_is_info = kept_label == ProducerLabels.SKILL_CARD_INFO
+                    current_is_info = label == ProducerLabels.SKILL_CARD_INFO
+                    if kept_is_info and not current_is_info:
+                        deduped[idx] = (label, box)
+                    elif kept_is_info == current_is_info and _box_area(box) > _box_area(kept_box):
+                        deduped[idx] = (label, box)
+                    replaced = True
+                    break
+            if not replaced:
+                deduped.append((label, box))
+        return deduped
+
+    primary_card_boxes = _dedup_reward_layout_boxes(
+        _collect_reward_layout_boxes(
+            (
+                ProducerLabels.SKILL_CARD_ACTIVE,
+                ProducerLabels.SKILL_CARD_MENTAL,
+                ProducerLabels.SKILL_CARD_TRAP,
+            )
         )
     )
+    info_boxes = _dedup_reward_layout_boxes(
+        _collect_reward_layout_boxes((ProducerLabels.SKILL_CARD_INFO,))
+    )
+    primary_card_count = len(primary_card_boxes)
+    frame = getattr(results, "frame", None)
+    if frame is None:
+        return False
+    frame_h = int(frame.shape[0])
+    frame_w = int(frame.shape[1])
+    single_card_center_y = (
+        int(getattr(primary_card_boxes[0][1], "cy", frame_h))
+        if primary_card_count == 1 and primary_card_boxes
+        else frame_h
+    )
+    single_card_is_high = single_card_center_y <= int(frame_h * 0.70)
+    has_info_panel_below = False
+    if primary_card_count == 1 and info_boxes:
+        single_card_box = primary_card_boxes[0][1]
+        single_card_cy = int(getattr(single_card_box, "cy", 0))
+        info_below = [
+            info_box
+            for _, info_box in info_boxes
+            if int(getattr(info_box, "cy", 0)) >= single_card_cy + int(frame_h * 0.08)
+        ]
+        has_info_panel_below = bool(info_below)
+        if has_info_panel_below:
+            # 识别到「上方单卡 + 下方信息面板」时打调试框，便于追踪该分支是否触发。
+            chosen_info = info_below[0]
+            DebugTools().add_box(
+                int(getattr(single_card_box, "x", 0)),
+                int(getattr(single_card_box, "y", 0)),
+                int(getattr(single_card_box, "w", frame_w)),
+                int(getattr(single_card_box, "h", frame_h)),
+                label="skill_reward_showcase:top_card",
+                color=(255, 180, 0),
+                alpha=0.10,
+                duration=2.5,
+                font_size=16,
+            )
+            DebugTools().add_box(
+                int(getattr(chosen_info, "x", 0)),
+                int(getattr(chosen_info, "y", 0)),
+                int(getattr(chosen_info, "w", frame_w)),
+                int(getattr(chosen_info, "h", frame_h)),
+                label="skill_reward_showcase:info_panel",
+                color=(0, 220, 255),
+                alpha=0.10,
+                duration=2.5,
+                font_size=16,
+            )
     hud_marker_count = sum(
         1
         for label in (
@@ -437,15 +686,23 @@ def _looks_like_skill_reward_showcase(results, frame_text: str) -> bool:
             BaseUILabels.PLOT_FAST_FORWARD_BUTTON,
         )
     )
-    # HUD 完整时走标准路径；Skill Card Info + 详细文本时放宽 HUD 要求
-    # （メモリー効果展示页 HUD 被遮挡，只剩卡牌 + Info）
+    # 展示页判据：单卡且位置明显高于三选一卡行。
+    # 再结合 HUD / ActionInfo / 详情文本约束，避免把普通三选一误判为展示。
     return bool(
-        skill_card_count == 1
+        primary_card_count == 1
+        and single_card_is_high
+        and not has_other_controls
         and (
             (hud_marker_count >= 3 and has_action_info and has_showcase_text)
             or (has_skill_card_info and has_skill_card_detail_text)
+            or (has_skill_card_info and has_info_panel_below)
+            or (
+                hud_marker_count >= 2
+                and has_action_info
+                and not results.exists_label(ProducerLabels.PC_ACTION)
+                and not results.exists_label(ProducerLabels.PC_RECOMMEND_ACTION)
+            )
         )
-        and not has_other_controls
     )
 
 
@@ -561,9 +818,9 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
     if results is None:
         return GameplayPhase.UNKNOWN
 
-    # ── 横画面检测（ライブ演出）──
-    # ライブ演出中はゲーム画面が横向き（width > height）になる。
-    # YOLO は縦画面用にトレーニングされているため、横画面ではラベルが検出されない。
+    # ── 横画面检测（Live演出）──
+    # Live 演出中游戏画面会横屏（width > height）。
+    # YOLO 按竖屏训练，横屏时可能无法检测到标签。
     frame = getattr(results, "frame", None)
     if frame is not None and frame.shape[1] > frame.shape[0] * 1.3:
         return GameplayPhase.LIVE_PERFORMANCE
@@ -631,7 +888,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
         and (has_button or has_confirm or has_disable or has_cancel)
     ):
         return GameplayPhase.CONSULT
-    # Pアイテム選択：Special Item 出现且无技能卡、无行动
+    # P道具选择：出现 Special Item 且无技能卡、无行动。
     if has_special_item and not has_skill_card and not has_action:
         return GameplayPhase.ITEM_SELECT
     if has_skill_card and (has_bonus_indicator or has_pc_skip) and not has_action and not has_training_score:
@@ -699,7 +956,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
         and _looks_like_dialogue_text(frame_text)
     ):
         return GameplayPhase.DIALOGUE
-    # おでかけ等事件中展示技能卡的对话画面：
+    # 外出等事件中展示技能卡的对话画面：
     # 有技能卡 + 有 HUD + 无训练/考试标签 + 无操作按钮 + 有对话文本 → DIALOGUE
     if (
         has_skill_card
@@ -714,7 +971,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
         return GameplayPhase.DIALOGUE
 
     # 牌组查看器覆盖层：Tab Bar + Cancel + 大量技能卡 + 无 Confirm
-    # → 属于弹窗覆盖层（如"所持スキルカード"），非技能奖励选择
+    # → 属于弹窗覆盖层（如“所持スキルカード”），不是技能奖励选择。
     has_tab_bar = results.exists_label(BaseUILabels.TAB_BAR)
     if (
         has_tab_bar
@@ -764,6 +1021,18 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
 
 
 def detect_gameplay_phase(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str:
+    """检测当前 gameplay 阶段（Phase）。
+
+    基于最新一帧 YOLO 检测结果，委托给 classify_gameplay_phase 判断当前
+    画面属于哪个游戏阶段（如 SCHEDULE、LESSON、DIALOGUE、EXAM 等）。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 中的 YOLO 检测结果。
+        ctx: 培育上下文对象，用于获取 last_stable_position 等辅助信息。
+
+    Returns:
+        str: GameplayPhase 枚举值的字符串表示。
+    """
     return _call_ui_attr(
         "classify_gameplay_phase",
         classify_gameplay_phase,
@@ -780,6 +1049,7 @@ def classify_pipeline_position(
     ctx: "ProduceContext | None" = None,
     phase: str | None = None,
 ) -> str:
+    """判定`pipeline_position`类别。"""
     if final_confirm:
         return GameplayPosition.FINAL_CONFIRM
 
@@ -829,7 +1099,7 @@ def classify_pipeline_position(
             return GameplayPosition.SCHEDULE_PRESENT_SUPPORT
         if _looks_like_present_support_showcase(frame_text, results):
             return GameplayPosition.SCHEDULE_PRESENT_SUPPORT_SHOWCASE
-        # 行程事件对话选项（おでかけ等）— 有选项且无行程行动按钮
+        # 行程事件对话选项（外出等）— 有选项且无行程行动按钮
         if has_opts and not has_pc_action:
             return GameplayPosition.SCHEDULE_EVENT_OPTIONS
         # 授業課程選項：PC_ACTION + 快進按鈕 + 無推薦標記 + 少量選項 + 「授業」文本
@@ -847,7 +1117,7 @@ def classify_pipeline_position(
             return GameplayPosition.SCHEDULE_SELECTED
         if has_recommend:
             return GameplayPosition.SCHEDULE_RECOMMEND
-        # 行程事件対話テキスト（快進ボタンあり、選択肢なし、行動なし）
+        # 行程事件对话文本（有快进按钮、无选项、无行动）。
         if has_ff and not has_opts and not has_pc_action:
             return GameplayPosition.SCHEDULE_EVENT_DIALOGUE
         return GameplayPosition.SCHEDULE_IDLE
@@ -875,12 +1145,23 @@ def classify_pipeline_position(
         frame_text = _call_ui_attr("collect_frame_text", collect_frame_text, results)
         if _looks_like_skill_reward_showcase(results, frame_text):
             return GameplayPosition.SKILL_REWARD_SHOWCASE
+        # 出现“请选择要领取的技能卡”提示时，明确是未选中状态。
+        if _contains_text(frame_text, ProduceText.SKILL_REWARD_SELECT):
+            return GameplayPosition.SKILL_REWARD_IDLE
         if results.exists_label(ProducerLabels.CONFIRM_BUTTON):
             return GameplayPosition.SKILL_REWARD_SELECTED
         if results.exists_label(ProducerLabels.DISABLE_BUTTON):
             return GameplayPosition.SKILL_REWARD_IDLE
         if results.exists_label(BaseUILabels.BUTTON):
-            return GameplayPosition.SKILL_REWARD_SELECTED
+            button_texts = _call_ui_attr("collect_button_like_texts", collect_button_like_texts, results)
+            has_receive_button = _button_text_matches(button_texts, ProduceText.RECEIVE)
+            has_redraw_button = _button_text_matches(button_texts, ProduceText.REDRAW, ProduceText.REDRAW_SHORT)
+            if has_redraw_button and not has_receive_button:
+                return GameplayPosition.SKILL_REWARD_IDLE
+            if has_receive_button and not has_redraw_button:
+                return GameplayPosition.SKILL_REWARD_SELECTED
+            # OCR 不稳定时默认保守为 idle，避免误入 selected 后死循环确认。
+            return GameplayPosition.SKILL_REWARD_IDLE
         return GameplayPosition.SKILL_REWARD_IDLE
 
     if phase == GameplayPhase.CONSULT:
@@ -1028,6 +1309,20 @@ def detect_gameplay_state(
 
 
 def get_pipeline_position(app: "AppProcessor", ctx: "ProduceContext | None" = None) -> str:
+    """获取当前流水线位置（Position）。
+
+    基于最新一帧 YOLO 检测结果，结合弹窗标题和最终确认页状态，委托给
+    classify_pipeline_position 判断当前画面在流水线中的精细位置。
+    Position 比 Phase 更细粒度，例如 SCHEDULE 阶段可细分为
+    SCHEDULE_IDLE、SCHEDULE_RECOMMEND、SCHEDULE_SELECTED 等。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 和 game_utils.try_get_modal。
+        ctx: 培育上下文对象，用于获取 last_stable_position 等辅助信息。
+
+    Returns:
+        str: GameplayPosition 枚举值的字符串表示。
+    """
     modal_title: str | None = None
     results = app.latest_results
     if results and results.exists_label(ProducerLabels.MODAL_HEADER):

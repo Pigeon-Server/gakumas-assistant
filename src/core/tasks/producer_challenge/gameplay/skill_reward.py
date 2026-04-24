@@ -9,9 +9,9 @@
 部分场景可选「再抽選」（re-draw）刷新候选卡。
 
 交互模式（经 ADB 实测确认）:
-  - 第一次点击卡片: 高亮选中，确认按钮变为可用，信息面板显示卡名/效果。
-  - 第二次点击确认按钮（受け取る）: 接受卡片并推进。
-  - 点击「再抽選」按钮: 消耗一次再抽選机会，刷新候选卡。
+   - 第一次点击卡片：高亮选中，确认按钮变为可用，信息面板显示卡名/效果。
+   - 第二次点击确认按钮（受け取る）：接受卡片并推进。
+   - 点击「再抽選」按钮：消耗一次再抽選机会，刷新候选卡。
 
 卡片识别优先级:
   1. CLIP 图像记忆（高置信度、无交互延迟）
@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import sleep
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any, List, Sequence
 
 import cv2
 
@@ -38,6 +38,7 @@ from src.core.tasks.producer_challenge.catalog import match_card_and_item_entrie
 from src.core.tasks.producer_challenge.shared.common import (
     detect_bottom_white_modal_region,
     invoke_decision_strategy,
+    normalize_text,
     ocr_text,
     resolve_candidate_index,
 )
@@ -99,6 +100,291 @@ _SKILL_REWARD_SETTLE_STABLE_BASELINE_STREAK = 2
 _SKILL_REWARD_BASELINE_TOLERANCE_RATIO = 0.016
 _SKILL_REWARD_BASELINE_TOLERANCE_MIN = 14
 _SKILL_REWARD_BASELINE_TOLERANCE_MAX = 52
+_SKILL_REWARD_WHITE_HSV_LOWER = (0, 0, 233)
+_SKILL_REWARD_WHITE_HSV_UPPER = (179, 61, 255)
+_SKILL_REWARD_DUPLICATE_TOLERANCE = 64
+_SKILL_REWARD_LABEL_PRIORITY: dict[str, int] = {
+    BaseUILabels.SKILL_CARD_ACTIVE: 0,
+    BaseUILabels.SKILL_CARD_MENTAL: 0,
+    BaseUILabels.SKILL_CARD_TRAP: 0,
+    ProducerLabels.SKILL_CARD_INFO: 1,
+}
+
+
+def _normalize_skill_reward_candidate_title(text: str) -> str:
+    """标准化技能卡候选标题，去除常见噪声符号。"""
+    normalized = normalize_ocr_jp(fullwidth_to_halfwidth(str(text or "")))
+    normalized = _SKILL_REWARD_NAME_NOISE_RE.sub("", normalized).strip()
+    return normalized
+
+
+def _looks_like_skill_reward_effect_text(text: str) -> bool:
+    """判断文本是否像技能奖励效果描述。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
+    normalized = fullwidth_to_halfwidth(str(text or "")).strip()
+    if not normalized:
+        return False
+    if normalized.startswith(_SKILL_REWARD_EFFECT_PREFIXES):
+        return True
+    return bool(_SKILL_REWARD_EFFECT_LINE_RE.search(normalized))
+
+
+def _looks_like_plausible_skill_reward_name(text: str) -> bool:
+    """判断标题是否像“可用于决策”的卡名，过滤明显乱码。"""
+    normalized = _normalize_skill_reward_candidate_title(text)
+    if len(normalized) < 2:
+        return False
+    if _looks_like_skill_reward_effect_text(normalized):
+        return False
+    if any(token in normalized for token in _SKILL_REWARD_TITLE_NOISE_TOKENS):
+        return False
+    return bool(_SKILL_REWARD_JP_CHAR_RE.search(normalized))
+
+
+def _group_skill_reward_rows(
+    boxes: Sequence[tuple[str, Any]],
+    *,
+    tolerance: int,
+) -> list[list[tuple[str, Any]]]:
+    """处理group、skill、奖励、rows并返回结果。
+
+    Args:
+        boxes: 检测框集合。
+        tolerance: 用于提供tolerance相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
+    groups: list[list[tuple[str, Any]]] = []
+    for item in sorted(boxes, key=lambda pair: int(getattr(pair[1], "cy", 0))):
+        cy = int(getattr(item[1], "cy", 0))
+        placed = False
+        for group in groups:
+            group_cy = int(sum(int(getattr(box, "cy", 0)) for _, box in group) / max(len(group), 1))
+            if abs(cy - group_cy) <= tolerance:
+                group.append(item)
+                placed = True
+                break
+        if not placed:
+            groups.append([item])
+    return groups
+
+
+def _filter_skill_reward_boxes_by_row(
+    app: "AppProcessor",
+    boxes: list[tuple[str, Any]],
+) -> list[tuple[str, Any]]:
+    """候选数量异常偏多时，只保留最可信的一行奖励卡。"""
+    if len(boxes) <= 4:
+        return boxes
+
+    heights = [
+        max(1, int(getattr(box, "h", 0) - getattr(box, "y", 0)))
+        for _, box in boxes
+    ]
+    median_height = sorted(heights)[len(heights) // 2] if heights else 180
+    row_tolerance = max(32, min(96, int(median_height * 0.42)))
+    row_groups = _group_skill_reward_rows(boxes, tolerance=row_tolerance)
+    if len(row_groups) <= 1:
+        return boxes
+
+    best_group = max(
+        row_groups,
+        key=lambda group: (
+            len(group),
+            int(sum(int(getattr(box, "cy", 0)) for _, box in group) / max(len(group), 1)),
+        ),
+    )
+    if len(best_group) >= len(boxes):
+        return boxes
+
+    keep_set = {id(box) for _, box in best_group}
+    filtered = [pair for pair in boxes if id(pair[1]) in keep_set]
+    debugger = getattr(app, "debug_tools", None)
+    if debugger is not None:
+        for _, box in boxes:
+            is_kept = id(box) in keep_set
+            debugger.add_box(
+                int(getattr(box, "x", 0)),
+                int(getattr(box, "y", 0)),
+                int(getattr(box, "w", 0)),
+                int(getattr(box, "h", 0)),
+                label="skill_reward_row_keep" if is_kept else "skill_reward_row_drop",
+                color=(90, 210, 120) if is_kept else (255, 120, 120),
+                alpha=0.08,
+                duration=2.0,
+                font_size=12,
+            )
+    logger.debug(
+        "skill_reward: 候选行过滤 {} -> {} (rows={})",
+        len(boxes),
+        len(filtered),
+        [len(group) for group in row_groups],
+    )
+    return filtered
+
+
+def _detect_skill_reward_white_panel_fallback(
+    frame: Any,
+    *,
+    card_boxes: Sequence[Any],
+    debug_tools: Any = None,
+) -> tuple[int, int, int, int] | None:
+    """当通用白底检测失败时，按技能奖励场景做定向兜底。"""
+    if frame is None or getattr(frame, "size", 0) <= 0 or not card_boxes:
+        return None
+    frame_h, frame_w = frame.shape[:2]
+    valid_boxes = []
+    for box in card_boxes:
+        x1 = int(getattr(box, "x", 0))
+        y1 = int(getattr(box, "y", 0))
+        x2 = int(getattr(box, "w", 0))
+        y2 = int(getattr(box, "h", 0))
+        if x2 > x1 and y2 > y1:
+            valid_boxes.append((x1, y1, x2, y2))
+    if not valid_boxes:
+        return None
+    row_left = min(x1 for x1, _, _, _ in valid_boxes)
+    row_right = max(x2 for _, _, x2, _ in valid_boxes)
+    row_top = min(y1 for _, y1, _, _ in valid_boxes)
+    row_h = max(1, max(y2 for _, _, _, y2 in valid_boxes) - row_top)
+    row_w = max(1, row_right - row_left)
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, _SKILL_REWARD_WHITE_HSV_LOWER, _SKILL_REWARD_WHITE_HSV_UPPER)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    best_rect: tuple[int, int, int, int] | None = None
+    best_score = -1e9
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        x, y, w_rect, h_rect = cv2.boundingRect(contour)
+        if w_rect <= 0 or h_rect <= 0:
+            continue
+        x2 = x + w_rect
+        y2 = y + h_rect
+        if y >= row_top - int(row_h * 0.6):
+            continue
+        if y2 <= row_top + int(row_h * 0.2):
+            continue
+        if w_rect < frame_w * 0.58:
+            continue
+        if h_rect < row_h * 1.4:
+            continue
+        # 必须覆盖卡片行的大部分横向范围，避免误命中侧边高亮块。
+        overlap_w = max(0, min(x2, row_right) - max(x, row_left))
+        if overlap_w < row_w * 0.72:
+            continue
+        center_x = (x + x2) / 2.0
+        center_penalty = abs(center_x - frame_w / 2.0) / max(frame_w / 2.0, 1.0)
+        vertical_bonus = max(0.0, (row_top - y) / max(row_h * 2.0, 1.0))
+        score = w_rect * 0.7 + h_rect * 0.3 + vertical_bonus * 80.0 - center_penalty * 120.0
+        if score > best_score:
+            best_score = score
+            best_rect = (
+                max(0, x),
+                max(0, y),
+                min(frame_w, x2),
+                min(frame_h, y2),
+            )
+
+    if best_rect is not None and debug_tools is not None:
+        debug_tools.add_box(
+            best_rect[0],
+            best_rect[1],
+            best_rect[2],
+            best_rect[3],
+            label="skill_reward_white_panel_hsv_fallback",
+            color=(255, 180, 80),
+            alpha=0.10,
+            duration=2.5,
+            font_size=13,
+        )
+    return best_rect
+
+
+def _is_same_reward_card_box(a: Any, b: Any, *, tolerance: int) -> bool:
+    """判断same、奖励、卡牌、box是否成立。
+
+    Args:
+        a: 用于提供a相关输入。
+        b: 用于提供b相关输入。
+        tolerance: 用于提供tolerance相关输入。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
+    ax1, ay1 = int(getattr(a, "x", 0)), int(getattr(a, "y", 0))
+    ax2, ay2 = int(getattr(a, "w", 0)), int(getattr(a, "h", 0))
+    bx1, by1 = int(getattr(b, "x", 0)), int(getattr(b, "y", 0))
+    bx2, by2 = int(getattr(b, "w", 0)), int(getattr(b, "h", 0))
+    if ax2 <= ax1 or ay2 <= ay1 or bx2 <= bx1 or by2 <= by1:
+        return False
+
+    acx, acy = int(getattr(a, "cx", (ax1 + ax2) // 2)), int(getattr(a, "cy", (ay1 + ay2) // 2))
+    bcx, bcy = int(getattr(b, "cx", (bx1 + bx2) // 2)), int(getattr(b, "cy", (by1 + by2) // 2))
+    if abs(acx - bcx) <= tolerance and abs(acy - bcy) <= tolerance:
+        return True
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0:
+        return False
+    area_a = max(1, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(1, (bx2 - bx1) * (by2 - by1))
+    iou = inter_area / float(area_a + area_b - inter_area)
+    return iou >= 0.45
+
+
+def _dedup_skill_reward_boxes(
+    app: "AppProcessor",
+    boxes: list[tuple[str, Any]],
+    *,
+    tolerance: int = _SKILL_REWARD_DUPLICATE_TOLERANCE,
+) -> list[tuple[str, Any]]:
+    """按空间位置去重奖励卡检测框，避免同一卡被重复计入合法动作。"""
+    deduped: list[tuple[str, Any]] = []
+    for label, box in boxes:
+        replaced = False
+        for idx, (kept_label, kept_box) in enumerate(deduped):
+            if not _is_same_reward_card_box(box, kept_box, tolerance=tolerance):
+                continue
+            kept_priority = _SKILL_REWARD_LABEL_PRIORITY.get(kept_label, 99)
+            current_priority = _SKILL_REWARD_LABEL_PRIORITY.get(label, 99)
+            if current_priority < kept_priority:
+                deduped[idx] = (label, box)
+            replaced = True
+            break
+        if not replaced:
+            deduped.append((label, box))
+
+    debugger = getattr(app, "debug_tools", None)
+    if debugger is not None:
+        for idx, (_label, box) in enumerate(deduped):
+            debugger.add_box(
+                int(getattr(box, "x", 0)),
+                int(getattr(box, "y", 0)),
+                int(getattr(box, "w", 0)),
+                int(getattr(box, "h", 0)),
+                label=f"skill_reward_candidate_{idx}",
+                color=(90, 200, 255),
+                alpha=0.08,
+                duration=1.8,
+                font_size=12,
+            )
+    return deduped
 
 
 # ────────────────────────────────────────────────────────────
@@ -107,6 +393,20 @@ _SKILL_REWARD_BASELINE_TOLERANCE_MAX = 52
 
 @dataclass
 class SkillRewardCandidate:
+    """定义 SkillRewardCandidate 的结构化数据。
+
+    Attributes:
+        index: 候选项在当前列表中的序号（通常从上到下或从左到右）。
+        label: 用于界面展示或日志输出的短标签文本。
+        title: 候选项主标题文本，通常来自 OCR 或预设文案。
+        selected: 是否为当前已选中项（True 表示已选中）。
+        box: 候选项对应的检测框，用于点击、裁剪和可视化调试。
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        db_id: 数据库中的实体 ID；为空通常表示当前候选项尚未完成实体识别。
+        source: 候选项来源标记（如 OCR、DB、fallback），便于排查识别链路。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+        metadata: 扩展元数据，保存额外识别信息与决策辅助字段。
+    """
     index: int
     label: str
     title: str
@@ -121,12 +421,18 @@ class SkillRewardCandidate:
 
 @dataclass
 class SkillRewardStepResult:
-    status: str  # "selected" | "confirmed" | "redrawn"
+    """定义 SkillRewardStepResult 的结构化数据。
+
+    Attributes:
+        status: 步骤执行状态（如 selected/confirmed/skipped）。
+        candidate: 本步骤最终选中的候选项对象。
+    """
+    status: str  # 状态值："selected" | "confirmed" | "redrawn"
     candidate: SkillRewardCandidate | None = None
 
 
 # ────────────────────────────────────────────────────────────
-# 信息面板 OCR — 从選中カード的详情面板读取卡名
+# 信息面板 OCR — 从选中卡片的详情面板读取卡名
 # ────────────────────────────────────────────────────────────
 
 def _extract_card_name_from_info_panel(
@@ -145,29 +451,6 @@ def _extract_card_name_from_info_panel(
     Returns:
         OCR 识别出的卡名文本（可能为空）
     """
-    def _normalize_panel_name(text: str) -> str:
-        cleaned = normalize_ocr_jp(fullwidth_to_halfwidth(str(text or "")))
-        cleaned = _SKILL_REWARD_NAME_NOISE_RE.sub("", cleaned).strip()
-        return cleaned
-
-    def _looks_like_effect_text(text: str) -> bool:
-        normalized = fullwidth_to_halfwidth(str(text or "")).strip()
-        if not normalized:
-            return False
-        return normalized.startswith(_SKILL_REWARD_EFFECT_PREFIXES)
-
-    def _is_plausible_card_name(text: str) -> bool:
-        normalized = _normalize_panel_name(text)
-        if len(normalized) < 2:
-            return False
-        if _looks_like_effect_text(normalized):
-            return False
-        if _SKILL_REWARD_EFFECT_LINE_RE.search(normalized):
-            return False
-        if any(token in normalized for token in _SKILL_REWARD_TITLE_NOISE_TOKENS):
-            return False
-        return bool(_SKILL_REWARD_JP_CHAR_RE.search(normalized))
-
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0:
         return ""
@@ -179,6 +462,22 @@ def _extract_card_name_from_info_panel(
         debug_tools=debugger,
         debug_label="skill_reward_white_panel",
     )
+    if panel_rect is not None:
+        # 面板上沿应明显高于卡片行，否则大概率是误截到卡片行本身。
+        row_top = min(int(getattr(box, "y", h)) for box in card_boxes) if card_boxes else h
+        row_h = max(
+            1,
+            max(int(getattr(box, "h", row_top)) for box in card_boxes) - row_top,
+        ) if card_boxes else max(1, int(h * 0.12))
+        max_panel_top = row_top - max(30, int(row_h * 0.55))
+        if panel_rect[1] > max_panel_top:
+            panel_rect = None
+    if panel_rect is None:
+        panel_rect = _detect_skill_reward_white_panel_fallback(
+            frame,
+            card_boxes=card_boxes,
+            debug_tools=debugger,
+        )
 
     if panel_rect is not None:
         px1, py1, px2, py2 = panel_rect
@@ -206,7 +505,7 @@ def _extract_card_name_from_info_panel(
                         title_bottom = min(title_bottom, boundary)
                 best_line: tuple[float, str, tuple[int, int, int, int]] | None = None
                 for line in merged_lines:
-                    line_text = _normalize_panel_name(str(getattr(line, "text", "") or ""))
+                    line_text = _normalize_skill_reward_candidate_title(str(getattr(line, "text", "") or ""))
                     if not line_text:
                         continue
                     line_y = int(getattr(line, "y", 0))
@@ -214,7 +513,7 @@ def _extract_card_name_from_info_panel(
                     line_cy = int(getattr(line, "cy", line_y + line_h // 2))
                     if line_cy < 0 or line_cy > title_bottom:
                         continue
-                    if not _is_plausible_card_name(line_text):
+                    if not _looks_like_plausible_skill_reward_name(line_text):
                         continue
                     line_x = int(getattr(line, "x", 0))
                     line_w = max(1, int(getattr(line, "w", 0)))
@@ -294,9 +593,14 @@ def _save_unresolved_skill_reward_probe(
             panel_path = os.path.join(collect_dir, f"{stem}_panel.png")
             cv2.imwrite(panel_path, panel_crop)
 
+    raw_candidate_title = str(
+        (getattr(candidate, "metadata", {}) or {}).get("raw_candidate_title")
+        or candidate.title
+        or ""
+    )
     metadata = {
         "index": int(candidate.index),
-        "raw_candidate_title": str(candidate.title or ""),
+        "raw_candidate_title": raw_candidate_title,
         "ocr_card_name": str(card_name or ""),
         "action_id": str(candidate.action_id or ""),
         "db_id": str(candidate.db_id or ""),
@@ -389,7 +693,7 @@ def _detect_redraw_info(
     if redraw_box is None:
         return None, 0
 
-    # OCR 按钮区域读取「あとN回」
+    # 在 OCR 按钮区域读取“あとN回”。
     btn_text = ocr_text(redraw_box.frame)
     remaining = 0
     m = _REDRAW_REMAINING_RE.search(btn_text)
@@ -476,6 +780,9 @@ def _probe_unresolved_cards(
 
         if not card_name:
             logger.debug("skill_reward: 探査卡片 #{} 信息面板 OCR 为空", candidate.index)
+            # 信息面板未读出卡名时，清空缩略图噪声标题，避免把乱码送给 LLM。
+            if not _looks_like_plausible_skill_reward_name(candidate.title):
+                candidate.title = ""
             _save_unresolved_skill_reward_probe(app, candidate, card_name="")
             continue
 
@@ -527,6 +834,14 @@ def _probe_unresolved_cards(
 # ────────────────────────────────────────────────────────────
 
 def _collect_skill_reward_card_center_ys(results: Any) -> list[int]:
+    """收集skill、奖励、卡牌、center、ys并返回结果。
+
+    Args:
+        results: 用于提供results相关输入。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     if results is None:
         return []
     centers: list[int] = []
@@ -540,6 +855,7 @@ def _collect_skill_reward_card_center_ys(results: Any) -> list[int]:
 
 
 def _resolve_skill_reward_baseline_tolerance(app: "AppProcessor") -> tuple[int, int]:
+    """解析并确定`skill_reward_baseline_tolerance`。"""
     frame = getattr(app, "latest_frame", None)
     frame_h = 0
     if frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 1:
@@ -561,6 +877,15 @@ def _is_skill_reward_card_baseline_settled(
     *,
     tolerance: int,
 ) -> tuple[bool, int | None]:
+    """判断skill、奖励、卡牌、基线、settled是否成立。
+
+    Args:
+        center_ys: 用于提供center、ys相关输入。
+        tolerance: 用于提供tolerance相关输入。
+
+    Returns:
+        tuple[bool, int | None]: 返回值类型见注解。
+    """
     if not center_ys:
         return False, None
     baseline = int(center_ys[len(center_ys) // 2])
@@ -582,6 +907,15 @@ def _wait_skill_reward_cards_settle(
     *,
     position: str,
 ) -> None:
+    """等待skill、奖励、卡牌、settle并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     if position not in {"skill_reward_idle", "skill_reward_selected"}:
         return
     centers = _collect_skill_reward_card_center_ys(getattr(app, "latest_results", None))
@@ -655,19 +989,26 @@ def collect_skill_reward_candidates(
     for label in _REWARD_CARD_LABELS:
         for box in app.latest_results.filter_by_label(label):
             boxes.append((label, box))
+    boxes = _dedup_skill_reward_boxes(app, boxes)
+    boxes = _filter_skill_reward_boxes_by_row(app, boxes)
     boxes.sort(key=lambda pair: pair[1].cx)
 
     pending = ctx.pending_skill_reward_index if position == "skill_reward_selected" else None
-    candidates = [
-        SkillRewardCandidate(
-            index=idx,
-            label=label,
-            title=ocr_text(box.frame),
-            selected=pending == idx,
-            box=box,
+    candidates: list[SkillRewardCandidate] = []
+    for idx, (label, box) in enumerate(boxes):
+        raw_title = str(ocr_text(box.frame) or "")
+        normalized_title = _normalize_skill_reward_candidate_title(raw_title)
+        title = normalized_title if _looks_like_plausible_skill_reward_name(normalized_title) else ""
+        candidates.append(
+            SkillRewardCandidate(
+                index=idx,
+                label=label,
+                title=title,
+                selected=pending == idx,
+                box=box,
+                metadata={"raw_candidate_title": normalized_title or raw_title},
+            )
         )
-        for idx, (label, box) in enumerate(boxes)
-    ]
     # CLIP 识别 + OCR fallback（不含信息面板探査）
     hydrate_card_candidates(app, candidates)
     return candidates
@@ -716,6 +1057,17 @@ def decide_skill_reward(
     *,
     position: str,
 ) -> int:
+    """决策skill、奖励并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     decision_state = build_decision_state(
         app,
         ctx,
@@ -743,19 +1095,51 @@ def decide_skill_reward(
     return 0
 
 
+def _infer_selected_skill_reward_index(candidates: Sequence[SkillRewardCandidate]) -> int | None:
+    """根据卡片纵向位移推断当前已选中的奖励卡索引。"""
+    visual_cards = [
+        (idx, int(getattr(candidate.box, "cy", 0)))
+        for idx, candidate in enumerate(candidates)
+        if candidate.box is not None and not candidate.metadata.get("is_redraw")
+    ]
+    if len(visual_cards) < 2:
+        return None
+    visual_cards.sort(key=lambda item: item[1])
+    first_idx, first_cy = visual_cards[0]
+    _, second_cy = visual_cards[1]
+    if (second_cy - first_cy) >= 24:
+        return first_idx
+    return None
+
+
 def _click_confirm_button(app: "AppProcessor") -> bool:
-    """点击激活的确认按钮（受け取る）。"""
+    """点击confirm、按钮并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     confirm_boxes = app.latest_results.filter_by_label(ProducerLabels.CONFIRM_BUTTON)
     if confirm_boxes:
         app.device.click_element(confirm_boxes.first())
         return True
-    # 回退: 如果没有 Confirm 但有 generic button，点击最低位的（通常是受け取る）
+    # 回退：Confirm 漏检时，仅点击文本明确为“受け取る”的按钮，避免误点“再抽選”。
     buttons = app.latest_results.filter_by_label(BaseUILabels.BUTTON)
     if buttons:
-        # 排除再抽選按钮（最右侧）— 选最低且非最右的
-        sorted_btns = sorted(buttons, key=lambda b: b.cy, reverse=True)
-        app.device.click_element(sorted_btns[0])
-        return True
+        receive_candidates: list[Any] = []
+        for button in buttons:
+            text = normalize_text(ocr_text(getattr(button, "frame", None)))
+            if not text:
+                continue
+            is_redraw = normalize_text(ProduceText.REDRAW) in text or normalize_text(ProduceText.REDRAW_SHORT) in text
+            is_receive = normalize_text(ProduceText.RECEIVE) in text
+            if is_receive and not is_redraw:
+                receive_candidates.append(button)
+        if receive_candidates:
+            app.device.click_element(max(receive_candidates, key=lambda b: int(getattr(b, "cy", 0))))
+            return True
     return False
 
 
@@ -773,18 +1157,30 @@ def execute_skill_reward_step(
     _wait_skill_reward_cards_settle(app, position=position)
 
     if position == "skill_reward_selected":
-        # 如果没有记录的待确认选择，先选一张卡再确认
+        # selected 语义是“已选中待确认”，此阶段不应再次触发 LLM 选卡。
         if ctx.pending_skill_reward_index is None:
-            logger.debug("skill_reward: 无待确认卡片，先执行选卡流程")
+            logger.debug("skill_reward: 无待确认卡片，尝试从当前画面推断已选中目标")
             candidates = collect_skill_reward_candidates(app, ctx, position=position)
             if candidates:
-                target_index = decide_skill_reward(app, ctx, candidates, position=position)
-                target = candidates[target_index]
-                app.device.click_element(target.box)
-                ctx.pending_skill_reward_index = target.index
-                ctx.pending_skill_reward_label = target.title or target.label or target.action_id
-                logger.debug(f"skill_reward: 先选中卡片 {target.index} {target.title!r}")
-                return SkillRewardStepResult(status="selected", candidate=target)
+                target: SkillRewardCandidate | None = None
+                reward_candidates = [c for c in candidates if not c.metadata.get("is_redraw")]
+                if len(reward_candidates) == 1:
+                    target = reward_candidates[0]
+                    logger.debug("skill_reward: selected 场景单卡已高亮，直接确认")
+                else:
+                    inferred_index = _infer_selected_skill_reward_index(candidates)
+                    if inferred_index is not None:
+                        target = candidates[inferred_index]
+                        logger.debug("skill_reward: 根据纵向位移推断已选中卡片 idx={}", target.index)
+
+                if target is None:
+                    logger.warning(
+                        "skill_reward: selected 场景无法可靠推断已选中卡片，直接确认当前选中态"
+                    )
+                else:
+                    ctx.pending_skill_reward_index = target.index
+                    ctx.pending_skill_reward_label = target.title or target.label or target.action_id
+                    ctx.handler_state["pending_skill_reward_db_id"] = target.db_id or ""
 
         if not _click_confirm_button(app):
             return None
@@ -866,7 +1262,7 @@ def execute_skill_reward_step(
 
 
 # ────────────────────────────────────────────────────────────
-# Handler
+# 处理器
 # ────────────────────────────────────────────────────────────
 
 class SkillRewardHandler(GameplayHandler):
@@ -876,10 +1272,32 @@ class SkillRewardHandler(GameplayHandler):
     priority = 50
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == "skill_reward"
 
     def handle(self, app, ctx, phase, position):
-        # 展示画面（单卡获得/强化演出 / メモリー效果）：点击空白区域推进
+        # 展示画面（单卡获得/强化演出 / 记忆效果）：点击空白区域推进
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         if position == "skill_reward_showcase":
             from src.core.tasks.producer_challenge.shared.common import click_relative_point
             click_relative_point(app, x_ratio=0.5, y_ratio=0.88, label="skill_reward_showcase_advance")

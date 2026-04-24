@@ -62,7 +62,7 @@ def classify_live_position(frame) -> str:
     if frame is None:
         return GameplayPosition.UNKNOWN
     if not _is_landscape(frame):
-        # 縦画面に戻った → ライブ終了
+        # 恢复竖屏，说明 Live 已结束。
         return GameplayPosition.LIVE_FINISHED
     if _detect_tap_to_start(frame):
         return GameplayPosition.LIVE_TAP_TO_START
@@ -80,9 +80,31 @@ class LivePerformanceHandler(GameplayHandler):
     priority = 80
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == GameplayPhase.LIVE_PERFORMANCE
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         frame = app.latest_frame
         if frame is None:
             return HandlerResult.waiting("ライブ: フレーム取得待ち")
@@ -102,16 +124,16 @@ class LivePerformanceHandler(GameplayHandler):
     def _tap_to_start(self, app, ctx, frame):
         """「TAP TO START」画面 → 中央タップで開始。"""
         logger.info("[ライブ演出] TAP TO START 検出 → タップして開始")
-        # 横画面では座標系が回転しているため、中央をタップ
+        # 横屏时坐标系旋转，点击屏幕中央。
         h, w = frame.shape[:2]
         cx, cy = w // 2, h // 2
         app.device.click(cx, cy)
-        # タップ後少し待つ（演出開始アニメーション）
+        # 点击后稍作等待（演出开场动画）。
         return HandlerResult.ok("ライブ開始タップ", sleep_after=3.0)
 
     def _wait_performance(self, app, ctx):
         """リズムゲーム実行中 → 自動演出を待つ。"""
-        # 連続 unknown カウンタをリセット（ライブ中は unknown 扱いしない）
+        # 重置连续 unknown 计数（Live 期间不按 unknown 处理）。
         ctx.consecutive_unknowns = 0
         elapsed = ctx.handler_state.get("live_wait_count", 0) + 1
         ctx.handler_state["live_wait_count"] = elapsed
@@ -120,8 +142,16 @@ class LivePerformanceHandler(GameplayHandler):
         return HandlerResult.ok("ライブ演出待ち", sleep_after=3.0)
 
     def _handle_finished(self, app, ctx):
-        """画面が縦に戻った → ライブ終了。"""
+        """处理handle、finished并返回结果。
+
+        Args:
+            app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+            ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         logger.success("[ライブ演出] 終了検出（縦画面に復帰）")
         ctx.handler_state["live_wait_count"] = 0
-        # 結果画面への遷移を待つ
+        # 等待切换到结果画面。
         return HandlerResult.ok("ライブ終了", sleep_after=2.0)

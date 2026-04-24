@@ -9,9 +9,6 @@
 {% if stage_context.interaction_hint %}
 交互方式: {{ stage_context.interaction_hint }}
 {% endif %}
-{% if stage_context.system_recommendation %}
-系统推荐: {{ stage_context.system_recommendation }}
-{% endif %}
 {% if idol_plan_label %}
 当前流派: {{ idol_plan_label }}{% if idol_plan_focus %} | 核心资源: {{ idol_plan_focus }}{% endif %}{% if idol_plan_description %} | {{ idol_plan_description }}{% endif %}{{ '' }}
 {% endif %}
@@ -112,7 +109,7 @@ Pポイント: {{ p_point }}
 {% endif %}
 
 {% if p_items %}
-### Pアイテム
+### P物品
 {% for item in p_items %}
 - {{ item.name }}{% if item.description %}: {{ item.description }}{% endif %}{{ '' }}
 {% endfor %}
@@ -126,7 +123,7 @@ Pポイント: {{ p_point }}
 {% endif %}
 
 {% if formation_events %}
-### 编成支援イベント
+### 编成支援卡列表
 {% for sc in formation_events %}
 **{{ sc.card_name }}**:
 {% for ev in sc.events %}
@@ -153,7 +150,7 @@ Pポイント: {{ p_point }}
 {% endif %}
 
 {% if drinks %}
-### 当前Pドリンク库存 ({{ drinks|length }}瓶)
+### 当前P饮料库存 ({{ drinks|length }}瓶)
 {% for d in drinks %}
 - {{ d.name }}{% if d.description %}: {{ d.description }}{% endif %}{{ '' }}
 {% endfor %}
@@ -173,7 +170,7 @@ Pポイント: {{ p_point }}
 {% endif %}
 {% endif %}
 {% if drinks %}
-### 当前已持有Pドリンク ({{ drinks|length }}瓶)
+### 当前已持有P饮料 ({{ drinks|length }}瓶)
 {% for d in drinks %}
 - {{ d.name }}{% if d.description %}: {{ d.description }}{% endif %}{{ '' }}
 {% endfor %}
@@ -241,7 +238,7 @@ Pポイント: {{ p_point }}
 {% endif %}
 
 {% if drinks %}
-### Pドリンク库存 ({{ drinks|length }}瓶)
+### P饮料库存 ({{ drinks|length }}瓶)
 {% for d in drinks %}
 - {{ d.name }}{% if d.description %}: {{ d.description }}{% endif %}{{ '' }}
 {% endfor %}

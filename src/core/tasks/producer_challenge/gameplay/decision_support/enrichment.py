@@ -3,9 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from functools import lru_cache
-from pathlib import Path
 import re
-import sys
 from typing import Any, Sequence
 
 import cv2
@@ -13,6 +11,11 @@ import cv2
 from src.constants.game.producer_gameplay import GameplayPhase
 from src.constants.game.text.produce_text import ProduceText
 from src.core.tasks.producer_challenge.catalog import match_card_and_item_entries
+from src.utils.game_database_tools import (
+    GakumasDatabase_ProduceCardDataUtils,
+    GakumasDatabase_ProduceDrinkDataUtils,
+    GakumasDatabase_ProduceItemDataUtils,
+)
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str
 from src.utils.string_tools import fullwidth_to_halfwidth
@@ -142,6 +145,14 @@ def score_produce_drink_metadata(
 
 
 def _plan_type_payload(plan_type: Any) -> dict[str, str]:
+    """处理养成路线、type、载荷并返回结果。
+
+    Args:
+        plan_type: 用于提供养成路线、type相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     raw_value = str(plan_type or "").strip()
     metadata = _PLAN_TYPE_METADATA.get(raw_value, {})
     return {
@@ -159,66 +170,126 @@ def _localized_humanized_description(
     *,
     upgrade_count: int | None = None,
 ) -> str:
-    repository = _get_rl_repository()
-    if repository is None or not item_id:
-        return _humanize_runtime_text(_description_text(fallback_entries))
-    loc_map = repository.load_localization(table_name)
-    row = {}
-    if upgrade_count is not None:
-        row = loc_map.get(f"{item_id}.{int(upgrade_count)}", {})
-    if not row:
-        row = loc_map.get(str(item_id), {})
-    entries = row.get("produceDescriptions") or fallback_entries
+    """将条目描述做本地化与可读化处理，输出可用于决策的文本。
+
+    Args:
+        table_name: 本项目数据库表名（`ProduceCard` / `ProduceDrink` / `ProduceItem`）。
+        item_id: 目标条目 ID。
+        fallback_entries: 数据库未命中时使用的回退描述数据。
+        upgrade_count: 强化次数，用于读取强化后的条目描述。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
+    entries = _resolve_localized_descriptions(
+        table_name=table_name,
+        item_id=item_id,
+        upgrade_count=upgrade_count,
+    ) or fallback_entries
     return _humanize_runtime_text(_description_text(entries))
 
 
-def _repo_root() -> Path:
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        if (parent / "train" / "gakumas_rl").exists():
-            return parent
-    return current.parents[6]
-
-
-def _ensure_rl_package_on_path() -> None:
-    rl_root = _repo_root() / "train" / "gakumas_rl"
-    if rl_root.exists():
-        rl_root_str = str(rl_root)
-        if rl_root_str not in sys.path:
-            sys.path.insert(0, rl_root_str)
+@lru_cache(maxsize=1)
+def _produce_card_db() -> GakumasDatabase_ProduceCardDataUtils:
+    """获取本项目技能卡数据库实例（缓存）。"""
+    return GakumasDatabase_ProduceCardDataUtils()
 
 
 @lru_cache(maxsize=1)
-def _get_rl_repository():
-    try:
-        _ensure_rl_package_on_path()
-        from gakumas_rl.service import get_repository
+def _produce_drink_db() -> GakumasDatabase_ProduceDrinkDataUtils:
+    """获取本项目 P 饮料数据库实例（缓存）。"""
+    return GakumasDatabase_ProduceDrinkDataUtils()
 
-        return get_repository()
-    except Exception as exc:  # noqa: BLE001 - 缺依赖时需要回退到 OCR/本地 catalog
-        logger.debug(f"producer decision: 无法加载 gakumas_rl 主数据仓库，回退文本匹配: {exc}")
+
+@lru_cache(maxsize=1)
+def _produce_item_db() -> GakumasDatabase_ProduceItemDataUtils:
+    """获取本项目 P 物品数据库实例（缓存）。"""
+    return GakumasDatabase_ProduceItemDataUtils()
+
+
+def _lookup_card_row(card_id: str, *, upgrade_count: int | None = None) -> Any | None:
+    """按卡牌 ID（及强化次数）查询技能卡实体。"""
+    if not card_id:
         return None
-
-
-def _lookup_card_row(card_id: str, *, upgrade_count: int | None = None) -> dict[str, Any] | None:
-    repository = _get_rl_repository()
-    if repository is None or not card_id:
-        return None
+    db = _produce_card_db()
     if upgrade_count is not None:
-        return repository.card_row_by_upgrade(card_id, upgrade_count)
-    return repository.canonical_card_row(card_id)
+        payload = db.get_by_id(f"{card_id}.{int(upgrade_count)}")
+        if payload is not None:
+            return payload
+    payload = db.get_by_id(f"{card_id}.0")
+    if payload is not None:
+        return payload
+    return db.get_by_raw_id(card_id)
 
 
-def _lookup_named_row(table_name: str, item_id: str) -> dict[str, Any] | None:
-    repository = _get_rl_repository()
-    if repository is None or not item_id:
+def _lookup_drink_row(drink_id: str) -> Any | None:
+    """按饮料 ID 查询 P 饮料实体。"""
+    if not drink_id:
         return None
-    table = getattr(repository, table_name, None)
-    if table is None:
-        table = repository.load_table(
-            "ProduceDrink" if table_name == "produce_drinks" else "ProduceItem"
-        )
-    return table.first(item_id)
+    return _produce_drink_db().get_by_id(str(drink_id))
+
+
+def _lookup_item_row(item_id: str) -> Any | None:
+    """按物品 ID 查询 P 物品实体。"""
+    if not item_id:
+        return None
+    return _produce_item_db().get_by_id(str(item_id))
+
+
+def _display_name(payload: Any) -> str:
+    """获取实体展示名（优先本地化，失败回退原名）。"""
+    loc = getattr(payload, "localization", None)
+    return str((getattr(loc, "name", None) if loc else None) or getattr(payload, "name", "") or "")
+
+
+def _raw_name(payload: Any) -> str:
+    """获取实体原始名称。"""
+    return str(getattr(payload, "name", "") or "")
+
+
+def _effect_types_from_effect_groups(effect_groups: Sequence[Any] | None) -> list[str]:
+    """从 EffectGroup 列表提取效果类型集合。"""
+    result: list[str] = []
+    if not effect_groups:
+        return result
+    for group in effect_groups:
+        if group is None:
+            continue
+        for values in (
+            [getattr(group, "examEffectType", "")],
+            [getattr(group, "produceEffectType", "")],
+            list(getattr(group, "examEffectTypes", []) or []),
+            list(getattr(group, "produceEffectTypes", []) or []),
+        ):
+            for value in values:
+                effect = str(value or "").strip()
+                if effect and effect not in result:
+                    result.append(effect)
+    return result
+
+
+def _resolve_localized_descriptions(
+    *,
+    table_name: str,
+    item_id: str,
+    upgrade_count: int | None = None,
+) -> Any:
+    """读取本项目数据库中的本地化描述片段。"""
+    if not item_id:
+        return None
+    table = str(table_name or "").strip()
+    if table == "ProduceCard":
+        payload = _lookup_card_row(item_id, upgrade_count=upgrade_count)
+    elif table == "ProduceDrink":
+        payload = _lookup_drink_row(item_id)
+    elif table == "ProduceItem":
+        payload = _lookup_item_row(item_id)
+    else:
+        payload = None
+    if payload is None:
+        return None
+    loc = getattr(payload, "localization", None)
+    return (getattr(loc, "produceDescriptions", None) if loc else None) or getattr(payload, "produceDescriptions", None)
 
 
 def _match_catalog_entry_from_texts(
@@ -226,6 +297,7 @@ def _match_catalog_entry_from_texts(
     *,
     expected_kind: str | None = None,
 ) -> dict[str, Any] | None:
+    """匹配`catalog_entry_from_texts`。"""
     normalized_texts = [str(text or "").strip() for text in texts if str(text or "").strip()]
     if not normalized_texts:
         return None
@@ -243,71 +315,107 @@ def _match_catalog_entry(
     *,
     expected_kind: str | None = None,
 ) -> dict[str, Any] | None:
+    """匹配catalog、entry并返回结果。
+
+    Args:
+        title: 用于提供title相关输入。
+        expected_kind: 用于提供expected、kind相关输入。
+
+    Returns:
+        dict: 结构化结果字典。
+    """
     return _match_catalog_entry_from_texts([title], expected_kind=expected_kind)
 
 
 def _enrich_card_metadata(card_id: str, *, upgrade_count: int = 0) -> dict[str, Any]:
+    """补全`card_metadata`信息。"""
     row = _lookup_card_row(card_id, upgrade_count=upgrade_count)
-    repository = _get_rl_repository()
-    if row is None or repository is None:
+    if row is None:
         return {
             "upgrade_count": int(upgrade_count),
             "description": "",
         }
+    play_effect_types: list[str] = []
+    for effect in list(getattr(row, "playEffects", []) or []):
+        effect_cls = getattr(effect, "produceExamEffectCls", None)
+        effect_type = str(getattr(effect_cls, "effectType", "") or "")
+        if effect_type and effect_type not in play_effect_types:
+            play_effect_types.append(effect_type)
+    for effect in list(getattr(row, "moveProduceExamEffectClss", []) or []):
+        effect_type = str(getattr(effect, "effectType", "") or "")
+        if effect_type and effect_type not in play_effect_types:
+            play_effect_types.append(effect_type)
+    for effect in _effect_types_from_effect_groups(getattr(row, "effectGroupClss", [])):
+        if effect not in play_effect_types:
+            play_effect_types.append(effect)
+
+    trigger_phases: list[str] = []
+    trigger_candidates = [getattr(row, "playProduceExamTriggerCls", None)] + list(
+        getattr(row, "moveProduceExamTriggerClss", []) or []
+    )
+    for trigger in trigger_candidates:
+        if trigger is None:
+            continue
+        for phase in list(getattr(trigger, "phaseTypes", []) or []):
+            phase_text = str(phase or "")
+            if phase_text and phase_text not in trigger_phases:
+                trigger_phases.append(phase_text)
+
+    real_upgrade_count = int(getattr(row, "upgradeCount", upgrade_count) or 0)
     return {
-        "upgrade_count": int(row.get("upgradeCount") or upgrade_count or 0),
-        "rarity": str(row.get("rarity") or ""),
-        "category": str(row.get("category") or ""),
-        "plan_type": str(row.get("planType") or ""),
-        "plan_type_label": _plan_type_payload(row.get("planType")).get("label", ""),
-        "cost_type": str(row.get("costType") or ""),
-        "cost": int(row.get("stamina") or 0),
-        "display_name": repository.card_name(row),
-        "raw_name": repository.raw_card_name(row),
+        "upgrade_count": real_upgrade_count,
+        "rarity": str(getattr(row, "rarity", "") or ""),
+        "category": str(getattr(row, "category", "") or ""),
+        "plan_type": str(getattr(row, "planType", "") or ""),
+        "plan_type_label": _plan_type_payload(getattr(row, "planType", "")).get("label", ""),
+        "cost_type": str(getattr(row, "costType", "") or ""),
+        "cost": int(getattr(row, "stamina", 0) or 0),
+        "display_name": _display_name(row),
+        "raw_name": _raw_name(row),
         "description": _localized_humanized_description(
             "ProduceCard",
             card_id,
-            row.get("produceDescriptions"),
-            upgrade_count=int(row.get("upgradeCount") or upgrade_count or 0),
+            getattr(row, "produceDescriptions", None),
+            upgrade_count=real_upgrade_count,
         ),
-        "effect_types": repository.card_axis_effect_types(row),
-        "trigger_phases": repository.card_trigger_phases(row),
+        "effect_types": play_effect_types,
+        "trigger_phases": trigger_phases,
     }
 
 
 def _enrich_drink_metadata(drink_id: str) -> dict[str, Any]:
-    row = _lookup_named_row("produce_drinks", drink_id)
-    repository = _get_rl_repository()
-    if row is None or repository is None:
+    """补全`drink_metadata`信息。"""
+    row = _lookup_drink_row(drink_id)
+    if row is None:
         return {}
     return {
-        "rarity": str(row.get("rarity") or ""),
-        "plan_type": str(row.get("planType") or ""),
-        "plan_type_label": _plan_type_payload(row.get("planType")).get("label", ""),
-        "display_name": repository.drink_name(row),
-        "raw_name": repository.raw_drink_name(row),
+        "rarity": str(getattr(row, "rarity", "") or ""),
+        "plan_type": str(getattr(row, "planType", "") or ""),
+        "plan_type_label": _plan_type_payload(getattr(row, "planType", "")).get("label", ""),
+        "display_name": _display_name(row),
+        "raw_name": _raw_name(row),
         "description": _localized_humanized_description(
             "ProduceDrink",
             drink_id,
-            row.get("produceDescriptions"),
+            getattr(row, "produceDescriptions", None),
         ),
-        "effect_types": repository.drink_axis_effect_types(row),
+        "effect_types": _effect_types_from_effect_groups(getattr(row, "effectGroupClss", [])),
     }
 
 
 def _enrich_item_metadata(item_id: str) -> dict[str, Any]:
-    row = _lookup_named_row("produce_items", item_id)
-    repository = _get_rl_repository()
-    if row is None or repository is None:
+    """补全`item_metadata`信息。"""
+    row = _lookup_item_row(item_id)
+    if row is None:
         return {}
     return {
-        "rarity": str(row.get("rarity") or ""),
-        "display_name": repository.item_name(row),
-        "raw_name": repository.raw_item_name(row),
+        "rarity": str(getattr(row, "rarity", "") or ""),
+        "display_name": _display_name(row),
+        "raw_name": _raw_name(row),
         "description": _localized_humanized_description(
             "ProduceItem",
             item_id,
-            row.get("produceDescriptions"),
+            getattr(row, "produceDescriptions", None),
         ),
     }
 
@@ -355,6 +463,17 @@ def detect_sp_badge(action_box: Any) -> bool:
 
 
 def _learn_card_clip_from_db_id(app: Any, image: Any, card_id: str, *, upgrade_count: int = 0) -> None:
+    """将技能卡图像写入 CLIP 记忆库，建立 `card_id(+upgrade_count)` 到图像特征的映射。
+
+    Args:
+        app: 应用处理器实例，用于获取 `clip_manager`。
+        image: 待写入记忆库的卡面图像（numpy 数组）。
+        card_id: 技能卡数据库 ID（不含强化后缀）。
+        upgrade_count: 技能卡强化次数；优先按该强化级别查表，失败时回退到 `.0`。
+
+    Returns:
+        None: 仅执行 CLIP 记忆学习副作用，不返回业务值。
+    """
     if image is None or getattr(image, "size", 0) <= 0 or not card_id:
         return
     clip_manager = getattr(app, "clip_manager", None)
@@ -377,6 +496,16 @@ def _learn_card_clip_from_db_id(app: Any, image: Any, card_id: str, *, upgrade_c
 
 
 def _learn_drink_clip_from_db_id(app: Any, image: Any, drink_id: str) -> None:
+    """将 P 饮料图像写入 CLIP 记忆库，建立 `drink_id` 到图像特征的映射。
+
+    Args:
+        app: 应用处理器实例，用于获取 `clip_manager`。
+        image: 待写入记忆库的饮料图像（numpy 数组）。
+        drink_id: P 饮料数据库 ID。
+
+    Returns:
+        None: 仅执行 CLIP 记忆学习副作用，不返回业务值。
+    """
     if image is None or getattr(image, "size", 0) <= 0 or not drink_id:
         return
     clip_manager = getattr(app, "clip_manager", None)
@@ -397,6 +526,16 @@ def _learn_drink_clip_from_db_id(app: Any, image: Any, drink_id: str) -> None:
 
 
 def _learn_item_clip_from_db_id(app: Any, image: Any, item_id: str) -> None:
+    """将 P 物品图像写入 CLIP 记忆库，建立 `item_id` 到图像特征的映射。
+
+    Args:
+        app: 应用处理器实例，用于获取 `clip_manager`。
+        image: 待写入记忆库的物品图像（numpy 数组）。
+        item_id: P 物品数据库 ID。
+
+    Returns:
+        None: 仅执行 CLIP 记忆学习副作用，不返回业务值。
+    """
     if image is None or getattr(image, "size", 0) <= 0 or not item_id:
         return
     clip_manager = getattr(app, "clip_manager", None)

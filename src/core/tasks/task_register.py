@@ -297,6 +297,7 @@ def register_tasks(processor: "AppProcessor"):
             memory_preset_index=cfg.memory_preset_index.value,
             use_rental=cfg.use_rental.value,
             use_boost_items=cfg.use_boost_items.value,
+            schedule_notebook_mode=cfg.schedule_notebook_mode.value,
             resume_interrupted=cfg.resume_interrupted.value,
         )
         base = app.config_service().base

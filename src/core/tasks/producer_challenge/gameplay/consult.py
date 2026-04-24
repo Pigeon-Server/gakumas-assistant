@@ -6,7 +6,7 @@
   - 技能卡删除
   - 退出相談
 
-当前优先补齐「候选项规范化 + 无状态决策桥 + 強化骨架」。
+当前优先补齐「候选项规范化 + 无状态决策桥 + 强化骨架」。
 默认兜底策略保持保守：
   - 优先只自动进入一次强化
   - 强化页优先选择目标卡，再确认
@@ -70,7 +70,7 @@ _CONSULT_CARD_LABELS = _CONSULT_THUMBNAIL_LABELS + (ProducerLabels.SKILL_CARD_IN
 _CONSULT_EXCHANGE_RETRY_THRESHOLD = 2
 
 # OCR 结果前后缀杂字符清理（如 |初星水 → 初星水）
-# 注意：不去除前缀数字，因为有合法的数字开头名（200%スマイル、873シューター）
+# 注意：不去除前缀数字，存在合法的数字开头名称（如 200%スマイル、873シューター）。
 _OCR_ARTIFACT_RE = re.compile(r"^[|｜\[\]【】\s]+|[|｜\[\]【】\s]+$")
 
 
@@ -112,19 +112,51 @@ def _consult_mode_action_prefix(mode: str) -> str:
 
 
 def _consult_target_kind_for_mode(mode: str) -> str:
+    """处理consult、target、kind、for、mode并返回结果。
+
+    Args:
+        mode: 用于提供mode相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     return "remove_target" if mode == "remove" else "enhancement_target"
 
 
 def _consult_confirm_kind_for_mode(mode: str) -> str:
+    """处理consult、confirm、kind、for、mode并返回结果。
+
+    Args:
+        mode: 用于提供mode相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     return "confirm_remove" if mode == "remove" else "confirm_enhancement"
 
 
 def _consult_select_operation_for_mode(mode: str) -> str:
+    """处理consult、select、operation、for、mode并返回结果。
+
+    Args:
+        mode: 用于提供mode相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     prefix = _consult_mode_action_prefix(mode)
     return f"consult_select_{prefix}_target"
 
 
 def _consult_confirm_operation_for_mode(mode: str) -> str:
+    """处理consult、confirm、operation、for、mode并返回结果。
+
+    Args:
+        mode: 用于提供mode相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     prefix = _consult_mode_action_prefix(mode)
     return f"consult_confirm_{prefix}"
 
@@ -138,7 +170,7 @@ class ConsultActionCandidate:
     title: str
     box: Any = field(repr=False, default=None)
     icon_box: Any = field(repr=False, default=None)  # 内层 YOLO 检测（P Drink / Skill Card），用于 CLIP
-    entity_type_hint: str = ""  # "produce_drink" / "produce_card" / ""
+    entity_type_hint: str = ""  # "produce_drink" / "produce_card" / ""（实体类型提示）
     selected: bool = False
     action_id: str = ""
     db_id: str = ""
@@ -148,6 +180,14 @@ class ConsultActionCandidate:
 
 
 def _sorted_boxes(boxes) -> list:
+    """处理sorted、boxes并返回结果。
+
+    Args:
+        boxes: 检测框集合。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     return sorted(boxes, key=lambda item: (item.cy, item.cx))
 
 
@@ -200,7 +240,7 @@ def _extract_exchange_price(box_frame) -> str:
     numbers = re.findall(r"\d+", price_text)
     if not numbers:
         return ""
-    # 优先取较大数字（避免 OCR 碎片如 "ろ5" → "5"）
+    # 优先取较大数字（避免 OCR 碎片误识别）。
     valid = [n for n in numbers if int(n) >= 10]
     return valid[-1] if valid else numbers[-1]
 
@@ -209,8 +249,8 @@ def _extract_exchange_price(box_frame) -> str:
 
 # 信息面板 YOLO 标签（用于展示被选中物品的详细信息）
 _INFO_PANEL_LABELS = (
-    ProducerLabels.SKILL_CARD_INFO,   # "Skill Card: Info"
-    ProducerLabels.PC_ACTION_INFO,    # "Producer Challenge: Action Info"
+    ProducerLabels.SKILL_CARD_INFO,   # "Skill Card: Info"（技能卡信息面板标签）
+    ProducerLabels.PC_ACTION_INFO,    # "Producer Challenge: Action Info"（行动信息面板标签）
 )
 
 # 名称区域高度占面板高度的比例（仅取第一行物品名，排除效果说明文字）
@@ -661,7 +701,7 @@ def _is_card_grayed_out(box, frame: np.ndarray, *, debugger: DebugTools | None =
     return grayed
 
 
-# ── 交換済カード检测 ──
+# ── 已兑换卡片检测 ──
 # 已交换的卡片有半透明✓遮罩，导致图标区域亮度(V)下降且饱和度(S)极低
 _EXCHANGED_CARD_V_THRESHOLD = 220
 _EXCHANGED_CARD_S_THRESHOLD = 50
@@ -752,7 +792,7 @@ def _resolve_selection_targets_via_probe(
     _GRID_COL_WIDTH = 220
     _GRID_ROW_HEIGHT = 220
     clicked_grid_cells: set[tuple[int, int]] = set()
-    identified_db_ids: dict[str, str] = {}  # db_id → display_name
+    identified_db_ids: dict[str, str] = {}  # db_id → 展示名称
     last_info_name: str | None = None
     max_rounds = len(unresolved) + 3  # 安全上限（略多于候选数）
 
@@ -912,6 +952,14 @@ def _resolve_selection_targets_via_probe(
 
 
 def _consult_subflow_mode(ctx: "ProduceContext") -> str:
+    """处理consult、subflow、mode并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     mode = str(ctx.handler_state.get("consult_pending_mode", "") or "")
     if mode in {"enhancement", "remove"}:
         return mode
@@ -924,6 +972,7 @@ def _consult_subflow_mode(ctx: "ProduceContext") -> str:
 def _consult_exchange_signature(
     candidates: Sequence[ConsultActionCandidate],
 ) -> tuple[str, ...]:
+    """构建当前兑换候选签名，用于判断页面是否变化。"""
     signature: list[str] = []
     for candidate in candidates:
         if candidate.kind == "exit":
@@ -940,6 +989,7 @@ def _consult_exchange_signature(
 
 
 def _consult_current_p_points(ctx: "ProduceContext") -> int:
+    """读取当前可用 P 点，优先使用咨询剩余值。"""
     return int(ctx.consult_remaining_p_points or ctx.hud_p_point or 0)
 
 
@@ -948,6 +998,7 @@ def _remember_consult_exchange_state(
     target: ConsultActionCandidate,
     candidates: Sequence[ConsultActionCandidate],
 ) -> None:
+    """记录一次兑换点击后的页面签名与资源快照。"""
     ctx.handler_state["consult_last_exchange_action_id"] = target.action_id or ""
     ctx.handler_state["consult_last_exchange_db_id"] = target.db_id or ""
     ctx.handler_state["consult_last_exchange_p_points"] = _consult_current_p_points(ctx)
@@ -963,6 +1014,7 @@ def _resolve_unchanged_exchange_retry(
     ctx: "ProduceContext",
     candidates: Sequence[ConsultActionCandidate],
 ) -> int | None:
+    """当兑换后页面未变化时，决定是否触发重试点击。"""
     if not bool(ctx.handler_state.get("consult_waiting_exchange_result")):
         return None
     if str(ctx.handler_state.get("consult_last_subaction", "") or "") != "exchange":
@@ -1098,7 +1150,16 @@ def detect_consult_actions(
     *,
     position: str,
 ) -> List[ConsultActionCandidate]:
-    """根据相談子页面位置收集候选项。"""
+    """检测consult、actions并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     candidates: list[ConsultActionCandidate] = []
 
     if position == GameplayPosition.CONSULT_EXCHANGE:
@@ -1110,7 +1171,7 @@ def detect_consult_actions(
                 continue
             # 查找内层 YOLO 子检测（P Drink / Skill Card），获取更精确的图标裁切
             icon_box, entity_type_hint = _find_inner_icon_box(box, app.latest_results)
-            # 提取价格信息（卡片底部的 P ポイント数字）
+            # 提取价格信息（卡片底部的 P 点数数字）。
             price = _extract_exchange_price(box.frame)
             candidates.append(
                 ConsultActionCandidate(
@@ -1233,6 +1294,17 @@ def decide_consult_action(
     *,
     position: str,
 ) -> int:
+    """决策consult、操作并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        int: 计算得到的数值结果。
+    """
     # ── CONSULT 总操作次数硬限制，防止 LLM 无限购买 ──
     _CONSULT_TOTAL_OP_LIMIT = 30
     consult_op_count = ctx.handler_state.get("consult_total_op_count", 0) + 1
@@ -1417,6 +1489,7 @@ def execute_consult_step(
     *,
     position: str,
 ) -> ConsultActionCandidate | None:
+    """执行一轮咨询页面的识别、决策与点击操作。"""
     # 非 exchange 页面时重置卡顿计数
     if position != GameplayPosition.CONSULT_EXCHANGE:
         ctx.handler_state.pop("consult_exchange_stuck", None)
@@ -1429,12 +1502,12 @@ def execute_consult_step(
     target = candidates[target_index]
     app.device.click_element(target.box)
 
-    # ── 兑换卡片需要两步操作: 点击卡片(打开信息面板) → 点击"交換する"按钮(完成购买) ──
+    # ── 兑换卡片需要两步：先点卡片打开信息面板，再点“交換する”完成购买。──
     if target.kind == "exchange" and position == GameplayPosition.CONSULT_EXCHANGE:
-        # 在当前帧中预先定位"交換する"按钮(Universal Confirm button)
+        # 在当前帧预先定位“交換する”按钮（Universal Confirm button）。
         confirm_boxes = list(app.latest_results.filter_by_label(ProducerLabels.CONFIRM_BUTTON))
         if confirm_boxes:
-            # 选最靠下的 Confirm 按钮（"交換する"在底部）
+            # 选择最靠下的 Confirm 按钮（“交換する”通常在底部）。
             confirm_box = max(confirm_boxes, key=lambda item: item.cy)
             time.sleep(0.4)  # 等待信息面板刷新
             app.device.click_element(confirm_box)
@@ -1573,9 +1646,31 @@ class ConsultHandler(GameplayHandler):
     priority = 50
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == GameplayPhase.CONSULT
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         target = execute_consult_step(app, ctx, position=position)
         if target is None:
             return HandlerResult.no_action("consult: no actionable candidates")

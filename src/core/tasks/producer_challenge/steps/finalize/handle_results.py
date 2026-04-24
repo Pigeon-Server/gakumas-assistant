@@ -54,15 +54,15 @@ if TYPE_CHECKING:
 
 
 # ── OCR 关键词 ──────────────────────────────────────────
-# フォト選択画面（记忆卡面照片选择）关键词
+# 照片选择画面（记忆卡面照片选择）关键词
 _PHOTO_SELECT_KEYWORDS = (
-    ProduceText.MEMORY_PHOTO_SELECT,  # メモリーにするフォトを選んでください
+    ProduceText.MEMORY_PHOTO_SELECT,  # 请选择要作为记忆的照片。
     ProduceText.MEMORY_PHOTO_SELECT_SHORT,
 )
 
 # 需要 TAP 推进的画面关键词
 _TAP_SCREEN_KEYWORDS = (
-    ProduceText.MEMORY_GENERATION_COMPLETE,  # メモリー生成完了
+    ProduceText.MEMORY_GENERATION_COMPLETE,  # メモリー生成完了（记忆卡）
     ProduceText.TAP,
     ProduceText.PRODUCE_EVALUATION,          # 培育评价得分
 )
@@ -89,9 +89,9 @@ _RESULT_CHAIN_KEYWORDS = (
     ProduceText.MEMORY_PHOTO_SELECT_SHORT,
 )
 
-# 「完了する」页面的 OCR 标识
+# “完了する”页面的 OCR 标识。
 _COMPLETE_PAGE_KEYWORDS = (ButtonText.COMPLETE,)
-# 「プロデュース履歴」页面的 OCR 标识
+# “プロデュース履歴”页面的 OCR 标识。
 _HISTORY_PAGE_KEYWORD = ProduceText.PRODUCE_HISTORY
 
 _RESULT_DETAIL_KEYWORDS = (ButtonText.BACK, ProduceText.RESULT_RESTORED)
@@ -114,6 +114,22 @@ class HandleResultsStep(ProduceStep):
     step_name = "handle_results"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """推进培育结果链，必要时恢复 gameplay，最终确保回到主页。
+
+        结果链既可能一路结算回主页，也可能在考试失败后通过「再挑戦」重新回到
+        gameplay。为此本步骤会在 PRODUCER 模型下持续推进结果页面，识别当前是
+        继续结算、恢复到 gameplay，还是已经返回主页；若恢复到了 gameplay，
+        会重新调用 `ProduceGameplayLoopStep` 继续跑到下一次退出点。
+
+        Args:
+            app: 当前应用处理器，用于点击结果链按钮、切换模型与回主页。
+            ctx: 培育上下文；本步骤会更新 gameplay phase / position，必要时依赖
+                `handler_state` 判断主循环是否已经完成收尾。
+
+        Returns:
+            bool: 成功回到主页时返回 True；若恢复 gameplay 或手动回主页失败，会返回 False
+                或抛出异常。
+        """
         # 如果主循环已通过 produce_finishing 推进结果链并确认到主页，直接跳过
         if ctx.handler_state.get("produce_finishing"):
             logger.info("HandleResults: 主循环已完成培育收尾，跳过 step 12")
@@ -187,9 +203,15 @@ class HandleResultsStep(ProduceStep):
         ctx: "ProduceContext | None" = None,
         timeout: int = 120,
     ) -> tuple[str, str, str] | None:
-        """在结果链中持续推进，直到进入 Loading 或检测到主页标签。
+        """处理skip、结果、screens并返回结果。
 
-        策略：OCR 优先识别画面类型 → YOLO 按钮点击 → TAP 兜底
+        Args:
+            app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+            ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+            timeout: 用于提供timeout相关输入。
+
+        Returns:
+            tuple[str, str, str] | None: 返回值类型见注解。
         """
         start = time()
         consecutive_no_progress = 0
@@ -198,7 +220,7 @@ class HandleResultsStep(ProduceStep):
         retry_click_count = 0         # 连续点击「再挑戦」次数（检测 ticket 用尽）
         MAX_NO_PROGRESS = 15          # 连续无法推进则退出
         MAX_SAME_TEXT = 8             # 同一画面持续 N 次则尝试强制推进
-        MAX_RETRY_CLICKS = 3          # 连续点击再挑戦无效 → ticket 用尽，改点次へ
+        MAX_RETRY_CLICKS = 3          # 连续点击“再挑戦”无效，可能 ticket 用尽，改点“次へ”。
 
         while time() - start < timeout:
             sleep(1.0)
@@ -265,13 +287,13 @@ class HandleResultsStep(ProduceStep):
 
             # ── 0a. 考试不合格 — 点击「再挑戦」按钮触发再挑战确认弹窗 ──
             if ProduceText.FAILED in frame_text.replace(" ", ""):
-                # 连续点击再挑戦多次仍无变化 → ticket 用尽，改为点击「次へ」放弃重试
+                # 多次点击“再挑戦”仍无变化，可能 ticket 用尽，改为点击“次へ”放弃重试。
                 if retry_click_count >= MAX_RETRY_CLICKS:
                     logger.warning(
                         f"结果链: 再挑戦已点击 {retry_click_count} 次无效，"
                         "判断 ticket 用尽，改为点击「次へ」放弃重试"
                     )
-                    # 次へ 按钮通常在右下角（Confirm button）
+                    # “次へ”按钮通常在右下角（Confirm button）。
                     confirm_boxes = list(results.filter_by_label(ProducerLabels.CONFIRM_BUTTON))
                     if confirm_boxes:
                         app.device.click_element(confirm_boxes[0])
@@ -301,7 +323,7 @@ class HandleResultsStep(ProduceStep):
                 consecutive_no_progress = 0
                 continue
 
-            # ── 0b. フォト選択画面 — VL 模型自动选择最优卡面 ──
+            # ── 0b. 照片选择画面 — VL 模型自动选择最优卡面 ──
             if HandleResultsStep._is_photo_select_screen(frame_text):
                 logger.info("结果链: 检测到フォト選択画面（记忆卡面照片选择）")
                 HandleResultsStep._handle_photo_selection(app, frame)
@@ -321,7 +343,7 @@ class HandleResultsStep(ProduceStep):
                 consecutive_no_progress = 0
                 continue
 
-            # ── 2. 「プロデュース履歴」详情页 — 误触后关闭（优先于完了检测）──
+            # ── 2. “プロデュース履歴”详情页：误触后先关闭（优先于完了检测）──
             if HandleResultsStep._is_history_page(frame_text, labels):
                 logger.debug("结果链: 检测到プロデュース履歴详情页，关闭")
                 close_boxes = results.filter_by_label(ProducerLabels.CLOSE_BUTTON)
@@ -334,7 +356,7 @@ class HandleResultsStep(ProduceStep):
                 consecutive_no_progress = 0
                 continue
 
-            # ── 3. 「完了する」页 — 必须点左侧按钮 ──
+            # ── 3. “完了する”页：必须点击左侧按钮。──
             if HandleResultsStep._is_complete_page(frame_text):
                 logger.debug("结果链: 检测到「完了する」页面")
                 complete_btn = find_button(app, ButtonText.COMPLETE, fuzz_threshold=50)
@@ -353,7 +375,7 @@ class HandleResultsStep(ProduceStep):
                     elif all_btns:
                         app.device.click_element(all_btns[0])
                     else:
-                        # 「完了する」按钮通常在左下角
+                        # “完了する”按钮通常在左下角。
                         click_relative_point(app, x_ratio=0.27, y_ratio=0.92, label="完了-fallback")
                 sleep(2.0)
                 consecutive_no_progress = 0
@@ -482,7 +504,7 @@ class HandleResultsStep(ProduceStep):
         text = frame_text.replace(" ", "").replace("\n", "")
         has_generate = ButtonText.GENERATE in text
         has_memory = any(token in text for token in ProduceText.MEMORY_OCR_VARIANTS)
-        # 排除「メモリー生成完了」（那是 TAP 推进页）
+        # 排除「记忆生成完了」（那是 TAP 推进页）
         if ProduceText.MEMORY_GENERATION_COMPLETE in text:
             return False
         if ButtonText.REGENERATE in text:
@@ -515,7 +537,7 @@ class HandleResultsStep(ProduceStep):
         text = frame_text.replace(" ", "")
         has_history = _HISTORY_PAGE_KEYWORD in text
         has_complete = ButtonText.COMPLETE in text
-        # 详情页特有的关键词（区分完了する页面）
+        # 详情页特有关键词（用于区分“完了する”页面）。
         has_detail = any(kw in text for kw in ProduceText.RESULT_HISTORY_DETAIL_TOKENS)
         return has_history and has_detail and not has_complete
 
@@ -583,7 +605,12 @@ class HandleResultsStep(ProduceStep):
         frame_text: str | None = None,
         labels: list[str] | None = None,
     ) -> tuple[str, str, str]:
-        """判断结果链之后当前是已回主页、已回 gameplay，还是仍停留在结果流。"""
+        """判断结果链当前是已回主页、已恢复 gameplay，还是仍在结果流中。
+
+        之所以单独做这层判定，是因为结果链中会混入一些看起来像 gameplay modal 的页面，
+        甚至会误触进入结果详情页。如果直接把所有非 UNKNOWN 状态都交回主循环，容易把结果页
+        误判成可继续接管的 gameplay，因此这里会先排除结果详情与通用结果弹窗，再决定是否恢复。
+        """
         results = app.latest_results
         if results is not None and results.exists_label(BaseUILabels.TAB_HOME):
             return ("home", "", "")
@@ -604,7 +631,7 @@ class HandleResultsStep(ProduceStep):
         if HandleResultsStep._is_result_detail_page(frame_text, labels):
             return ("result", "", "")
         if phase == GameplayPhase.MODAL or phase_value == GameplayPhase.MODAL.value:
-            # 结果链中常会插入「早送り確認」「確認」这类通用弹窗；
+            # 结果链中常会插入“早送り確認”“確認”等通用弹窗；
             # 只有明确识别成具体 gameplay modal 时，才交回主循环。
             if (
                 position == GameplayPosition.GAMEPLAY_MODAL
@@ -639,7 +666,7 @@ class HandleResultsStep(ProduceStep):
         4. Universal button → 底部优先
         返回点击的按钮描述，无按钮返回 None。
         """
-        # 特殊处理：如果 OCR 包含「完了する」，优先点击左侧按钮
+        # 特殊处理：若 OCR 包含“完了する”，优先点击左侧按钮。
         clean_text = frame_text.replace(" ", "")
         if ButtonText.COMPLETE in clean_text:
             complete_btn = find_button(app, ButtonText.COMPLETE, fuzz_threshold=50)
@@ -725,7 +752,7 @@ class HandleResultsStep(ProduceStep):
         return False
 
 
-# ── フォト選択画面辅助函数 ─────────────────────────────────
+# ── 照片选择画面辅助函数 ─────────────────────────────────
 
 def _find_photo_grid(frame) -> tuple[list[tuple[int, int]], int, int]:
     """检测フォト選択画面中照片网格的行区间与列范围。
@@ -815,7 +842,17 @@ def _extract_photo_thumbnails(frame) -> list:
 
 
 def _click_photo_by_index(app, frame, index: int, total: int) -> None:
-    """点击指定索引的照片缩略图。"""
+    """点击photo、by、index并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        frame: 待识别图像帧。
+        index: 用于提供index相关输入。
+        total: 用于提供total相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     if frame is None:
         return
 
@@ -841,13 +878,20 @@ def _click_photo_by_index(app, frame, index: int, total: int) -> None:
 
 
 def _click_next_button(app) -> None:
-    """点击「次へ」按钮推进。"""
+    """点击next、按钮并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     next_btn = find_button(app, ButtonText.NEXT, fuzz_threshold=50)
     if next_btn:
         app.device.click_element(next_btn)
         logger.debug("记忆卡面选择: 点击「次へ」按钮")
     else:
-        # 兜底：「次へ」按钮在底部居中 y≈0.93
+        # 兜底：“次へ”按钮位于底部居中 y≈0.93。
         click_relative_point(app, x_ratio=0.5, y_ratio=0.93, label="photo-next-fallback")
         logger.debug("记忆卡面选择: 兜底点击底部「次へ」位置")
     sleep(2.0)

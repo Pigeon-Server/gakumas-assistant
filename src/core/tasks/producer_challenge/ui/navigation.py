@@ -22,6 +22,20 @@ if TYPE_CHECKING:
 
 
 def go_back_in_gameplay(app: "AppProcessor") -> bool:
+    """在游戏内执行返回操作，逐级关闭覆盖层回到主 gameplay 画面。
+
+    按优先级依次尝试：
+    1. 弹窗位置：根据 position 类型决定优先确认还是取消，点击弹窗按钮
+    2. CLOSE_BUTTON 标签：点击 YOLO 检测到的关闭按钮
+    3. BACK_BTN 标签：点击 YOLO 检测到的返回按钮
+    4. OCR 文本匹配：查找「閉じる」或「キャンセル」按钮点击
+
+    Args:
+        app: 应用处理器实例，提供 latest_results、game_utils 和 device。
+
+    Returns:
+        bool: 成功执行返回操作返回 True，所有方式均失败返回 False。
+    """
     position = get_pipeline_position(app)
     if position in GAMEPLAY_MODAL_POSITIONS:
         modal = app.game_utils.try_get_modal(no_body=True)
@@ -76,6 +90,22 @@ def go_home_from_gameplay(
     *,
     max_try: int = 4,
 ) -> bool:
+    """从游戏内返回主页（ホーム），最多尝试 max_try 轮。
+
+    每轮按优先级依次尝试：
+    1. 检查是否已在主页（TAB_HOME 标签）
+    2. 点击 GO_HOME_BTN 标签按钮
+    3. OCR 查找「保存中断」/「ホーム」/「引退」按钮
+    4. 调用 go_back_in_gameplay 逐级返回
+    5. 点击右上角操作按钮
+
+    Args:
+        app: 应用处理器实例，提供 latest_results、game_utils 和 device。
+        max_try: 最大尝试轮数。每轮执行一个操作后等待 0.8-1.0 秒。默认 4 轮。
+
+    Returns:
+        bool: 最终画面出现 TAB_HOME 标签返回 True，超过轮数仍未到达主页返回 False。
+    """
     for _ in range(max_try):
         if app.latest_results.exists_label(BaseUILabels.TAB_HOME):
             return True

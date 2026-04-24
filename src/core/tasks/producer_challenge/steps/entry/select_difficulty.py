@@ -52,9 +52,31 @@ class SelectDifficultyStep(ProduceStep):
     skip_on_resume = True
 
     def validate(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """确认上下文中已经解析出有效的培育路线。
+
+        Args:
+            app: 当前应用处理器；此处不直接使用，但保留统一步骤签名。
+            ctx: 培育上下文，要求 `ctx.produce_id` 已在前面步骤或初始化阶段写入。
+
+        Returns:
+            bool: 只要 `ctx.produce_id` 不为空就返回 True，表示可以继续执行难度选择。
+        """
         return ctx.produce_id is not None
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """根据剧本与目标难度进入对应的偶像卡选择页。
+
+        Args:
+            app: 当前应用处理器，用于点击难度标签、滑动页面和等待加载完成。
+            ctx: 培育上下文；函数会读取 `scenario` 与 `effective_difficulty`，并依此分派到
+                HAJIME 普通难度、HAJIME Legend 或 NIA 的不同处理流程。
+
+        Returns:
+            bool: 成功进入偶像卡选择页时返回 True。
+
+        Raises:
+            ValueError: 上下文中的剧本标识不受支持时抛出。
+        """
         scenario = ctx.scenario.lower()
         difficulty = ctx.effective_difficulty.lower()
 
@@ -68,8 +90,20 @@ class SelectDifficultyStep(ProduceStep):
             raise ValueError(f"未知剧本: {scenario!r}")
 
     def _select_hajime_difficulty(self, app: "AppProcessor", ctx: "ProduceContext", difficulty: str) -> bool:
-        """HAJIME 普通难度（Regular/Pro/Master）直接点击标签。
-        AP 不足恢复后会回到难度选择页，需要重新点击难度。"""
+        """点击 HAJIME 普通难度标签，并处理 AP 恢复后的重试。
+
+        Args:
+            app: 当前应用处理器。
+            ctx: 当前培育上下文；该参数主要用于保持与其它分支一致的签名。
+            difficulty: 目标难度，只允许 `regular`、`pro`、`master`。
+
+        Returns:
+            bool: 成功进入偶像卡选择页时返回 True。
+
+        Raises:
+            TimeoutError: 难度标签未出现，或多次重试后仍未进入偶像卡选择页时抛出。
+            RuntimeError: 标签出现后瞬间消失，无法安全点击时抛出。
+        """
         label = _HAJIME_DIFFICULTY_LABEL_MAP[difficulty]
         MAX_RETRIES = 3
 
@@ -95,10 +129,17 @@ class SelectDifficultyStep(ProduceStep):
         raise TimeoutError(f"难度选择重试 {MAX_RETRIES} 次仍未进入偶像选择页")
 
     def _select_hajime_legend(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
-        """HAJIME Legend 难度位于第二页——需要向左滑动到 Legend 页面。
+        """通过横向滑动进入 HAJIME 的 Legend 难度页并点击进入。
 
-        Legend 页面的特征：不存在 Regular/Pro/Master 标签，
-        使用 ButtonText OCR 匹配「レジェンド」按钮文本来识别。
+        Args:
+            app: 当前应用处理器，用于执行滑动和点击 Legend 按钮。
+            ctx: 当前培育上下文；此分支暂不直接读取额外字段，但保留统一签名。
+
+        Returns:
+            bool: 成功从 Legend 页面进入偶像卡选择页时返回 True。
+
+        Raises:
+            TimeoutError: 多次滑动后仍未找到 Legend 页面时抛出。
         """
         h, w = app.latest_frame.shape[:2]
         cy = h // 2
@@ -248,12 +289,12 @@ class SelectDifficultyStep(ProduceStep):
 
             yolo_buttons = app.latest_results.filter_by_label(BaseUILabels.BUTTON)
 
-            # 阶段优先级: 确认消费 > AP回復(使う) > AP不足(回復する)
+            # 阶段优先级：确认消费 > AP恢复（使う）> AP不足（回復する）。
             # 三层弹窗可能同时显示，确认消费弹窗在最底层(cy最大)，需要优先处理
 
-            # 阶段 3: 确认消费对话框（消費して / 回復しますか）
+            # 阶段 3：确认消费对话框（“消費して / 回復しますか”）。
             if "消費して" in full_text or "回復しますか" in full_text:
-                # 用 OCR 找最下方的"回復する"按钮（确认消费弹窗底部）
+                # 用 OCR 找最下方“回復する”按钮（确认消费弹窗底部）。
                 recover_positions = []
                 for t, b in zip(texts, boxes):
                     if "回復する" in t:
@@ -261,14 +302,14 @@ class SelectDifficultyStep(ProduceStep):
                         cx = (b[0][0] + b[2][0]) / 2
                         recover_positions.append((int(cx), int(cy)))
                 if recover_positions:
-                    # 选 cy 最大的（最底部弹窗的回復する按钮）
+                    # 选 cy 最大的按钮（最底部弹窗的“回復する”）。
                     pos = max(recover_positions, key=lambda p: p[1])
                     logger.debug(f"AP消費確認: 点击回復する OCR位置 {pos}")
                     app.device.click(pos[0], pos[1], el_label="回復する")
                     sleep(2)
                     continue
 
-            # 阶段 2: AP回復 弹窗出现 → 点击 使う
+            # 阶段 2：AP恢复弹窗出现 → 点击“使う”。
             if ProduceText.AP_RECOVERY in full_text and ProduceText.AP_DRINK in full_text:
                 pos = find_ocr_center("使う")
                 if pos:
@@ -276,7 +317,7 @@ class SelectDifficultyStep(ProduceStep):
                     app.device.click(pos[0], pos[1], el_label="使う")
                     sleep(2)
                     continue
-                # 如果没找到"使う"文本，找閉じる退出
+                # 如果没找到“使う”文本，则找“閉じる”退出。
                 close_pos = find_ocr_center("閉じる")
                 if close_pos:
                     logger.warning("AP回復: 未找到使う按钮，点击閉じる退出")
@@ -284,7 +325,7 @@ class SelectDifficultyStep(ProduceStep):
                     sleep(1.5)
                     return
 
-            # 阶段 1: 只有 AP不足（还没打开 AP回復 弹窗）→ 点击 回復する
+            # 阶段 1：仅出现 AP 不足（尚未打开 AP 恢复弹窗）→ 点击“回復する”。
             if ProduceText.AP_SHORTAGE in full_text and ProduceText.AP_RECOVERY not in full_text:
                 pos = find_ocr_center("回復する")
                 if pos:

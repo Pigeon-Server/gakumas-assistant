@@ -73,7 +73,7 @@ def build_default_dispatcher() -> GameplayDispatcher:
     # 高优先级：结果画面退出、弹窗覆盖
     dispatcher.register(ResultHandler())
     dispatcher.register(ModalHandler())
-    # ライブ演出（横画面リズムゲーム）
+    # Live演出（横屏节奏玩法）。
     dispatcher.register(LivePerformanceHandler())
     # 普通 gameplay 阶段
     dispatcher.register(ExamHandler())
@@ -98,54 +98,54 @@ __all__ = [
     "ResultHandler",
     "AdvanceHandler",
     "build_default_dispatcher",
-    # schedule
+    # 日程
     "ScheduleActionCandidate",
     "ScheduleHandler",
     "ScheduleStepResult",
     "collect_schedule_action_candidates",
     "decide_schedule_action",
     "execute_schedule_step",
-    # lesson
+    # 课程
     "LessonCardCandidate",
     "LessonHandler",
     "LessonStepResult",
     "collect_lesson_card_candidates",
     "decide_lesson_card",
     "execute_lesson_step",
-    # dialogue
+    # 对话
     "DialogueHandler",
     "DialogueOptionCandidate",
     "DialogueStepResult",
     "collect_dialogue_option_candidates",
     "decide_dialogue_option",
     "execute_dialogue_step",
-    # p_drink
+    # P饮料
     "PDrinkCandidate",
     "PDrinkHandler",
     "PDrinkStepResult",
     "collect_p_drink_candidates",
     "decide_p_drink",
     "execute_p_drink_step",
-    # skill_reward
+    # 技能奖励
     "SkillRewardCandidate",
     "SkillRewardHandler",
     "SkillRewardStepResult",
     "collect_skill_reward_candidates",
     "decide_skill_reward",
     "execute_skill_reward_step",
-    # exam
+    # 考试
     "ExamHandler",
-    # consult
+    # 咨询
     "ConsultHandler",
-    # modal
+    # 弹窗
     "ModalHandler",
-    # effect_chain
+    # 效果链
     "EffectChainHandler",
-    # live_performance
+    # Live演出
     "LivePerformanceHandler",
-    # item_select
+    # 道具选择
     "ItemSelectHandler",
-    # rl
+    # RL策略
     "RLStrategy",
     "inject_rl_strategy",
 ]

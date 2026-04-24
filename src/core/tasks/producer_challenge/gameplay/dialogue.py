@@ -1,33 +1,36 @@
 """対話 / コミュ handler。
 
-対話画面包括:
-  - 2-3 个可選選項 (Universal Options)
-  - 快進按鈕 (Fast Forward)
-  - 可点击推進的劇情文本
+对话画面包括:
+  - 2-3 个可选项（Universal Options）
+  - 快进按钮（Fast Forward）
+  - 可点击推进的剧情文本
 
-交互模式（経 ADB 実測確認）:
-  - 選項需要双击: 第一次点击高亮選中，第二次点击確認。
-  - 快進: 単击切換自動推進。
-  - 純劇情文本: 点击任意位置継続。
+交互模式（经 ADB 实测确认）:
+  - 选项需要双击：第一次点击高亮选中，第二次点击确认。
+  - 快进：单击切换自动推进。
+  - 纯剧情文本：点击任意位置继续。
 
-おでかけ（外出）選項探査:
-  外出画面会顯示 2-3 個選項（如「いちごミルク -100P」「キャラメル -50P」），
-  選項名是劇情台詞（不在 DB 中），但:
-    1. 選項框內 OCR 可提取選項名 + P 点消耗
-    2. YOLO「Action Info」區域包含当前高亮選項的効果描述
-    3. 通過逐個点击選項（探査），可采集所有効果描述
-    4. 将 P 点成本 + 効果描述注入候選項 metadata，提供給 LLM 決策
+外出选项探查:
+  外出画面会显示 2-3 个选项（如「いちごミルク -100P」「キャラメル -50P」），
+  选项名是剧情台词（不在 DB 中），但:
+    1. 选项框内 OCR 可提取选项名 + P 点消耗
+    2. YOLO「Action Info」区域包含当前高亮选项的效果描述
+    3. 通过逐个点击选项（探查），可采集所有效果描述
+    4. 将 P 点成本 + 效果描述注入候选项 metadata，提供给 LLM 决策
 """
 
 from __future__ import annotations
 
+import cv2
 import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, List
 
+from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
+from src.core.inference.ocr_engine import OCRService
 from src.core.tasks.producer_challenge.shared.common import (
     click_relative_point,
     invoke_decision_strategy,
@@ -71,32 +74,54 @@ class DialogueOptionCandidate:
 
 @dataclass
 class DialogueStepResult:
-    status: str  # "selected" | "confirmed" | "fast_forward" | "advanced"
+    """定义 DialogueStepResult 的结构化数据。
+
+    Attributes:
+        status: 步骤执行状态（如 selected/confirmed/skipped）。
+        candidate: 本步骤最终选中的候选项对象。
+    """
+    status: str  # 状态值："selected" | "confirmed" | "fast_forward" | "advanced"
     candidate: DialogueOptionCandidate | None = None
 
 
 # ────────────────────────────────────────────────────────────
-# おでかけ探査 — 定数 / 正規表現
+# 外出探査 — 定数 / 正規表現
 # ────────────────────────────────────────────────────────────
 
-# P 点消耗パターン: "P-100", "PP-100", "P 50", "-100"(P被OCR截断) 等
-# ^[-ー] は選項先頭のマイナス記号（P が別行に分離した場合）を拾う
+# P 点消耗模式："P-100"、"PP-100"、"P 50"、"-100"（P 被 OCR 截断）等
+# ^[-ー] 用来捕获选项开头的负号（P 被拆成单独一行时）
 _P_COST_RE = re.compile(r"(?:P{1,2}\s*[-ー]?\s*|^[-ー]\s*)(\d+)", re.MULTILINE)
 
-# おでかけ探査: 点击後 UI 刷新等待
+# 外出探查：点击后等待 UI 刷新
 _OUTING_PROBE_TAP_WAIT = 0.5
-# おでかけ探査: 推理等待（Yolo再検出）
+# 外出探査: 推理等待（Yolo再検出）
 _OUTING_PROBE_INFER_WAIT = 0.3
 
 # Debug 可視化
 from src.utils.debug_tools import DebugTools
 _debugger = DebugTools()
+_ACTION_INFO_OCR = OCRService()
+_ACTION_INFO_HINT_KEYWORDS = (
+    ProduceText.ACTION_INFO_EFFECT,
+    ProduceText.STAMINA,
+    ProduceText.P_POINT,
+    ProduceText.PARAMETER_UP,
+    ProduceText.STAMINA_RECOVERY,
+    ProduceText.SKILL_CARD,
+    ProduceText.SKILL_CARD_REMOVE,
+    "上昇",
+    "獲得",
+    "回復",
+    "強化",
+    "ランダム",
+    "チェンジ",
+)
 _DIALOGUE_FAST_FORWARD_ENABLED_KEY = "dialogue_fast_forward_enabled"
 _DIALOGUE_FAST_FORWARD_LAST_CLICK_TS_KEY = "dialogue_fast_forward_last_click_ts"
 
 
 # ────────────────────────────────────────────────────────────
-# おでかけ探査 — 工具函数
+# 外出探査 — 工具函数
 # ────────────────────────────────────────────────────────────
 
 def _is_outing_context(app: "AppProcessor", position: str) -> bool:
@@ -111,7 +136,7 @@ def _is_outing_context(app: "AppProcessor", position: str) -> bool:
     info_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_ACTION_INFO)
     if not info_boxes:
         return False
-    # 仅在出现 P 点消耗模式时判定为おでかけ，避免把普通周事件误判成外出。
+    # 仅在出现 P 点消耗模式时判定为外出，避免把普通周事件误判成外出。
     option_boxes = list(app.latest_results.filter_by_label(ProducerLabels.UNIVERSAL_OPTIONS))
     return any(_extract_p_cost(ocr_text(getattr(box, "frame", None))) is not None for box in option_boxes)
 
@@ -120,8 +145,19 @@ def _is_dialogue_option_info_context(app: "AppProcessor", position: str) -> bool
     """判断当前是否可通过 Action Info 面板读取周事件选项效果。"""
     if position not in {"schedule_event_options", "dialogue_options"}:
         return False
-    info_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_ACTION_INFO)
-    return bool(info_boxes)
+    results = getattr(app, "latest_results", None)
+    if results is None:
+        return False
+    if results.filter_by_label(ProducerLabels.PC_ACTION_INFO):
+        return True
+    if not results.filter_by_label(ProducerLabels.PC_PROGRESS):
+        return False
+    option_boxes = list(results.filter_by_label(ProducerLabels.UNIVERSAL_OPTIONS))
+    if len(option_boxes) < 2:
+        return False
+    # 普通周事件常见“需要先点选项，信息框才刷新/出现”的场景：
+    # 这里不能要求当前帧已读到效果文本，否则会直接跳过探査。
+    return True
 
 
 def _extract_p_cost(text: str) -> int | None:
@@ -141,22 +177,256 @@ def _extract_action_info_description(app: "AppProcessor") -> str:
 
     Action Info 区域由 YOLO 検出，包含当前高亮選項的効果描述。
     """
-    info_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_ACTION_INFO)
-    if not info_boxes:
-        return ""
-    info_box = info_boxes.first()
-    frame = getattr(info_box, "frame", None)
-    if frame is None or getattr(frame, "size", 0) <= 0:
-        return ""
-    text = ocr_text(frame)
+    def _looks_like_effect_text(raw: str) -> bool:
+        """判断效果、text是否成立。
 
-    # Debug 可視化: Action Info 区域 + OCR 結果
+        Args:
+            raw: 用于提供raw相关输入。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
+        normalized = re.sub(r"\s+", "", str(raw or ""))
+        if not normalized:
+            return False
+        if any(keyword in normalized for keyword in _ACTION_INFO_HINT_KEYWORDS):
+            return True
+        return bool(re.search(r"[+＋\-ー]\d+", normalized))
+
+    info_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_ACTION_INFO)
+    if info_boxes:
+        info_box = info_boxes.first()
+        frame = getattr(info_box, "frame", None)
+        if frame is not None and getattr(frame, "size", 0) > 0:
+            text = ocr_text(frame).strip()
+            # Debug 可視化: Action Info 区域 + OCR 結果
+            _debugger.add_box(
+                info_box.x, info_box.y, info_box.w, info_box.h,
+                color=(0, 200, 255), thickness=2, duration=3,
+                label=f"ActionInfo: {text[:30]}",
+            )
+            if _looks_like_effect_text(text):
+                return text
+
+    def _detect_action_info_white_panel(
+        frame: Any,
+        option_boxes: list[Any],
+    ) -> tuple[int, int, int, int] | None:
+        """基于选项行几何关系检测白色 Action Info 面板。
+
+        约束策略：
+        - 用最上方选项 + 选项间平均间距估计面板中心。
+        - 只接受中心偏移在阈值内的白色矩形，避免漂移到无关白块。
+        """
+        if frame is None or getattr(frame, "size", 0) <= 0 or not option_boxes:
+            return None
+        frame_h, frame_w = frame.shape[:2]
+        valid_boxes: list[Any] = []
+        for box in option_boxes:
+            x1 = int(getattr(box, "x", 0))
+            y1 = int(getattr(box, "y", 0))
+            x2 = int(getattr(box, "w", 0))
+            y2 = int(getattr(box, "h", 0))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            valid_boxes.append(box)
+        if not valid_boxes:
+            return None
+
+        ordered = sorted(valid_boxes, key=lambda b: int(getattr(b, "y", 0)))
+        top_box = ordered[0]
+        top_y = int(getattr(top_box, "y", 0))
+        top_h = max(1, int(getattr(top_box, "h", 0) - getattr(top_box, "y", 0)))
+        top_cy = int((int(getattr(top_box, "y", 0)) + int(getattr(top_box, "h", 0))) / 2)
+
+        centers = [
+            int((int(getattr(box, "y", 0)) + int(getattr(box, "h", 0))) / 2)
+            for box in ordered
+        ]
+        gaps = [max(0, centers[i + 1] - centers[i]) for i in range(len(centers) - 1)]
+        avg_gap = int(sum(gaps) / len(gaps)) if gaps else top_h
+
+        row_left = min(int(getattr(box, "x", 0)) for box in ordered)
+        row_right = max(int(getattr(box, "w", 0)) for box in ordered)
+        row_center_x = int((row_left + row_right) / 2)
+        row_width = max(1, row_right - row_left)
+
+        expected_cx = row_center_x
+        expected_cy = max(0, top_cy - int(max(avg_gap * 1.35, top_h * 1.55)))
+        tol_x = int(max(frame_w * 0.18, row_width * 0.38))
+        tol_y = int(max(frame_h * 0.08, avg_gap * 0.95, top_h * 1.25))
+
+        _debugger.add_box(
+            max(0, expected_cx - tol_x),
+            max(0, expected_cy - tol_y),
+            min(frame_w, expected_cx + tol_x),
+            min(frame_h, expected_cy + tol_y),
+            color=(170, 220, 255),
+            thickness=1,
+            duration=3,
+            label="ActionInfoWhiteAnchor",
+        )
+
+        # 只在选项上方区域搜索，避免把底部卡片等白块误识别成信息框。
+        roi_bottom = max(0, top_y - max(4, int(frame_h * 0.008)))
+        if roi_bottom <= 0:
+            return None
+        roi = frame[:roi_bottom, :]
+        if roi.size <= 0:
+            return None
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        white_mask = cv2.inRange(hsv, (0, 0, 168), (180, 56, 255))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+        best_rect: tuple[int, int, int, int] | None = None
+        best_score = -1e9
+        contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            x, y, w_rect, h_rect = cv2.boundingRect(contour)
+            if w_rect <= 0 or h_rect <= 0:
+                continue
+            x1, y1, x2, y2 = x, y, x + w_rect, y + h_rect
+
+            area = float(w_rect * h_rect)
+            if area < float(frame_w * frame_h) * 0.012:
+                continue
+            if w_rect < row_width * 0.54:
+                continue
+            if y2 > roi_bottom:
+                continue
+
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
+            dx = abs(cx - expected_cx)
+            dy = abs(cy - expected_cy)
+            if dx > tol_x or dy > tol_y:
+                continue
+
+            # 优先选择更靠近估计中心、且横向覆盖更接近选项行宽度的矩形。
+            width_ratio = min(1.8, max(0.0, w_rect / max(float(row_width), 1.0)))
+            score = (
+                -dx * 1.3
+                -dy * 1.9
+                + width_ratio * 180.0
+                + min(h_rect, int(frame_h * 0.2)) * 0.18
+            )
+            if score > best_score:
+                best_score = score
+                best_rect = (x1, y1, x2, y2)
+
+        if best_rect is not None:
+            _debugger.add_box(
+                best_rect[0], best_rect[1], best_rect[2], best_rect[3],
+                color=(90, 220, 255), thickness=2, duration=3,
+                label="ActionInfoWhitePanel",
+            )
+        return best_rect
+
+    # 兜底1：当 YOLO 漏检 Action Info 时，优先尝试“白色信息面板”几何检测。
+    results = getattr(app, "latest_results", None)
+    frame = getattr(app, "latest_frame", None)
+    option_boxes = list(results.filter_by_label(ProducerLabels.UNIVERSAL_OPTIONS)) if results else []
+    if frame is None or getattr(frame, "size", 0) <= 0 or not option_boxes:
+        return ""
+    white_panel = _detect_action_info_white_panel(frame, option_boxes)
+    if white_panel is not None:
+        x1, y1, x2, y2 = white_panel
+        probe = frame[y1:y2, x1:x2].copy()
+        if probe.size > 0:
+            try:
+                ocr_results = _ACTION_INFO_OCR.ocr(probe)
+                merged = ocr_results.auto_merge_lines(
+                    cy_range=max(4, int(probe.shape[0] * 0.02)),
+                    width_gap=max(10, int(probe.shape[1] * 0.03)),
+                )
+                lines = [
+                    str(getattr(line, "text", "") or "").strip()
+                    for line in merged
+                    if str(getattr(line, "text", "") or "").strip()
+                ]
+                text = "；".join(lines).strip()
+                if not text:
+                    text = ocr_text(probe).strip()
+            except Exception:  # noqa: BLE001
+                text = ocr_text(probe).strip()
+            _debugger.add_box(
+                x1, y1, x2, y2,
+                color=(255, 205, 100), thickness=2, duration=3,
+                label=f"ActionInfoWhiteOCR: {text[:30]}",
+            )
+            if _looks_like_effect_text(text):
+                return text
+
+    # 兜底2：按“选项上方区域”做 OCR。
+    height, width = frame.shape[:2]
+    top = min(int(getattr(box, "y", 0)) for box in option_boxes)
+    left = min(int(getattr(box, "x", 0)) for box in option_boxes)
+    right = max(int(getattr(box, "w", 0)) for box in option_boxes)
+    y2 = max(0, top - max(4, int(height * 0.01)))
+    panel_h = max(int(height * 0.16), min(int(height * 0.32), int(top * 0.55)))
+    y1 = max(0, y2 - panel_h)
+    x_pad = max(8, int(width * 0.06))
+    x1 = max(0, left - x_pad)
+    x2 = min(width, right + x_pad)
+    if y2 <= y1 or x2 <= x1:
+        return ""
+    probe = frame[y1:y2, x1:x2].copy()
+    if probe.size <= 0:
+        return ""
+    try:
+        ocr_results = _ACTION_INFO_OCR.ocr(probe)
+        merged = ocr_results.auto_merge_lines(
+            cy_range=max(4, int(probe.shape[0] * 0.02)),
+            width_gap=max(10, int(probe.shape[1] * 0.03)),
+        )
+        lines = [
+            str(getattr(line, "text", "") or "").strip()
+            for line in merged
+            if str(getattr(line, "text", "") or "").strip()
+        ]
+        text = "；".join(lines).strip()
+        if not text:
+            text = ocr_text(probe).strip()
+    except Exception:  # noqa: BLE001
+        text = ocr_text(probe).strip()
+
     _debugger.add_box(
-        info_box.x, info_box.y, info_box.w, info_box.h,
-        color=(0, 200, 255), thickness=2, duration=3,
-        label=f"ActionInfo: {text[:30]}",
+        x1, y1, x2, y2,
+        color=(255, 200, 80), thickness=2, duration=3,
+        label=f"ActionInfoFallback: {text[:30]}",
     )
-    return text.strip()
+    if _looks_like_effect_text(text):
+        return text
+    return ""
+
+
+def _read_action_info_after_option_click(
+    app: "AppProcessor",
+    *,
+    previous_desc: str = "",
+    max_attempts: int = 5,
+) -> str:
+    """选项点击后等待帧刷新，再读取 Action Info，避免读到旧帧。"""
+    for attempt in range(max(1, max_attempts)):
+        game_utils = getattr(app, "game_utils", None)
+        if game_utils is not None and hasattr(game_utils, "wait_frame_stable"):
+            try:
+                game_utils.wait_frame_stable(stable_count=2, timeout=1.2)
+            except TypeError:
+                game_utils.wait_frame_stable(stable_count=2)
+            except Exception:
+                pass
+        time.sleep(0.12)
+        desc = _extract_action_info_description(app)
+        if not desc:
+            continue
+        # 首次读取到有效文本直接接受；若给了上一次文本，优先等待文本变化。
+        if not previous_desc or desc != previous_desc or attempt >= 1:
+            return desc
+    return ""
 
 
 def _probe_outing_options(
@@ -179,25 +449,12 @@ def _probe_outing_options(
 
     logger.info("dialogue: おでかけ探査開始 — {} 個選項", len(candidates))
 
-    # 第一個選項通常已預選 → 先直接読取 Action Info
-    first_desc = _extract_action_info_description(app)
-    if first_desc:
-        candidates[0].metadata["outing_effect"] = first_desc
-        logger.debug(
-            "dialogue: おでかけ選項 #0 効果(預選): {}",
-            first_desc[:60],
-        )
-
-    # 逐個点击残りの選項
+    last_desc = ""
     for candidate in candidates:
         # 提取 P 点消耗
         p_cost = _extract_p_cost(candidate.title)
         if p_cost is not None:
             candidate.metadata["p_cost"] = p_cost
-
-        # 已取得効果描述的（第一個預選項）跳過
-        if candidate.metadata.get("outing_effect"):
-            continue
 
         try:
             # 点击切換高亮
@@ -205,10 +462,11 @@ def _probe_outing_options(
             time.sleep(_OUTING_PROBE_TAP_WAIT)
             time.sleep(_OUTING_PROBE_INFER_WAIT)
 
-            # 読取 Action Info
-            desc = _extract_action_info_description(app)
+            # 点击后等待刷新，再读取 Action Info，避免旧帧误读。
+            desc = _read_action_info_after_option_click(app, previous_desc=last_desc)
             if desc:
                 candidate.metadata["outing_effect"] = desc
+                last_desc = desc
                 logger.debug(
                     "dialogue: おでかけ選項 #{} 効果: {}",
                     candidate.index, desc[:60],
@@ -250,20 +508,24 @@ def _probe_dialogue_option_effects(
         return
     logger.info("dialogue: 周事件选项探査開始 — {} 個選項", len(candidates))
 
-    first_desc = _extract_action_info_description(app)
-    if first_desc:
-        candidates[0].metadata["option_effect"] = first_desc
-
-    for candidate in candidates:
-        if candidate.metadata.get("option_effect"):
-            continue
+    last_desc = ""
+    has_action_info_label = bool(
+        app.latest_results.filter_by_label(ProducerLabels.PC_ACTION_INFO)
+    )
+    for idx, candidate in enumerate(candidates):
         try:
             app.device.click_element(candidate.box)
             time.sleep(_OUTING_PROBE_TAP_WAIT)
             time.sleep(_OUTING_PROBE_INFER_WAIT)
-            desc = _extract_action_info_description(app)
+            # 必须在点击后等待刷新，否则容易读到点击前的旧帧。
+            desc = _read_action_info_after_option_click(
+                app,
+                previous_desc=last_desc,
+                max_attempts=5 if has_action_info_label else 6,
+            )
             if desc:
                 candidate.metadata["option_effect"] = desc
+                last_desc = desc
         except Exception as exc:  # noqa: BLE001
             logger.warning("dialogue: 周事件选项 #{} 探査异常: {}", candidate.index, exc)
 
@@ -402,13 +664,28 @@ def _update_dialogue_stuck(ctx: "ProduceContext", option_index: int) -> int:
 
 
 def _reset_dialogue_stuck(ctx: "ProduceContext") -> None:
-    """重置对话卡住计数。"""
+    """重置对话、stuck并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     ctx.handler_state.pop("dialogue_stuck_count", None)
     ctx.handler_state.pop("dialogue_stuck_last_option", None)
     ctx.handler_state.pop("dialogue_skip_indices", None)
 
 
 def _get_fast_forward_buttons(app: "AppProcessor") -> list[Any]:
+    """获取fast、forward、buttons并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     results = getattr(app, "latest_results", None)
     if results is None:
         return []
@@ -461,6 +738,7 @@ def _set_dialogue_transition_retry_override(
     *,
     reason: str,
 ) -> None:
+    """设置`dialogue_transition_retry_override`。"""
     ctx.handler_state["unknown_retry_override"] = {
         "reason": reason,
         "retry_limit": int(
@@ -508,21 +786,15 @@ def execute_dialogue_step(
             ctx.handler_state.pop("dialogue_just_confirmed", None)
             ctx.handler_state.pop("dialogue_confirm_grace", None)
 
-        # ── おでかけ探査: 在第一次選択前采集效果描述 ──
+        # ── 外出探査: 在第一次選択前采集效果描述 ──
         if (
             ctx.pending_dialogue_option_index is None
             and _is_dialogue_option_info_context(app, position)
-            and not any(
-                c.metadata.get("description")
-                or c.metadata.get("outing_effect")
-                or c.metadata.get("option_effect")
-                for c in candidates
-            )
         ):
             if _is_outing_context(app, position):
                 _probe_outing_options(app, candidates)
                 _enrich_outing_descriptions(candidates)
-                # おでかけ DB マッチング: 効果描述 + P 成本 → 安定的 DB ID
+                # 外出 DB 匹配：效果描述 + P 成本 → 稳定 DB ID。
                 hydrate_outing_candidates(candidates)
             else:
                 _probe_dialogue_option_effects(app, candidates)
@@ -595,7 +867,7 @@ def execute_dialogue_step(
     ctx.handler_state.pop("dialogue_just_confirmed", None)
     ctx.handler_state.pop("dialogue_confirm_grace", None)
 
-    # Skip 按钮（おでかけ剧情等未读コミュ）— 直接跳过
+    # Skip 按钮（外出剧情等未读交流）— 直接跳过
     skip_buttons = app.latest_results.filter_by_label(BaseUILabels.SKIP_BUTTON)
     if skip_buttons:
         app.device.click_element(skip_buttons.first())
@@ -614,7 +886,7 @@ def execute_dialogue_step(
 
 
 # ────────────────────────────────────────────────────────────
-# Handler
+# 处理器
 # ────────────────────────────────────────────────────────────
 
 class DialogueHandler(GameplayHandler):
@@ -624,9 +896,31 @@ class DialogueHandler(GameplayHandler):
     priority = 50
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == "dialogue"
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         result = execute_dialogue_step(app, ctx, position=position)
         if result is None:
             return HandlerResult.no_action("no dialogue elements")

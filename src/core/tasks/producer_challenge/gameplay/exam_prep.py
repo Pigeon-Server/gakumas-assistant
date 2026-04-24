@@ -231,7 +231,15 @@ def extract_exam_prep_bonuses(
 
 
 def store_exam_prep_bonuses(ctx: "ProduceContext", bonuses: dict) -> None:
-    """将考试准备页面的加成数据存入上下文。"""
+    """保存考试、prep、bonuses并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        bonuses: 用于提供bonuses相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     ctx.handler_state["exam_prep_bonuses"] = bonuses
     logger.info(
         f"[考试准备] 加成倍率已存储: "
@@ -243,5 +251,12 @@ def store_exam_prep_bonuses(ctx: "ProduceContext", bonuses: dict) -> None:
 
 
 def get_exam_prep_bonuses(ctx: "ProduceContext") -> Optional[dict]:
-    """从上下文读取已提取的考试加成数据。"""
+    """获取考试、prep、bonuses并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        Optional[dict]: 返回值类型见注解，语义由函数用途决定。
+    """
     return ctx.handler_state.get("exam_prep_bonuses")

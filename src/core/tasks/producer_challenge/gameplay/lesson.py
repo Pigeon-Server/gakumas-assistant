@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, List, Set
@@ -57,6 +58,10 @@ _BATTLE_DEAL_SETTLE_STABLE_BASELINE_STREAK = 2
 _BATTLE_CARD_BASELINE_TOLERANCE_RATIO = 0.018
 _BATTLE_CARD_BASELINE_TOLERANCE_MIN = 18
 _BATTLE_CARD_BASELINE_TOLERANCE_MAX = 56
+_BATTLE_PLAY_ANIMATION_OFFSET_RATIO = 0.12
+_BATTLE_PLAY_ANIMATION_OFFSET_MIN = 140
+_BATTLE_PLAY_ANIMATION_WAIT_MAX_POLLS = 10
+_BATTLE_PLAY_ANIMATION_WAIT_SLEEP = 0.2
 _CRITICAL_BATTLE_STAMINA_RATIO = 0.18
 _LOW_BATTLE_STAMINA_RATIO = 0.32
 _END_TURN_HOTSPOT_X_RATIO = 0.4
@@ -82,9 +87,13 @@ _BATTLE_IMMEDIATE_OUTPUT_TOKENS = (
     "打分",
     "固定打分",
 )
+_BATTLE_IMMEDIATE_SCORE_PATTERNS = (
+    re.compile(r"(?:固定)?打分\s*[+＋]\s*(\d+)"),
+    re.compile(r"スコア\s*[+＋]\s*(\d+)"),
+)
 
-# 空白区域坐标（用于取消卡片选中）
-_DESELECT_TAP_Y = 800
+# 取消卡片选中时点击空白区域的 Y 轴比例（屏幕高度的 83% 处）
+_DESELECT_TAP_Y_RATIO = 0.83
 
 # ── 信息面板探查常量（用于未识别卡片的单击读取） ──
 _CARD_INFO_PANEL_TAP_WAIT = 0.5   # 点击卡片后等待信息面板出现的秒数
@@ -124,6 +133,20 @@ _DRINK_PROBE_COUNT_KEY = "_lesson_drink_probe_count"
 
 @dataclass
 class LessonCardCandidate:
+    """定义 LessonCardCandidate 的结构化数据。
+
+    Attributes:
+        index: 候选项在当前列表中的序号（通常从上到下或从左到右）。
+        label: 用于界面展示或日志输出的短标签文本。
+        title: 候选项主标题文本，通常来自 OCR 或预设文案。
+        selected: 是否为当前已选中项（True 表示已选中）。
+        box: 候选项对应的检测框，用于点击、裁剪和可视化调试。
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        db_id: 数据库中的实体 ID；为空通常表示当前候选项尚未完成实体识别。
+        source: 候选项来源标记（如 OCR、DB、fallback），便于排查识别链路。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+        metadata: 扩展元数据，保存额外识别信息与决策辅助字段。
+    """
     index: int
     label: str
     title: str
@@ -138,11 +161,27 @@ class LessonCardCandidate:
 
 @dataclass
 class LessonStepResult:
+    """定义 LessonStepResult 的结构化数据。
+
+    Attributes:
+        status: 步骤执行状态（如 selected/confirmed/skipped）。
+        candidate: 本步骤最终选中的候选项对象。
+    """
     status: str
     candidate: LessonCardCandidate
 
 
 def _resolve_box_horizontal_bounds(box: Any) -> tuple[int | None, int | None]:
+    """解析检测框的水平边界坐标。
+
+    从 box 对象中读取 x（左边界）和 w（右边界），用于后续计算点击热区偏移。
+
+    Args:
+        box: YOLO 检测框对象，需具备 x 和 w 属性。
+
+    Returns:
+        (left, right) 元组；无法解析时返回 (None, None)。
+    """
     left = getattr(box, "x", None)
     right = getattr(box, "w", None)
     if isinstance(left, (int, float)) and isinstance(right, (int, float)) and right > left:
@@ -151,6 +190,18 @@ def _resolve_box_horizontal_bounds(box: Any) -> tuple[int | None, int | None]:
 
 
 def _battle_turn_marker(ctx: "ProduceContext", phase: str) -> tuple[str, int, int]:
+    """生成当前回合的唯一标记，用于判断 blocked 卡片缓存是否过期。
+
+    当 phase、周数或剩余回合数任一发生变化时，标记即失效，之前记录的
+    失败卡片将自动解除封锁。
+
+    Args:
+        ctx: 培育上下文对象，提供当前周数和回合参数。
+        phase: 当前 gameplay 阶段标识（lesson 或 exam）。
+
+    Returns:
+        (phase, current_week, remaining_turns) 三元组。
+    """
     return (
         str(phase or ""),
         int(ctx.current_week or 0),
@@ -159,6 +210,17 @@ def _battle_turn_marker(ctx: "ProduceContext", phase: str) -> tuple[str, int, in
 
 
 def _candidate_block_keys(candidate: LessonCardCandidate) -> set[str]:
+    """提取候选卡片的唯一标识键集合，用于 blocked 卡片匹配。
+
+    从 action_id、db_id、title、label 中过滤出非空值，当前后两帧的
+    候选列表发生变化时，仍能通过任意一个标识匹配到同一张卡片。
+
+    Args:
+        candidate: 单个候选项对象。
+
+    Returns:
+        去重后的非空标识字符串集合。
+    """
     return {
         str(value)
         for value in (
@@ -177,6 +239,19 @@ def _current_blocked_card_indices(
     *,
     phase: str,
 ) -> Set[int]:
+    """获取当前回合中已被封锁的卡片索引集合。
+
+    当回合标记（phase/周数/剩余回合数）发生变化时自动清空封锁记录，
+    确保进入新回合后所有卡片重新可用。
+
+    Args:
+        ctx: 培育上下文对象，保存 handler_state 中的封锁记录。
+        candidates: 当前手牌候选项列表。
+        phase: 当前 gameplay 阶段标识。
+
+    Returns:
+        被封锁卡片的 index 集合。
+    """
     blocked_state = dict(ctx.handler_state.get(_BATTLE_BLOCKED_CARD_STATE_KEY, {}) or {})
     if blocked_state.get("turn_marker") != _battle_turn_marker(ctx, phase):
         ctx.handler_state.pop(_BATTLE_BLOCKED_CARD_STATE_KEY, None)
@@ -201,6 +276,10 @@ def _remember_last_attempted_card(
     *,
     phase: str,
 ) -> None:
+    """记录上次尝试打出的卡片信息，用于后续 blocked 追踪。
+
+    在双击出牌前调用，若出牌失败则将该卡片加入封锁列表，避免无限重试同一张卡。
+    """
     ctx.handler_state[_BATTLE_LAST_ATTEMPTED_CARD_STATE_KEY] = {
         "turn_marker": _battle_turn_marker(ctx, phase),
         "title": candidate.title or candidate.label,
@@ -213,6 +292,11 @@ def _set_pending_lesson_target(
     ctx: "ProduceContext",
     candidate: LessonCardCandidate,
 ) -> None:
+    """将候选卡片标记为"待确认"目标，记录到 ctx 和 handler_state 中。
+
+    第一次点击卡片后调用，保存索引、名称、action_id、db_id 和点击坐标，
+    供第二次点击（双击确认出牌）时恢复使用。
+    """
     ctx.pending_lesson_card_index = candidate.index
     ctx.pending_lesson_card_label = candidate.title or candidate.label or candidate.action_id
     ctx.handler_state[_PENDING_LESSON_CARD_ACTION_ID_STATE_KEY] = candidate.action_id
@@ -223,6 +307,17 @@ def _set_pending_lesson_target(
 
 
 def _build_pending_lesson_candidate(ctx: "ProduceContext") -> LessonCardCandidate:
+    """从 ctx 的 pending 状态重建 LessonCardCandidate 对象。
+
+    用于第一次点击后画面状态发生变化，原始候选列表已失效时，从
+    保存的 pending 字段恢复卡片信息以进行第二次点击确认。
+
+    Args:
+        ctx: 培育上下文对象，包含 pending_lesson_card_index/label 等字段。
+
+    Returns:
+        重建的 LessonCardCandidate 对象（box 为 None）。
+    """
     return LessonCardCandidate(
         index=int(ctx.pending_lesson_card_index or -1),
         label="pending_lesson_card",
@@ -238,6 +333,18 @@ def _find_lesson_candidate_by_index(
     candidates: List[LessonCardCandidate],
     candidate_index: int | None,
 ) -> LessonCardCandidate | None:
+    """根据索引在候选列表中查找对应的卡片候选项。
+
+    优先按 candidate.index 字段精确匹配；若匹配失败且索引在有效范围内，
+    则退化为按列表位置取元素。
+
+    Args:
+        candidates: 候选项列表。
+        candidate_index: 目标索引值；为 None 时直接返回 None。
+
+    Returns:
+        匹配到的候选项对象，未找到则返回 None。
+    """
     if candidate_index is None:
         return None
     for candidate in candidates:
@@ -255,6 +362,20 @@ def _tap_pending_lesson_card(
     fallback_box: Any = None,
     tap_label: str = "pending_lesson_card",
 ) -> bool:
+    """点击待确认的卡片，完成双击出牌的第二击。
+
+    优先使用 handler_state 中保存的坐标点；若无则使用 fallback_box
+    进行检测框中心点击。
+
+    Args:
+        app: 应用处理器实例。
+        ctx: 培育上下文对象，包含 pending 卡片坐标。
+        fallback_box: 坐标缺失时的备用检测框。
+        tap_label: 点击操作的调试标签。
+
+    Returns:
+        True 表示点击成功发出，False 表示既无坐标也无 fallback_box。
+    """
     point = ctx.handler_state.get(_PENDING_LESSON_CARD_POINT_STATE_KEY)
     if isinstance(point, (tuple, list)) and len(point) >= 2:
         app.device.click(int(point[0]), int(point[1]), tap_label)
@@ -266,10 +387,18 @@ def _tap_pending_lesson_card(
 
 
 def _normalize_battle_notice_text(text: str | None) -> str:
+    """规范化战斗提示文本：全角转半角并去除所有空白字符。
+
+    用于统一 OCR 结果的格式，方便后续关键词匹配。
+    """
     return "".join(fullwidth_to_halfwidth(str(text or "")).split())
 
 
 def _looks_like_empty_hand_notice(text: str | None) -> bool:
+    """判断 OCR 文本是否为"手牌为空（0枚）"的提示消息。
+
+    同时检查文本中是否包含"手札"、"スキルカード"和"0"等关键词变体。
+    """
     normalized = _normalize_battle_notice_text(text)
     if not normalized:
         return False
@@ -285,6 +414,18 @@ def _ocr_battle_empty_hand_notice(
     *,
     blank_slots: list[Any],
 ) -> str:
+    """对屏幕中"手牌为空"提示区域进行 OCR 识别。
+
+    根据 blank_slots 的位置动态计算提示文本的裁剪区域（位于空白槽位上方），
+    并在 debug_tools 中绘制橙色调试框。
+
+    Args:
+        app: 应用处理器实例，提供最新帧和 debug_tools。
+        blank_slots: 底部空白槽位检测框列表，用于精确定位提示区域。
+
+    Returns:
+        OCR 识别出的文本字符串；无法识别时返回空字符串。
+    """
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0:
         return ""
@@ -329,6 +470,12 @@ def _ocr_battle_empty_hand_notice(
 
 
 def _is_battle_empty_hand_observed(app: "AppProcessor") -> bool:
+    """综合判断当前画面是否为"空手牌"状态。
+
+    检测条件（满足任一即判定为空手牌）：
+    1. 屏幕上无任何技能卡检测框，且 OCR 识别到"0枚"提示文本。
+    2. 底部空白槽位数量 >= 3（强信号，无需 OCR 确认）。
+    """
     results = getattr(app, "latest_results", None)
     frame = getattr(app, "latest_frame", None)
     if results is None or frame is None or getattr(frame, "size", 0) <= 0:
@@ -352,12 +499,17 @@ def _is_battle_empty_hand_observed(app: "AppProcessor") -> bool:
 
 
 def _count_visible_battle_cards(results: Any) -> int:
+    """统计屏幕上可见的技能卡总数（Active + Mental + Trap）。"""
     if results is None:
         return 0
     return sum(len(results.filter_by_label(label)) for label in _CARD_LABEL_PRIORITY)
 
 
 def _collect_visible_battle_card_center_ys(results: Any) -> list[int]:
+    """收集所有可见技能卡的垂直中心点 Y 坐标，按升序排列。
+
+    用于后续的发牌动画检测：通过中心点基线稳定性判断手牌是否已就位。
+    """
     if results is None:
         return []
     centers: list[int] = []
@@ -371,6 +523,14 @@ def _collect_visible_battle_card_center_ys(results: Any) -> list[int]:
 
 
 def _resolve_battle_card_baseline_tolerance(app: "AppProcessor") -> tuple[int, int]:
+    """根据屏幕高度计算手牌基线容差值。
+
+    容差用于判断卡牌中心点是否已稳定在基线附近（发牌动画结束标志）。
+    取值范围被限制在 [18, 56] 像素之间。
+
+    Returns:
+        (tolerance, stable_delta) — 容差值和基线稳定判定阈值。
+    """
     frame = getattr(app, "latest_frame", None)
     frame_height = 0
     if frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 1:
@@ -392,6 +552,18 @@ def _is_battle_card_baseline_settled(
     *,
     tolerance: int,
 ) -> tuple[bool, int | None]:
+    """判断手牌中心点基线是否已稳定（发牌动画结束判定）。
+
+    以中位数 Y 作为基线，检查所有卡是否都在容差范围内。允许一张卡
+    处于"浮空过渡态"（正在落位），只要偏移量不超过 2 倍容差。
+
+    Args:
+        center_ys: 升序排列的手牌中心 Y 坐标列表。
+        tolerance: 基线容差像素值。
+
+    Returns:
+        (是否稳定, 基线 Y 值)。
+    """
     if not center_ys:
         return False, None
     baseline = int(center_ys[len(center_ys) // 2])
@@ -465,6 +637,95 @@ def _wait_battle_card_deal_settle(
         time.sleep(_BATTLE_DEAL_SETTLE_SAMPLE_SLEEP)
 
 
+def _is_battle_play_animation_frame(
+    app: "AppProcessor",
+    center_ys: list[int],
+) -> tuple[bool, int, int]:
+    """判定当前手牌布局是否处于“出牌动画浮空态”。
+
+    Returns:
+        (is_animation_frame, baseline_y, floating_count)
+    """
+    if len(center_ys) <= 1:
+        return False, 0, 0
+
+    baseline = int(center_ys[len(center_ys) // 2])
+    frame = getattr(app, "latest_frame", None)
+    frame_height = int(frame.shape[0]) if frame is not None and hasattr(frame, "shape") else 0
+    tolerance, _ = _resolve_battle_card_baseline_tolerance(app)
+    floating_threshold = max(
+        _BATTLE_PLAY_ANIMATION_OFFSET_MIN,
+        tolerance * 3,
+        int(frame_height * _BATTLE_PLAY_ANIMATION_OFFSET_RATIO) if frame_height > 0 else 0,
+    )
+    floating_count = sum(
+        1
+        for y in center_ys
+        if baseline - int(y) > floating_threshold
+    )
+    # 至少有一张卡贴近基线，才视作“手牌区 + 浮空动画卡”。
+    has_hand_card_near_baseline = any(abs(int(y) - baseline) <= tolerance for y in center_ys)
+    return bool(floating_count > 0 and has_hand_card_near_baseline), baseline, floating_count
+
+
+def _wait_battle_play_animation_end(
+    app: "AppProcessor",
+    *,
+    phase: str,
+    position: str,
+    pending_index: int | None,
+) -> None:
+    """在 idle 态等待出牌动画结束，再进入候选收集与决策。"""
+    if pending_index is not None or not str(position or "").endswith("_idle"):
+        return
+
+    for poll_idx in range(_BATTLE_PLAY_ANIMATION_WAIT_MAX_POLLS):
+        center_ys = _collect_visible_battle_card_center_ys(getattr(app, "latest_results", None))
+        if len(center_ys) <= 1:
+            return
+        is_animation_frame, baseline, floating_count = _is_battle_play_animation_frame(
+            app,
+            center_ys,
+        )
+        if not is_animation_frame:
+            if poll_idx > 0:
+                logger.debug(
+                    "{}: 出牌动画已结束，恢复决策 (baseline={}, centers={})",
+                    phase,
+                    baseline,
+                    center_ys,
+                )
+            return
+
+        debugger = getattr(app, "debug_tools", None)
+        results = getattr(app, "latest_results", None)
+        if debugger is not None and results is not None:
+            for label in _CARD_LABEL_PRIORITY:
+                for box in list(results.filter_by_label(label)):
+                    cy = getattr(box, "cy", None)
+                    if isinstance(cy, (int, float)) and baseline - int(cy) > _BATTLE_PLAY_ANIMATION_OFFSET_MIN:
+                        debugger.add_box(
+                            int(getattr(box, "x", 0)),
+                            int(getattr(box, "y", 0)),
+                            int(getattr(box, "w", 0)),
+                            int(getattr(box, "h", 0)),
+                            label="battle_play_animation_waiting",
+                            color=(255, 90, 90),
+                            alpha=0.14,
+                            duration=2.5,
+                            font_size=16,
+                        )
+        if poll_idx + 1 >= _BATTLE_PLAY_ANIMATION_WAIT_MAX_POLLS:
+            logger.debug(
+                "{}: 出牌动画等待超时，继续流程 (floating_count={}, baseline={})",
+                phase,
+                floating_count,
+                baseline,
+            )
+            return
+        time.sleep(_BATTLE_PLAY_ANIMATION_WAIT_SLEEP)
+
+
 def _confirm_selected_lesson_card(
     app: "AppProcessor",
     ctx: "ProduceContext",
@@ -472,6 +733,20 @@ def _confirm_selected_lesson_card(
     *,
     phase: str,
 ) -> bool:
+    """确认已选中的卡片——执行双击出牌的第二击。
+
+    先记录本次尝试的卡片信息（用于失败时封锁），然后点击卡片坐标，
+    最后轮询验证卡片是否成功打出（信息面板消失）。
+
+    Args:
+        app: 应用处理器实例。
+        ctx: 培育上下文对象。
+        candidate: 待确认的卡片候选项。
+        phase: 当前 gameplay 阶段标识。
+
+    Returns:
+        True 表示出牌验证成功。
+    """
     _remember_last_attempted_card(ctx, candidate, phase=phase)
     if not _tap_pending_lesson_card(
         app,
@@ -491,6 +766,20 @@ def _try_use_lesson_card_double_tap(
     *,
     phase: str,
 ) -> bool:
+    """尝试通过双击使用技能卡（第一击 + 间隔 + 第二击确认）。
+
+    第一次点击后设置 pending 目标，等待固定间隔后执行第二击确认。
+    若第一击后弹出的是信息面板而非出牌，则进入 pending 恢复流程。
+
+    Args:
+        app: 应用处理器实例。
+        ctx: 培育上下文对象。
+        candidate: 待打出的卡片候选项。
+        phase: 当前 gameplay 阶段标识。
+
+    Returns:
+        True 表示双击出牌成功。
+    """
     app.device.click_element(candidate.box)
     _set_pending_lesson_target(ctx, candidate)
     time.sleep(_CARD_DOUBLE_TAP_INTERVAL)
@@ -684,6 +973,11 @@ def _resolve_unidentified_cards_via_info_panel(
 # ─────────────────────────────────────────────────────────────────
 
 def _looks_like_drink_effect_line(text: str) -> bool:
+    """判断 OCR 文本是否像饮料效果描述行（而非饮料名称）。
+
+    空文本、含数字/符号的文本、包含效果关键词（好感/元气/意欲/体力等）
+    的文本均判定为效果描述行，应从名称候选中排除。
+    """
     normalized = fullwidth_to_halfwidth(str(text or "")).strip()
     if not normalized:
         return True
@@ -708,6 +1002,11 @@ def _score_drink_modal_name_candidate(
     crop_w: int,
     crop_h: int,
 ) -> float:
+    """对饮料模态中的 OCR 文本进行评分，判断其是否为饮料名称。
+
+    评分依据：位置（上半部分加分、横向居中加分）、字符类型（日文加分）、
+    排除特征（含数字/符号减分、效果描述行减分、过长文本减分）。
+    """
     import re
 
     center_y_ratio = (float(item.y) + float(item.h) * 0.5) / max(float(crop_h), 1.0)
@@ -892,7 +1191,15 @@ def _is_drink_modal_visible(
     *,
     require_action_button: bool = False,
 ) -> bool:
-    """判断当前是否处于饮料详情模态。"""
+    """判断饮料详情模态（Pドリンク詳細）是否可见。
+
+    Args:
+        results: YOLO 检测结果对象。
+        require_action_button: 是否要求同时检测到 キャンセル 或 确认按钮。
+
+    Returns:
+        True 表示模态可见。
+    """
     if results is None:
         return False
     headers = list(results.filter_by_label(BaseUILabels.MODAL_HEADER))
@@ -984,10 +1291,18 @@ def _drink_pos_key(box: Any) -> tuple[int, int]:
 
 
 def _drink_cache_scope(ctx: "ProduceContext", phase: str) -> tuple[str, int]:
+    """生成饮料识别缓存的作用域标记。
+
+    缓存按 (phase, current_week) 分组，切换阶段或周数时自动失效。
+    """
     return (str(phase or ""), int(ctx.current_week or -1))
 
 
 def _ensure_drink_cache_scope(ctx: "ProduceContext", *, phase: str) -> None:
+    """确保饮料缓存作用域与当前 (phase, week) 一致。
+
+    当作用域发生变化时清空旧缓存和探查计数器，避免跨周/跨阶段误用。
+    """
     scope = _drink_cache_scope(ctx, phase)
     previous_scope = ctx.handler_state.get(_DRINK_CACHE_SCOPE_KEY)
     if previous_scope == scope:
@@ -1031,7 +1346,11 @@ def _save_drink_cache(
     *,
     phase: str,
 ) -> None:
-    """将已识别的饮料写入缓存。"""
+    """将已识别的饮料结果写入 handler_state 缓存。
+
+    以量化后的中心坐标 (cx, cy) 为 key，保存 db_id、action_id、title 等信息，
+    下次同一位置的饮料可直接从缓存恢复，无需重复弹模态。
+    """
     _ensure_drink_cache_scope(ctx, phase=phase)
     cache: dict = ctx.handler_state.setdefault(_DRINK_CACHE_KEY, {})
     for cand in candidates:
@@ -1052,13 +1371,24 @@ def _save_drink_cache(
 
 
 def _should_skip_drink_probe(ctx: "ProduceContext", box: Any) -> bool:
-    """检查饮料是否已达最大探查次数。"""
+    """判断当前帧是否应跳过饮料探测流程。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        box: 单个检测框对象。
+
+    Returns:
+        bool: True 表示该位置已探测次数达到上限，应跳过。
+    """
     counts: dict = ctx.handler_state.get(_DRINK_PROBE_COUNT_KEY, {})
     return counts.get(_drink_pos_key(box), 0) >= _DRINK_MAX_PROBE
 
 
 def _increment_drink_probe(ctx: "ProduceContext", box: Any) -> int:
-    """递增饮料探查计数，返回新值。"""
+    """增加饮料模态探查计数器并返回新值。
+
+    同一饮料的探查次数达到上限后将被跳过，避免无限循环弹模态。
+    """
     counts: dict = ctx.handler_state.setdefault(_DRINK_PROBE_COUNT_KEY, {})
     key = _drink_pos_key(box)
     count = counts.get(key, 0) + 1
@@ -1109,7 +1439,7 @@ def _resolve_unidentified_drinks_via_modal(
                 expected_visible=False,
                 reason=f"drink_probe_pre_close#{candidate.index}",
             )
-            # 单击饮料 → 轮询等待「Pドリンク詳細」模态出现
+            # 单击饮料后轮询等待“Pドリンク詳細”模态出现。
             app.device.click_element(candidate.box)
 
             # ── 轮询等待模态出现（状态驱动，不依赖固定时间/帧率） ──
@@ -1275,6 +1605,20 @@ def _collect_battle_drink_candidates(
     phase: str,
     start_index: int,
 ) -> List[LessonCardCandidate]:
+    """收集底部栏位中的 P 饮料候选项。
+
+    仅取屏幕底部 88% 以下的 P_DRINK 检测框，按 x 坐标左→右排序。
+    对每个饮料执行：OCR 识别 → 数据库匹配 → 评分 → 缓存恢复 → 模态探查。
+
+    Args:
+        app: 应用处理器实例。
+        ctx: 培育上下文对象。
+        phase: 当前 gameplay 阶段标识。
+        start_index: 候选项起始序号（接在手牌之后）。
+
+    Returns:
+        P 饮料候选项列表。
+    """
     _ensure_drink_cache_scope(ctx, phase=phase)
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0:
@@ -1344,6 +1688,19 @@ def _collect_battle_end_turn_candidates(
     phase: str,
     start_index: int,
 ) -> List[LessonCardCandidate]:
+    """收集"结束回合/SKIP"按钮候选项。
+
+    通过 YOLO 检测 PC_SKIP 标签，若检测到则构建为候选项，供决策链
+    在手牌用尽或体力不足时选择 SKIP 进入下一回合。
+
+    Args:
+        app: 应用处理器实例。
+        phase: 当前 gameplay 阶段标识（决定 label 显示为 "SKIP" 还是 "结束回合"）。
+        start_index: 候选项起始序号。
+
+    Returns:
+        包含 SKIP 候选项的列表（0 或 1 个元素）。
+    """
     skip_boxes = _get_battle_end_turn_boxes(getattr(app, "latest_results", None))
     if not skip_boxes:
         return []
@@ -1377,6 +1734,21 @@ def _select_forced_battle_drink_index(
     *,
     skip_indices: Set[int],
 ) -> int | None:
+    """在特定条件下强制选择底栏 P 饮料，优先于 LLM 决策。
+
+    强制使用条件：
+    - play_limit <= 0（无法出牌）且有可用饮料
+    - 手牌已全部用尽，仅剩饮料可用
+    - 体力极低（<=3 或 <=18%）且有高评分恢复饮料
+    - 体力偏低（<=5 或 <=32%）且有足够评分的恢复饮料
+
+    Args:
+        decision_state: 决策快照，包含候选项、legal_actions 和 llm_snapshot。
+        skip_indices: 需要跳过的索引集合。
+
+    Returns:
+        强制选择的饮料索引，不满足条件时返回 None。
+    """
     legal_indices = {
         int(index)
         for index in decision_state.get("legal_actions", [])
@@ -1405,6 +1777,7 @@ def _select_forced_battle_drink_index(
     ]
 
     def drink_score(payload: dict[str, Any]) -> float:
+        """获取饮料候选项的评分值（来自 metadata.drink_score）。"""
         metadata = dict(payload.get("metadata", {}) or {})
         return float(metadata.get("drink_score") or 0.0)
 
@@ -1414,7 +1787,13 @@ def _select_forced_battle_drink_index(
     stamina = int(snapshot.get("stamina") or 0)
     max_stamina = int(snapshot.get("max_stamina") or 0)
     stamina_ratio = float(stamina) / max(max_stamina, 1) if max_stamina > 0 else 1.0
-    play_limit_remaining = int(snapshot.get("play_limit_remaining") or 1)
+    play_limit_raw = snapshot.get("play_limit_remaining")
+    if play_limit_raw is None:
+        play_limit_remaining = 1
+    else:
+        normalized_play_limit = fullwidth_to_halfwidth(str(play_limit_raw)).strip()
+        match = re.search(r"\d+", normalized_play_limit)
+        play_limit_remaining = int(match.group()) if match else 1
     description = str(best_drink.get("description") or best_drink.get("label") or "")
     recovery_drink = any(
         token in description
@@ -1444,6 +1823,11 @@ def _select_forced_battle_drink_index(
 
 
 def _battle_payload_text(payload: dict[str, Any]) -> str:
+    """拼接候选项的完整描述文本（description + effect_types）。
+
+    合并 payload.description、metadata.description 和 metadata.effect_types，
+    用分号分隔，全角转半角后返回，供后续关键词匹配使用。
+    """
     metadata = dict(payload.get("metadata", {}) or {})
     effect_types = " / ".join(str(value or "") for value in metadata.get("effect_types", []) or [])
     return fullwidth_to_halfwidth(
@@ -1460,6 +1844,11 @@ def _battle_payload_text(payload: dict[str, Any]) -> str:
 
 
 def _battle_has_immediate_output(text: str) -> bool:
+    """判断卡片效果文本是否包含"即时输出"特征（打分/参数上升兑现）。
+
+    检测关键词：打分、固定打分、パラ↑↑ 等。即时输出卡片在当前回合
+    就能直接转化为分数收益，优先级较高。
+    """
     normalized = str(text or "")
     if any(token in normalized for token in _BATTLE_IMMEDIATE_OUTPUT_TOKENS):
         return True
@@ -1471,14 +1860,43 @@ def _battle_has_immediate_output(text: str) -> bool:
     )
 
 
+def _extract_battle_immediate_score_points(text: str) -> int:
+    """从效果文本中提取即时打分的数值总和。
+
+    匹配"打分 +N"或"スコア +N"模式，支持中日文混合格式。
+    """
+    normalized = fullwidth_to_halfwidth(str(text or ""))
+    if not normalized:
+        return 0
+    total = 0
+    for pattern in _BATTLE_IMMEDIATE_SCORE_PATTERNS:
+        for match in pattern.finditer(normalized):
+            try:
+                total += int(match.group(1) or 0)
+            except (TypeError, ValueError):
+                continue
+    return max(total, 0)
+
+
 def _score_battle_payload(
     payload: dict[str, Any],
     *,
     llm_snapshot: dict[str, Any],
     phase: str,
 ) -> tuple[float, list[str]]:
+    """根据当前游戏状态为候选项计算优先级得分和理由列表。
+
+    评分维度：
+    - 即时输出（打分/参数兑现）：+20~38
+    - 追加出牌次数：+26
+    - 体力恢复：按体力危险程度 +14~24
+    - 契合当前流派资源：+16
+    - 剩余回合少时优先即时兑现/惩罚纯铺垫：±10~14
+    - 考试排名压力下的抢分偏好：±10~12
+    """
     metadata = dict(payload.get("metadata", {}) or {})
     text = _battle_payload_text(payload)
+    immediate_score_points = _extract_battle_immediate_score_points(text)
     remaining_turns = int(llm_snapshot.get("remaining") or 0)
     stamina = int(llm_snapshot.get("stamina") or 0)
     max_stamina = int(llm_snapshot.get("max_stamina") or 0)
@@ -1498,6 +1916,9 @@ def _score_battle_payload(
         if _battle_has_immediate_output(text):
             score += 20.0
             reasons.append("能立刻兑现当前回合收益")
+            if immediate_score_points > 0:
+                score += min(float(immediate_score_points) * 0.25, 18.0)
+                reasons.append(f"即时打分面值更高({immediate_score_points})")
 
     if any(token in text for token in _BATTLE_EXTRA_PLAY_TOKENS):
         score += 26.0
@@ -1524,6 +1945,13 @@ def _score_battle_payload(
         elif any(token in text for token in _BATTLE_SETUP_TOKENS):
             score -= 12.0
             reasons.append("剩余回合少，纯铺垫价值下降")
+    if phase == "lesson" and remaining_turns > 0 and remaining_turns <= 1:
+        if immediate_score_points > 0:
+            score += min(float(immediate_score_points) * 0.6, 24.0)
+            reasons.append("临近收尾，优先更高即时打分")
+        elif any(token in text for token in _BATTLE_SETUP_TOKENS):
+            score -= 14.0
+            reasons.append("最后回合，纯铺垫基本无法兑现")
 
     if phase == "exam":
         unsafe_ranking = exam_ranking > 3
@@ -1545,6 +1973,11 @@ def _annotate_battle_preference(
     preferred_index: int,
     reason: str,
 ) -> None:
+    """在 decision_state 中标注系统推荐候选项，供 LLM 参考。
+
+    将 recommended=True 写入对应的 candidate 和 llm_action payload，
+    同时在 stage_context.system_recommendation 中写入推荐理由文本。
+    """
     label = f"候选 {preferred_index}"
     for payload in decision_state.get("candidates", []) or []:
         if int(payload.get("index", -1)) == preferred_index:
@@ -1571,6 +2004,14 @@ def _select_battle_preference(
     end_turn_indices: Set[int],
     phase: str,
 ) -> tuple[int | None, float, str]:
+    """从优先候选或可重试候选中选出得分最高的卡片（排除 end_turn）。
+
+    对每个候选调用 _score_battle_payload 计算得分，返回最高分的索引、
+    得分值和理由摘要。
+
+    Returns:
+        (最佳索引, 得分, 理由文本)；无候选时索引为 None。
+    """
     llm_snapshot = dict(decision_state.get("llm_snapshot", {}) or {})
     best_index: int | None = None
     best_score = float("-inf")
@@ -1842,14 +2283,27 @@ def _verify_card_played(app: "AppProcessor", timeout: float = 1.5) -> bool:
 
 
 def _deselect_card(app: "AppProcessor") -> None:
-    """点击空白区域取消卡片选中。"""
-    # 使用屏幕中部偏上区域（角色立绘区，不会触发任何UI元素）
-    screen_width = 1080  # 标准竖屏宽度
-    app.device.click(screen_width // 2, _DESELECT_TAP_Y, el_label="deselect_card")
+    """点击屏幕空白区域取消当前卡片选中状态。
+
+    通过 app.latest_frame.shape 动态获取屏幕宽高，点击位置为屏幕中下部（X=50%, Y=83%），
+    位于角色立绘区，不会触发任何 UI 元素。
+    """
+    frame = app.latest_frame
+    if frame is None or frame.size == 0:
+        logger.warning("deselect_card: 无法获取画面尺寸，跳过取消选中操作")
+        return
+    height, width = frame.shape[:2]
+    tap_x = width // 2
+    tap_y = int(height * _DESELECT_TAP_Y_RATIO)
+    app.device.click(tap_x, tap_y, el_label="deselect_card")
     time.sleep(0.5)
 
 
 def _get_battle_end_turn_boxes(results: Any) -> List[Any]:
+    """获取"结束回合/SKIP"按钮的检测框列表。
+
+    按 (cy, cx) 排序，优先取屏幕中位置最靠前的按钮。
+    """
     if results is None or not hasattr(results, "filter_by_label"):
         return []
     return sorted(
@@ -1863,6 +2317,11 @@ def _click_battle_end_turn(
     *,
     fallback_box: Any = None,
 ) -> bool:
+    """点击"结束回合/SKIP"按钮。
+
+    优先使用最新帧检测到的 PC_SKIP 按钮，否则使用 fallback_box。
+    点击位置偏向按钮左侧 40% 处，避免误触右侧图标。
+    """
     target_box = fallback_box
     skip_boxes = _get_battle_end_turn_boxes(getattr(app, "latest_results", None))
     if skip_boxes:
@@ -1942,7 +2401,7 @@ def _try_resolve_empty_hand_action(
         ctx.pending_p_drink_index = target.index
         ctx.pending_p_drink_label = target.title or target.action_id or f"p_drink_{target.index + 1}"
         app.device.click_element(target.box)
-        # 等待饮料详情模态出现并点击「使う」确认
+        # 等待饮料详情模态出现并点击“使う”确认。
         if _confirm_drink_usage_modal(app):
             logger.info("{}: 饮料 {!r} 使用确认成功", phase_tag, target.title)
             ctx.record_operation(
@@ -2002,6 +2461,12 @@ def execute_lesson_step(
     这里把 lesson_selected / exam_selected 仅视为“第一击后信息面板仍停留在场上”的恢复态。
     """
     _wait_battle_card_deal_settle(
+        app,
+        phase=phase,
+        position=position,
+        pending_index=ctx.pending_lesson_card_index,
+    )
+    _wait_battle_play_animation_end(
         app,
         phase=phase,
         position=position,
@@ -2143,7 +2608,7 @@ def execute_lesson_step(
             ctx.pending_p_drink_index = target.index
             ctx.pending_p_drink_label = target.title or target.action_id or f"p_drink_{target.index + 1}"
             app.device.click_element(target.box)
-            # 等待饮料详情模态出现并点击「使う」确认
+            # 等待饮料详情模态出现并点击“使う”确认。
             if _confirm_drink_usage_modal(app):
                 logger.info("lesson: 饮料 {!r} 使用确认成功", target.title)
                 ctx.record_operation(
@@ -2199,23 +2664,30 @@ def execute_lesson_step(
 
 
 # ────────────────────────────────────────────────────────────
-# Handler
+# 处理器
 # ────────────────────────────────────────────────────────────
 
 class LessonHandler:
-    """レッスン出牌的 gameplay handler 包装。
+    """Lesson/Exam 阶段出牌的 gameplay handler 包装。
 
-    委托给 execute_lesson_step()，并跟踪已打出的回合数。
-    通过鸭子类型作为 GameplayHandler 被 dispatcher 导入。
+    核心委托给 execute_lesson_step()，处理空手牌时走 fallback 逻辑
+    选择底栏饮料或 SKIP。LESSON_SUMMARY_SHOWCASE 位置特殊处理为
+    点击安全区域推进。
     """
 
     phase_tag = "lesson"
     priority = 50
 
     def can_handle(self, app, ctx, phase, position):
+        """仅接管 phase == "lesson" 的画面（exam 阶段由 ExamHandler 处理）。"""
         return phase == "lesson"
 
     def handle(self, app, ctx, phase, position):
+        """执行 lesson 出牌逻辑。
+
+        特殊位置 LESSON_SUMMARY_SHOWCASE 直接点击推进；其余位置委托
+        execute_lesson_step，返回 None 时走空手牌 fallback。
+        """
         from src.core.tasks.producer_challenge.gameplay.handler_base import HandlerResult
 
         if position == GameplayPosition.LESSON_SUMMARY_SHOWCASE:
@@ -2341,4 +2813,9 @@ class LessonHandler:
         return HandlerResult.ok(f"lesson: 选中 {result.candidate.title!r}", sleep_after=0.8)
 
     def __repr__(self):
+        """处理repr并返回结果。
+
+        Returns:
+            返回处理结果，具体类型见返回注解。
+        """
         return f"<LessonHandler phase={self.phase_tag!r} priority={self.priority}>"

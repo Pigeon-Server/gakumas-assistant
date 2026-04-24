@@ -13,6 +13,7 @@ class ButtonText:
     COMPLETE = "完了する"  # 完了 / 完成
     HOME = "ホーム"  # 主页
     RETIRE = "リタイア"  # 退出挑战
+    CHALLENGE = "挑戦"  # 挑战（按钮文案常见前缀）
     SAVE_AND_SUSPEND = "保存して中断"  # 保存并中断
     START_CHALLENGE = "挑戦開始"  # 开始挑战 / 开始战斗
     BATTLE_START = "対戦開始"  # 多Stage竞技场的开始对战按钮
@@ -42,6 +43,7 @@ class ButtonText:
 
     class MAIN_MENU__CONTEST:
         CONTEST = "コンテスト"
+        CHALLENGING = "挑戦中"  # 主菜单竞技场入口常见状态文案
 
     class PAGE__TASK_REWARDS:
         PASS_REWARDS = "ミッションパス"  # 月卡奖励领取页

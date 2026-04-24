@@ -213,7 +213,16 @@ def _collect_lesson_option_candidates(
     *,
     position: str,
 ) -> List[ScheduleActionCandidate]:
-    """采集授業課程選項候选。"""
+    """收集课程、option、候选项并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     from . import _collect_schedule_action_boxes
 
     action_boxes = _collect_schedule_action_boxes(app)

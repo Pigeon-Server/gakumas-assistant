@@ -16,6 +16,14 @@ if TYPE_CHECKING:
 
 
 def get_buttons(app: "AppProcessor") -> ButtonList:
+    """从最新一帧 YOLO 检测结果中提取所有按钮对象。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 中的 YOLO 检测结果。
+
+    Returns:
+        ButtonList: 当前画面中检测到的所有按钮组成的列表对象。
+    """
     return ButtonList(app.latest_results)
 
 
@@ -26,6 +34,21 @@ def find_button(
     fuzz_threshold: float = 70,
     use_contains: bool = True,
 ) -> Button | None:
+    """在最新一帧的 YOLO 检测结果中按文本查找按钮。
+
+    从当前画面中检测到的所有按钮里，使用模糊匹配或包含匹配查找与目标文本
+    最接近的按钮。匹配失败时返回 None。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 中的 YOLO 检测结果。
+        text: 目标按钮文本，通常来自 ButtonText 常量或 ProduceText 常量。
+        fuzz_threshold: 模糊匹配的最低分数阈值（0-100），低于此分的按钮不视为匹配。默认 70。
+        use_contains: 是否启用包含匹配模式。启用时目标文本是按钮文本的子串即可匹配，
+            关闭时要求双向包含或 fuzzy ratio。默认 True。
+
+    Returns:
+        Button | None: 匹配到的按钮对象，未找到时返回 None。
+    """
     return get_buttons(app).get_button_by_text(
         text,
         match_config=MatchConfig(
@@ -43,6 +66,19 @@ def has_button(
     fuzz_threshold: float = 70,
     use_contains: bool = True,
 ) -> bool:
+    """判断当前画面中是否存在与目标文本匹配的按钮。
+
+    底层调用 find_button，仅用于布尔判断场景，避免调用方额外写 `is not None`。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 中的 YOLO 检测结果。
+        text: 目标按钮文本，通常来自 ButtonText 常量或 ProduceText 常量。
+        fuzz_threshold: 模糊匹配的最低分数阈值（0-100）。默认 70。
+        use_contains: 是否启用包含匹配模式。默认 True。
+
+    Returns:
+        bool: 找到匹配按钮时返回 True，否则返回 False。
+    """
     return find_button(
         app,
         text,
@@ -52,6 +88,15 @@ def has_button(
 
 
 def wait_frame_stable(app: "AppProcessor", timeout: float = 4.0) -> None:
+    """等待画面帧稳定，确保页面过渡动画结束后再进行后续操作。
+
+    通过比较连续帧的相似度来判断画面是否稳定。当连续 2 帧相似度超过 0.985 时
+    认为画面已稳定。超时仍未稳定则直接返回，由调用方决定是否重试。
+
+    Args:
+        app: 应用处理器实例，提供 game_utils.wait_frame_stable 方法。
+        timeout: 最长等待秒数。默认 4.0 秒。
+    """
     app.game_utils.wait_frame_stable(
         threshold=0.985,
         stable_count=2,
@@ -71,7 +116,22 @@ def inertial_swipe(
     hold_end: float = 0.15,
     ease: str | None = "out_quad",
 ) -> None:
-    """执行带惯性抑制的滑动。"""
+    """执行带惯性滑动的操作，并等待画面滑动动画结束。
+
+    与普通 swipe 不同，该函数在滑动后会短暂等待（0.1s），然后调用 wait_frame_stable
+    等待页面因惯性滑动产生的过渡动画完成，确保后续操作不会落在错误的帧上。
+
+    Args:
+        app: 应用处理器实例，提供 device.swipe 和 game_utils.wait_frame_stable。
+        start_x: 滑动起始点的 X 坐标（像素）。
+        start_y: 滑动起始点的 Y 坐标（像素）。
+        end_x: 滑动结束点的 X 坐标（像素）。
+        end_y: 滑动结束点的 Y 坐标（像素）。
+        duration: 滑动动作持续时间（秒）。默认 0.45 秒。
+        settle_timeout: 等待画面稳定的最长超时时间（秒）。默认 4.0 秒。
+        hold_end: 滑动结束时在终点停留的时间（秒）。默认 0.15 秒。
+        ease: 滑动缓动函数名称。默认 "out_quad"（减速结束）。
+    """
     app.device.swipe(
         start_x,
         start_y,
@@ -87,6 +147,18 @@ def inertial_swipe(
 
 
 def is_final_confirm_page(app: "AppProcessor") -> bool:
+    """判断当前页面是否为最终确认页（プロデュース開始前的确认画面）。
+
+    通过排除法+正向条件组合判断：先排除含 NEXT/RESET/AUTO_SELECT 按钮的中间页面，
+    再要求同时存在「編成詳細」按钮、「プロデュース開始」按钮，以及至少一种上下文
+    标签（支援卡/记忆卡/特别道具），三者同时满足才确认为最终确认页。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 和按钮检测能力。
+
+    Returns:
+        bool: 当前页面是最终确认页返回 True，否则返回 False。
+    """
     if has_button(app, ButtonText.AUTO_SELECT, fuzz_threshold=75):
         return False
     if has_button(app, ButtonText.NEXT, fuzz_threshold=75):
@@ -119,6 +191,18 @@ def wait_for_final_confirm_page(
     app: "AppProcessor",
     timeout: float = 15.0,
 ) -> bool:
+    """轮询等待最终确认页面出现。
+
+    每隔 0.4 秒检查一次当前页面是否为最终确认页（含編成詳細和プロデュース開始按钮）。
+    检测到后额外等待画面稳定 3 秒。超时未出现则返回 False。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 中的 YOLO 检测结果。
+        timeout: 最长等待秒数。默认 15.0 秒。
+
+    Returns:
+        bool: 成功等到最终确认页返回 True，超时返回 False。
+    """
     end_time = time() + timeout
     while time() < end_time:
         if is_final_confirm_page(app):
@@ -129,6 +213,17 @@ def wait_for_final_confirm_page(
 
 
 def is_memory_selection_page(app: "AppProcessor") -> bool:
+    """判断当前页面是否为记忆卡片选择页。
+
+    通过排除最终确认页（无プロデュース開始按钮），同时要求存在 NEXT、AUTO_SELECT、
+    RESET、編成詳細按钮，以及画面中有 MEMORY_CARD 标签，综合判定为记忆选择页。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 和按钮检测能力。
+
+    Returns:
+        bool: 当前页面是记忆选择页返回 True，否则返回 False。
+    """
     if has_button(app, ButtonText.PRODUCE_START, fuzz_threshold=65):
         return False
     if not has_button(app, ButtonText.NEXT, fuzz_threshold=75):
@@ -146,6 +241,19 @@ def wait_for_memory_selection_page(
     app: "AppProcessor",
     timeout: float = 12.0,
 ) -> bool:
+    """轮询等待记忆卡片选择页面出现。
+
+    每隔 0.4 秒检查一次当前页面是否为记忆选择页（含 NEXT、AUTO_SELECT、RESET、
+    編成詳細按钮及 MEMORY_CARD 标签）。检测到后额外等待画面稳定 3 秒。超时未出现
+    则返回 False。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 中的 YOLO 检测结果。
+        timeout: 最长等待秒数。默认 12.0 秒。
+
+    Returns:
+        bool: 成功等到记忆选择页返回 True，超时返回 False。
+    """
     end_time = time() + timeout
     while time() < end_time:
         if is_memory_selection_page(app):
@@ -159,11 +267,28 @@ def click_modal_action_with_retry(
     app: "AppProcessor",
     modal: "Modal | None" = None,
     *,
-    prefer_confirm: bool = True,
+    prefer_confirm: True,
     retries: int = 3,
     timeout: float = 5.0,
     action_name: str = "modal action",
 ) -> bool:
+    """按确认/取消偏好点击弹窗按钮，失败时自动重试。
+
+    优先点击指定按钮（默认为确认按钮），如果目标按钮不存在则回退到另一个可用按钮。
+    每次点击后等待页面过渡动画完成。如果页面未发生变化则重试，最多 retries 次。
+    如果画面中不存在弹窗则直接返回 True（无需处理）。
+
+    Args:
+        app: 应用处理器实例，提供 game_utils.try_get_modal 和 click_modal_button_and_wait_transition。
+        modal: 已获取的弹窗对象，为 None 时自动从当前画面中检测。
+        prefer_confirm: 是否优先点击确认按钮。True 时优先 confirm_button，False 时优先 cancel_button。
+        retries: 最大重试次数。每次点击后若页面未变化则重新获取弹窗并重试。默认 3 次。
+        timeout: 每次点击后等待页面过渡的最长超时时间（秒）。默认 5.0 秒。
+        action_name: 日志中标识该操作的名称。默认 "modal action"。
+
+    Returns:
+        bool: 成功关闭弹窗返回 True，重试耗尽后仍然失败返回 False。
+    """
     current_modal = modal
     for attempt in range(1, retries + 1):
         if current_modal is None:
@@ -208,11 +333,29 @@ def click_top_right_action(
     *,
     timeout: float = 6.0,
 ) -> bool:
+    """点击画面右上角区域的操作按钮并等待画面触发变化。
+
+    从当前画面所有按钮中筛选出中心点位于右上角区域（cx >= 屏幕宽度的 66% 且 cy <= 屏幕高度的 12%）的
+    候选按钮，按 Y 坐标升序、X 坐标降序排序后点击最靠右上方的按钮。
+
+    Args:
+        app: 应用处理器实例，提供按钮检测和 click_element_and_wait_trigger。
+        timeout: 等待画面触发变化的最长超时时间（秒）。默认 6.0 秒。
+
+    Returns:
+        bool: 成功找到按钮并点击后画面发生变化返回 True，未找到候选按钮返回 False。
+    """
     buttons = get_buttons(app)
+    frame = app.latest_frame
+    if frame is None or frame.size == 0:
+        return False
+    height, width = frame.shape[:2]
+    cx_threshold = int(width * 0.66)
+    cy_threshold = int(height * 0.12)
     candidates = [
         button
         for button in buttons
-        if button.cx >= 720 and button.cy <= 280
+        if button.cx >= cx_threshold and button.cy <= cy_threshold
     ]
     candidates.sort(key=lambda button: (button.cy, -button.cx))
     if not candidates:

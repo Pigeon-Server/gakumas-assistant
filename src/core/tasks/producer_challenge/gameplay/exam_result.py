@@ -193,7 +193,7 @@ def extract_exam_result(
         logger.debug("[考试结果] 未检测到白色边框的玩家行")
         return None
 
-    # 2. YOLO 按钮双重验证：玩家行内有 ログ 按钮
+    # 2. YOLO 按钮双重验证：玩家行内存在“ログ”按钮。
     has_log_btn = _has_button_in_rect(yolo_results, player_rect)
     has_bottom_btns = _has_bottom_buttons(yolo_results, img_h)
     if not has_log_btn and not has_bottom_btns:
@@ -304,12 +304,27 @@ def extract_exam_result(
 
 
 def store_exam_result(ctx: "ProduceContext", info: dict) -> None:
-    """将考试结果信息存入上下文。"""
+    """保存考试、结果并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        info: 用于提供info相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     ctx.handler_state["exam_result_info"] = info
 
 
 def get_exam_result(ctx: "ProduceContext") -> Optional[dict]:
-    """从上下文读取考试结果信息。"""
+    """获取考试、结果并返回结果。
+
+    Args:
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+
+    Returns:
+        Optional[dict]: 返回值类型见注解，语义由函数用途决定。
+    """
     return ctx.handler_state.get("exam_result_info")
 
 

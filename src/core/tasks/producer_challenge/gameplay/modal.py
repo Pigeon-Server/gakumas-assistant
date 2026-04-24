@@ -54,6 +54,21 @@ _EXAM_RETRY_COUNT_RE = re.compile(ProduceText.REMAINING_COUNT_PATTERN)
 
 @dataclass
 class ModalActionCandidate:
+    """定义 ModalActionCandidate 的结构化数据。
+
+    Attributes:
+        index: 候选项在当前列表中的序号（通常从上到下或从左到右）。
+        title: 候选项主标题文本，通常来自 OCR 或预设文案。
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        label: 用于界面展示或日志输出的短标签文本。
+        selected: 是否为当前已选中项（True 表示已选中）。
+        recommended: 是否为系统推荐项（True 表示推荐）。
+        box: 候选项对应的检测框，用于点击、裁剪和可视化调试。
+        db_id: 数据库中的实体 ID；为空通常表示当前候选项尚未完成实体识别。
+        source: 候选项来源标记（如 OCR、DB、fallback），便于排查识别链路。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+        metadata: 扩展元数据，保存额外识别信息与决策辅助字段。
+    """
     index: int
     title: str
     action_id: str
@@ -111,6 +126,14 @@ def _click_modal_action_direct(
 
 
 def _read_modal_fallback_text(app: "AppProcessor") -> str:
+    """处理read、弹窗、fallback、文本并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     frame = getattr(app, "latest_frame", None)
     if frame is None or getattr(frame, "size", 0) <= 0:
         return ""
@@ -118,6 +141,14 @@ def _read_modal_fallback_text(app: "AppProcessor") -> str:
 
 
 def _is_invalid_skill_use_modal(text: str) -> bool:
+    """判断当前弹窗是否为“技能无法使用”提示。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     normalized = str(text or "").replace("\n", " ")
     if not normalized:
         return False
@@ -133,6 +164,14 @@ def _is_invalid_skill_use_modal(text: str) -> bool:
 
 
 def _is_connection_error_modal(text: str) -> bool:
+    """判断当前弹窗是否为连接错误提示。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     normalized = str(text or "").replace("\n", " ")
     if not normalized:
         return False
@@ -144,6 +183,7 @@ def _is_connection_error_modal(text: str) -> bool:
 
 
 def _set_connection_error_retry(ctx: "ProduceContext") -> None:
+    """设置`connection_error_retry`。"""
     ctx.handler_state["unknown_retry_override"] = {
         "reason": "connection_error_modal",
         "retry_limit": int(
@@ -156,6 +196,7 @@ def _set_connection_error_retry(ctx: "ProduceContext") -> None:
 
 
 def _set_exam_retry_transition_retry(ctx: "ProduceContext") -> None:
+    """设置`exam_retry_transition_retry`。"""
     ctx.handler_state["unknown_retry_override"] = {
         "reason": "exam_retry_confirm_modal",
         "retry_limit": int(
@@ -168,6 +209,14 @@ def _set_exam_retry_transition_retry(ctx: "ProduceContext") -> None:
 
 
 def _is_exam_retry_confirm_modal(text: str) -> bool:
+    """判断当前弹窗是否为考试重试确认弹窗。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     normalized = str(text or "").replace("\n", " ")
     if not normalized:
         return False
@@ -178,6 +227,14 @@ def _is_exam_retry_confirm_modal(text: str) -> bool:
 
 
 def _extract_exam_retry_count(text: str) -> int | None:
+    """提取考试、retry、count并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        int | None: 返回值类型见注解，语义由函数用途决定。
+    """
     match = _EXAM_RETRY_COUNT_RE.search(str(text or ""))
     if not match:
         return None
@@ -190,6 +247,16 @@ def _build_exam_retry_candidates(
     modal: Any = None,
     text: str = "",
 ) -> list[ModalActionCandidate]:
+    """构建考试、重试、候选项列表并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        modal: 用于提供弹窗相关输入。
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        list: 结果列表，元素类型见返回注解。
+    """
     retry_box = getattr(modal, "cancel_button", None)
     end_box = getattr(modal, "confirm_button", None)
     results = getattr(app, "latest_results", None)
@@ -239,6 +306,16 @@ def _decide_exam_retry_candidate(
     ctx: "ProduceContext",
     candidates: list[ModalActionCandidate],
 ) -> ModalActionCandidate:
+    """决策考试、retry、候选项并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        ModalActionCandidate: 返回值类型见注解，语义由函数用途决定。
+    """
     decision_state = build_followup_decision_state(
         ctx,
         phase="exam",
@@ -285,21 +362,33 @@ def _handle_exam_retry_confirm_modal(
     modal: Any = None,
     text: str = "",
 ) -> HandlerResult | None:
+    """处理handle、考试、retry、confirm、弹窗并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+        modal: 用于提供弹窗相关输入。
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        HandlerResult | None: 返回值类型见注解。
+    """
     if not _is_exam_retry_confirm_modal(text):
         return None
 
     candidates = _build_exam_retry_candidates(app, modal=modal, text=text)
     target = _decide_exam_retry_candidate(app, ctx, candidates)
 
-    # チケット消費確認モーダル（「キャンセル」/「決定」ボタン）の場合、
-    # 「決定」（confirm）= チケットを使って再挑戦、「キャンセル」（cancel）= 再挑戦しない
-    # → 再挑戦したい場合は confirm を押す必要がある
+    # 当出现票券消耗确认弹窗（“キャンセル”/“決定”按钮）时，
+    # “決定”（confirm）= 消耗票券再挑战；“キャンセル”（cancel）= 不再挑战。
+    # → 若希望再挑战，必须点击 confirm。
     is_ticket_confirm = ProduceText.TICKET in str(text or "")
     if is_ticket_confirm:
-        # チケット消費確認: retry → 決定(confirm), cancel → キャンセル(cancel)
+        # 票券消耗确认：retry → 決定(confirm)，cancel → キャンセル(cancel)。
         prefer_confirm = target.action_id == "exam_retry"
     else:
-        # 従来の再挑戦/プロデュース終了選択: retry → cancel側, end → confirm側
+        # 传统“再挑战/结束培育”弹窗：retry → cancel 侧，end → confirm 侧。
         prefer_confirm = target.action_id != "exam_retry"
 
     success = False
@@ -347,6 +436,7 @@ def _handle_exam_retry_confirm_modal(
 
 
 def _remember_blocked_battle_card(ctx: "ProduceContext") -> None:
+    """记录`blocked_battle_card`到上下文状态。"""
     attempted = dict(ctx.handler_state.get(_BATTLE_LAST_ATTEMPTED_CARD_STATE_KEY, {}) or {})
     turn_marker = attempted.get("turn_marker")
     if not turn_marker:
@@ -381,6 +471,17 @@ def _cancel_invalid_skill_use_modal(
     position: str,
     text: str,
 ) -> HandlerResult | None:
+    """处理cancel、invalid、skill、use、弹窗并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+        ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        position: 当前阶段下的细分画面位置标识。
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        HandlerResult | None: 返回值类型见注解。
+    """
     if not _is_invalid_skill_use_modal(text):
         return None
     _remember_blocked_battle_card(ctx)
@@ -397,7 +498,14 @@ def _cancel_invalid_skill_use_modal(
 
 
 def _click_modal_confirm_direct(app: "AppProcessor") -> bool:
-    """兼容旧调用，默认优先点击确认。"""
+    """点击弹窗、confirm、direct并返回结果。
+
+    Args:
+        app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     return _click_modal_action_direct(app, prefer_confirm=True)
 
 
@@ -408,9 +516,31 @@ class ModalHandler(GameplayHandler):
     priority = 90  # 弹窗覆盖其他阶段，优先处理
 
     def can_handle(self, app, ctx, phase, position):
+        """判断当前画面是否应由该处理器接管。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            bool: 条件判断结果，True 表示满足。
+        """
         return phase == "modal"
 
     def handle(self, app, ctx, phase, position):
+        """执行处理器主逻辑并返回处理结果。
+
+        Args:
+            app: 应用处理器实例，提供截图、检测结果与点击/滑动能力。
+            ctx: 培育上下文对象，用于读写跨步骤的业务状态。
+            phase: 当前识别到的 gameplay 阶段标识。
+            position: 当前界面在该阶段下的细分位置标识。
+
+        Returns:
+            返回执行结果对象，具体类型见函数注解。
+        """
         from src.core.tasks.producer_challenge.ui import click_modal_action_with_retry
 
         # 累计连续 modal 计数，用于检测卡住情况
@@ -463,7 +593,7 @@ class ModalHandler(GameplayHandler):
                 return HandlerResult.ok("modal: cancel fallback", sleep_after=0.5)
 
         # ── P_DRINK_DETAIL 安全处理 ──
-        # P饮料详情模态不应默认点击「使う」（会消耗饮料），
+        # P饮料详情模态不应默认点击“使う”（会消耗饮料），
         # 正常丢弃流程由 p_drink.py 的 _execute_drink_discard_chain 内联处理。
         # 如果 ModalHandler 收到 P_DRINK_DETAIL，说明是异常情况，安全取消。
         if position == GameplayPosition.P_DRINK_DETAIL:

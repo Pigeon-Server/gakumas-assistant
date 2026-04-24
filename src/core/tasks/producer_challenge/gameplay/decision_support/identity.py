@@ -15,6 +15,17 @@ from src.utils.logger import logger
 
 @dataclass(frozen=True)
 class CandidateResolution:
+    """定义 CandidateResolution 的结构化数据。
+
+    Attributes:
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        candidate_type: 候选项类别（如 schedule_action、dialogue_option），用于后续分支处理。
+        db_id: 数据库中的实体 ID；为空通常表示当前候选项尚未完成实体识别。
+        display_name: 展示给日志/策略的可读名称。
+        source: 候选项来源标记（如 OCR、DB、fallback），便于排查识别链路。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+        metadata: 扩展元数据，保存额外识别信息与决策辅助字段。
+    """
     action_id: str
     candidate_type: str
     db_id: str = ""
@@ -26,6 +37,15 @@ class CandidateResolution:
 
 @dataclass(frozen=True)
 class ScheduleActionSpec:
+    """定义 ScheduleActionSpec 的结构化数据。
+
+    Attributes:
+        action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。
+        aliases: 可匹配的别名集合，用于提高 OCR 文本匹配容错率。
+        rl_action_type: 对接 RL 动作空间时使用的动作类别标识。
+        todo: 尚未完成能力的说明或后续补全备注。
+        confidence: 当前识别或匹配结果的置信度，数值越高代表结果越可靠。
+    """
     action_id: str
     aliases: tuple[str, ...]
     rl_action_type: str = ""
@@ -152,6 +172,14 @@ _LESSON_OPTION_MAP: dict[str, dict[str, str]] = {
 
 
 def _clean_description_text(text: str) -> str:
+    """清洗描述、text并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     cleaned = (
         str(text or "")
         .replace("<nobr>", "")
@@ -168,18 +196,38 @@ def _clean_description_text(text: str) -> str:
 
 
 def _description_text(entries: Any) -> str:
+    """处理描述、文本并返回结果。
+
+    Args:
+        entries: 用于提供entries相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     if not entries:
         return ""
     parts: list[str] = []
     for raw_entry in entries:
         entry = raw_entry or {}
-        text = _clean_description_text(str(entry.get("text") or ""))
+        if isinstance(entry, dict):
+            text = _clean_description_text(str(entry.get("text") or ""))
+        else:
+            text = _clean_description_text(str(getattr(entry, "text", "") or ""))
         if text:
             parts.append(text)
-    return _clean_description_text("".join(parts))
+    # 多段效果文本用分号连接，避免 OCR/DB 拼接成 "+11060%" 这类歧义串。
+    return _clean_description_text("；".join(parts))
 
 
 def _humanize_runtime_text(text: str) -> str:
+    """处理humanize、runtime、文本并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     cleaned = _clean_description_text(text)
     replacements = (
         ("干劲", ProduceText.YARUKI),
@@ -201,26 +249,57 @@ def _humanize_runtime_text(text: str) -> str:
 
 def _normalize_effect_lookup_text(text: str) -> str:
     # 统一描述文本归一化，降低 OCR 噪声（空格、全半角、标点）对匹配的影响。
+    """规范化`effect_lookup_text`。"""
     return normalize_lookup_text(_humanize_runtime_text(_clean_description_text(text)))
 
 
 def _slugify_text(text: str | None, *, fallback: str) -> str:
+    """处理slugify、文本并返回结果。
+
+    Args:
+        text: 待处理文本，通常来源于 OCR 或配置。
+        fallback: 用于提供fallback相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     normalized = normalize_lookup_text(text)
     slug = _SLUG_CLEANUP_RE.sub("_", normalized.lower()).strip("_")
     return slug or fallback
 
 
 def _build_unknown_action_id(prefix: str, text: str | None, *, index: int) -> str:
+    """构建unknown、操作、id并返回结果。
+
+    Args:
+        prefix: 用于提供prefix相关输入。
+        text: 待处理文本，通常来源于 OCR 或配置。
+        index: 用于提供index相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     return f"{prefix}:{_slugify_text(text, fallback=f'idx_{index}')}"
 
 
 def _matches_schedule_alias(raw_title: str, normalized_title: str, alias: str) -> bool:
+    """判断日程、alias是否成立。
+
+    Args:
+        raw_title: 用于提供raw、title相关输入。
+        normalized_title: 用于提供normalized、title相关输入。
+        alias: 用于提供alias相关输入。
+
+    Returns:
+        bool: 条件判断结果，True 表示满足。
+    """
     if not alias:
         return False
     return alias in raw_title or normalize_lookup_text(alias) in normalized_title
 
 
 def _schedule_lesson_display_name(param_kind: str, variant: str) -> str:
+    """处理日程`schedule_lesson_display_name`。"""
     lesson_name_map = {
         "vocal": ProduceText.VOCAL,
         "dance": ProduceText.DANCE,
@@ -240,6 +319,16 @@ def _build_schedule_description(
     rl_action_type: str,
     param_kind: str,
 ) -> str:
+    """构建日程、描述并返回结果。
+
+    Args:
+        action_id: 业务对象标识符，用于索引或匹配目标实体。
+        rl_action_type: 用于提供rl、操作、type相关输入。
+        param_kind: 用于提供param、kind相关输入。
+
+    Returns:
+        str: 处理后的文本结果。
+    """
     action_desc = {
         "schedule_action_consult": "相談；技能卡交换/强化/删除等牌组调整。",
         "schedule_action_present_support": "活動支給；通常可从差し入れ中选择一次即时收益。",
@@ -280,6 +369,7 @@ def _resolve_schedule_spec(
     raw_title: str,
     metadata: dict[str, Any],
 ) -> CandidateResolution:
+    """解析并确定`schedule_spec`。"""
     spec_metadata = dict(metadata)
     spec_metadata["schedule_family"] = spec.action_id.removeprefix("schedule_action_")
     spec_metadata["supported"] = not bool(spec.todo)
@@ -313,6 +403,17 @@ def resolve_schedule_action_identity(
     index: int = 0,
     is_sp: bool = False,
 ) -> CandidateResolution:
+    """解析并补全日程、操作、标识并返回结果。
+
+    Args:
+        title: 用于提供title相关输入。
+        kind: 用于提供kind相关输入。
+        index: 用于提供index相关输入。
+        is_sp: 用于提供is、sp相关输入。
+
+    Returns:
+        CandidateResolution: 返回值类型见注解。
+    """
     raw_title = str(title or "")
     normalized_title = normalize_lookup_text(raw_title)
     metadata: dict[str, Any] = {
@@ -432,6 +533,7 @@ def _fallback_dialogue_option_identity(
     index: int,
     param_kind: str = "unknown",
 ) -> CandidateResolution:
+    """解析`fallback_dialogue_option_identity`。"""
     metadata: dict[str, Any] = {}
     if param_kind and param_kind != "unknown":
         metadata["param_kind"] = param_kind
@@ -451,37 +553,29 @@ def _load_dialogue_option_effect_entries() -> list[dict[str, Any]]:
     if _dialogue_option_effect_entries is not None:
         return _dialogue_option_effect_entries
 
-    from src.utils.runtime_paths import resolve_existing_resource_path
+    from src.utils.game_database_tools import get_game_database
 
-    path = resolve_existing_resource_path(
-        "assets",
-        "gakumasu-diff",
-        "ProduceStepEventSuggestion.yaml",
-    )
-    import yaml
-
-    with open(str(path), "r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+    data = list(get_game_database("ProduceStepEventSuggestion").get_all_item() or [])
     if not data:
         _dialogue_option_effect_entries = []
         return _dialogue_option_effect_entries
 
     seen: dict[tuple[int, str], dict[str, Any]] = {}
     for entry in data:
-        entry_id = str(entry.get("id", ""))
-        raw_desc = _humanize_runtime_text(_description_text(entry.get("produceDescriptions")))
+        entry_id = str(getattr(entry, "id", "") or "")
+        raw_desc = _humanize_runtime_text(_description_text(getattr(entry, "produceDescriptions", None)))
         norm_desc = _normalize_effect_lookup_text(raw_desc)
         if not entry_id or not norm_desc:
             continue
-        produce_point = int(entry.get("producePoint", 0) or 0)
+        produce_point = int(getattr(entry, "producePoint", 0) or 0)
         key = (produce_point, norm_desc)
         candidate = {
             "id": entry_id,
             "produce_point": produce_point,
             "norm_desc": norm_desc,
             "raw_desc": raw_desc,
-            "effect_ids": entry.get("produceEffectIds", []),
-            "stamina": int(entry.get("stamina", 0) or 0),
+            "effect_ids": list(getattr(entry, "produceEffectIds", []) or []),
+            "stamina": int(getattr(entry, "stamina", 0) or 0),
         }
         existing = seen.get(key)
         # 优先保留效果轴信息更完整的条目；同分时取 id 字典序较小者，保证稳定性。
@@ -510,6 +604,17 @@ def resolve_dialogue_option_identity(
     effect_text: str = "",
     p_cost: int | None = None,
 ) -> CandidateResolution:
+    """解析并补全对话、option、标识并返回结果。
+
+    Args:
+        title: 用于提供title相关输入。
+        index: 用于提供index相关输入。
+        effect_text: 用于提供效果、text相关输入。
+        p_cost: 用于提供p、cost相关输入。
+
+    Returns:
+        CandidateResolution: 返回值类型见注解。
+    """
     param_kind = infer_param_kind(title)
     normalized_effect = _normalize_effect_lookup_text(effect_text)
     if not normalized_effect:
@@ -563,32 +668,20 @@ def _load_outing_activity_entries() -> list[dict[str, Any]]:
     if _outing_activity_entries is not None:
         return _outing_activity_entries
 
-    from src.utils.runtime_paths import resolve_existing_resource_path
+    from src.utils.game_database_tools import get_game_database
 
-    path = resolve_existing_resource_path(
-        "assets",
-        "gakumasu-diff",
-        "ProduceStepEventSuggestion.yaml",
-    )
-    import yaml
-
-    with open(str(path), "r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+    data = list(get_game_database("ProduceStepEventSuggestion").get_all_item() or [])
     if not data:
         _outing_activity_entries = []
         return _outing_activity_entries
 
     seen: dict[tuple[int, str], dict[str, Any]] = {}
     for entry in data:
-        entry_id = str(entry.get("id", ""))
+        entry_id = str(getattr(entry, "id", "") or "")
         if "activity" not in entry_id:
             continue
-        p_cost = int(entry.get("producePoint", 0))
-        desc_parts = [
-            item.get("text", "")
-            for item in entry.get("produceDescriptions", [])
-            if item.get("text")
-        ]
+        p_cost = int(getattr(entry, "producePoint", 0) or 0)
+        desc_parts = [str(getattr(item, "text", "") or "") for item in (getattr(entry, "produceDescriptions", []) or []) if str(getattr(item, "text", "") or "")]
         raw_desc = "".join(desc_parts)
         norm_desc = _OUTING_WHITESPACE_RE.sub("", raw_desc)
 
@@ -600,7 +693,7 @@ def _load_outing_activity_entries() -> list[dict[str, Any]]:
                 "produce_point": p_cost,
                 "norm_desc": norm_desc,
                 "raw_desc": raw_desc,
-                "effect_ids": entry.get("produceEffectIds", []),
+                "effect_ids": list(getattr(entry, "produceEffectIds", []) or []),
                 "is_generic": is_generic,
             }
 
@@ -608,7 +701,7 @@ def _load_outing_activity_entries() -> list[dict[str, Any]]:
     logger.info(
         "outing DB: 加载 {} 条唯一活動条目（来自 {} 条原始记录）",
         len(_outing_activity_entries),
-        sum(1 for entry in data if "activity" in str(entry.get("id", ""))),
+        sum(1 for entry in data if "activity" in str(getattr(entry, "id", "") or "")),
     )
     return _outing_activity_entries
 
@@ -620,7 +713,17 @@ def resolve_outing_option_identity(
     title: str = "",
     index: int = 0,
 ) -> CandidateResolution:
-    """解析おでかけ選項的 DB ID。"""
+    """解析并补全outing、option、标识并返回结果。
+
+    Args:
+        p_cost: 用于提供p、cost相关输入。
+        effect_text: 用于提供效果、text相关输入。
+        title: 用于提供title相关输入。
+        index: 用于提供index相关输入。
+
+    Returns:
+        CandidateResolution: 返回值类型见注解。
+    """
     if not effect_text:
         return resolve_dialogue_option_identity(title, index=index)
 
@@ -717,6 +820,15 @@ def resolve_lesson_option_identity(
 
 
 def _apply_resolution(candidate: Any, resolution: CandidateResolution) -> None:
+    """处理apply、resolution并返回结果。
+
+    Args:
+        candidate: 单个候选项对象。
+        resolution: 用于提供resolution相关输入。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     candidate.action_id = resolution.action_id
     candidate.db_id = resolution.db_id
     candidate.source = resolution.source
@@ -748,6 +860,14 @@ def _apply_resolution(candidate: Any, resolution: CandidateResolution) -> None:
 
 
 def hydrate_schedule_candidates(candidates: Sequence[Any]) -> None:
+    """处理hydrate、日程、candidates并返回结果。
+
+    Args:
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     for candidate in candidates:
         metadata = getattr(candidate, "metadata", None) or {}
         resolution = resolve_schedule_action_identity(
@@ -760,6 +880,14 @@ def hydrate_schedule_candidates(candidates: Sequence[Any]) -> None:
 
 
 def hydrate_dialogue_candidates(candidates: Sequence[Any]) -> None:
+    """处理hydrate、对话、candidates并返回结果。
+
+    Args:
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     for candidate in candidates:
         metadata = getattr(candidate, "metadata", {}) or {}
         effect_text = str(
@@ -802,7 +930,14 @@ def hydrate_outing_candidates(candidates: Sequence[Any]) -> None:
 
 
 def hydrate_lesson_candidates(candidates: Sequence[Any]) -> None:
-    """授業課程選項の解析。"""
+    """处理hydrate、课程、candidates并返回结果。
+
+    Args:
+        candidates: 候选项列表，供策略或规则选择目标动作。
+
+    Returns:
+        None: 仅产生副作用，不返回业务值。
+    """
     for candidate in candidates:
         metadata = getattr(candidate, "metadata", {}) or {}
         kind = getattr(candidate, "kind", "") or metadata.get("lesson_stat", "unknown")

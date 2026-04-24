@@ -48,6 +48,20 @@ class HandleStartupModalsStep(ProduceStep):
     step_name = "handle_startup_modals"
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """处理开局弹窗链，并确保真正切入 gameplay 阶段。
+
+        正常链路下，第一次点击「プロデュース開始」后可能先弹出语音/快进/跳过等
+        BASE_UI 弹窗；这些弹窗关闭后还可能回到开始确认页，需要再次点击开始按钮。
+        本步骤会先用 BASE_UI 模型完成弹窗清理，再切到 PRODUCER 模型等待首个稳定的
+        gameplay phase，并把该阶段写回 `ctx`。
+
+        Args:
+            app: 当前应用处理器，用于切换模型、处理弹窗和等待 gameplay 首帧。
+            ctx: 培育上下文；本步骤会更新 gameplay phase，并记录启动链路操作历史。
+
+        Returns:
+            bool: 成功进入可识别的 gameplay phase 时返回 True。
+        """
         ctx.set_phase(GameplayPhase.STARTUP_MODALS)
 
         # ── 恢复模式：跳过启动弹窗，直接切换模型等待 gameplay ──
@@ -62,7 +76,7 @@ class HandleStartupModalsStep(ProduceStep):
             return True
 
         # ── 阶段 1：用 BASE_UI 模型处理启动设置弹窗 ──
-        # 第一次点击「プロデュース開始」后，会依次弹出语音/快进/跳过三个设置弹窗。
+        # 首次点击“プロデュース開始”后，会依次弹出语音/快进/跳过三个设置弹窗。
         # 这些弹窗属于 BASE_UI 元素，必须用 BASE_UI 模型检测和处理。
         logger.info("使用 BASE_UI 模型处理启动设置弹窗...")
         self._dismiss_startup_modals_with_base_ui(app, ctx, timeout=25)
@@ -116,10 +130,18 @@ class HandleStartupModalsStep(ProduceStep):
         *,
         timeout: int = 25,
     ) -> int:
-        """用 BASE_UI 模型处理启动设置弹窗（ボイス再生確認/快进/跳过等）。
+        """在 BASE_UI 模型下连续清理开局设置弹窗。
 
-        不断轮询弹窗并点击确认，直到连续若干秒没有新弹窗出现。
-        返回处理的弹窗数量。
+        该函数会轮询 `try_get_modal()`，每发现一个弹窗就优先点击确认操作；若按钮识别失败，
+        再回退到右下角确认区域。只有在连续若干秒都没有新弹窗出现时，才认为启动弹窗序列结束。
+
+        Args:
+            app: 当前应用处理器。
+            ctx: 培育上下文；函数会通过 `record_operation` 记录每次弹窗确认。
+            timeout: 整个弹窗处理阶段的最长时长。
+
+        Returns:
+            int: 在本轮启动过程中成功处理的弹窗数量。
         """
         handled = 0
         no_modal_streak = 0
@@ -171,9 +193,14 @@ class HandleStartupModalsStep(ProduceStep):
         ctx: "ProduceContext",
         timeout: int = 30,
     ) -> str:
-        """在 PRODUCER 模型下等待 gameplay 首帧。
+        """在 PRODUCER 模型下等待首个可接管的 gameplay phase。
 
-        返回检测到的 GameplayPhase 字符串，超时返回空字符串。
+        会持续调用 `detect_gameplay_phase`，直到识别到非 `UNKNOWN` / `MODAL` /
+        `STARTUP_MODALS` 的正式阶段。若等待过程中遇到 gameplay 内弹窗，会先尝试确认，
+        以免弹窗遮挡导致 phase 一直无法稳定识别。
+
+        Returns:
+            str: 成功时返回检测到的 phase 字符串；超时则返回空字符串。
         """
         for wait in range(timeout):
             phase = detect_gameplay_phase(app, ctx)

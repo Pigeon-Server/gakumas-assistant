@@ -30,6 +30,19 @@ class SelectSupportCardsStep(ProduceStep):
     skip_on_resume = True
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """按配置完成支援卡编成，并推进到记忆编成页。
+
+        Args:
+            app: 当前应用处理器，用于点击自动编成、处理确认弹窗或执行预设横滑。
+            ctx: 培育上下文；函数会读取 `support_card_mode` 和 `support_card_preset_index`
+                决定采用自动编成还是预设编组。
+
+        Returns:
+            bool: 成功完成支援卡编成并稳定进入记忆编成页时返回 True。
+
+        Raises:
+            ValueError: 配置了未知的支援卡编成模式时抛出。
+        """
         mode = ctx.support_card_mode.lower()
 
         if mode == "auto":
@@ -40,8 +53,16 @@ class SelectSupportCardsStep(ProduceStep):
             raise ValueError(f"未知支援卡编成模式: {mode!r}")
 
     def _auto_select(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
-        """おまかせ 自动编成。"""
-        # 点击おまかせ
+        """执行支援卡自动编成，并关闭过程中出现的确认弹窗。
+
+        Returns:
+            bool: 自动编成完成后成功推进到记忆编成页时返回 True。
+
+        Notes:
+            该函数优先走标准弹窗流程；若等待弹窗失败，会回退到直接点击确认按钮，
+            以兼容不同设备上弹窗检测时机不稳定的情况。
+        """
+        # 点击“おまかせ”。
         app.game_utils.click_button(
             ButtonText.AUTO_SELECT,
             match_config=MatchConfig(fuzz_threshold=80),
@@ -68,7 +89,14 @@ class SelectSupportCardsStep(ProduceStep):
         return self._advance_to_memory_selection(app)
 
     def _advance_to_memory_selection(self, app: "AppProcessor") -> bool:
-        # 点击「次へ」
+        """点击“次へ”并等待页面稳定进入记忆编成页。
+
+        Returns:
+            bool: 识别到记忆卡槽位或空白槽位时返回 True。
+
+        Raises:
+            TimeoutError: 长时间未出现记忆编成页特征时抛出。
+        """
         app.game_utils.click_button(
             ButtonText.NEXT,
             match_config=MatchConfig(fuzz_threshold=80),
@@ -84,13 +112,21 @@ class SelectSupportCardsStep(ProduceStep):
             if app.latest_results.exists_label(BaseUILabels.BLANK_SLOT):
                 logger.debug("进入记忆编成页（存在空白槽位）")
                 return True
-            # 如果还在支援卡页面（还有おまかせ和リセット按钮）则尝试等待
+            # 如果仍在支援卡页面（仍有“おまかせ”“リセット”按钮）则继续等待。
             sleep(1)
 
         raise TimeoutError("等待记忆编成页超时")
 
     def _preset_select(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
-        """使用预设编号编成。"""
+        """切换到指定支援卡预设编组，并推进到记忆编成页。
+
+        Args:
+            app: 当前应用处理器，用于执行横向滑动与页面推进。
+            ctx: 培育上下文，函数会读取 `support_card_preset_index` 作为目标编组编号。
+
+        Returns:
+            bool: 成功切换到目标预设并进入记忆编成页时返回 True。
+        """
         logger.info(f"使用预设支援卡编号: {ctx.support_card_preset_index}")
         select_preset_by_horizontal_swipe(
             app,

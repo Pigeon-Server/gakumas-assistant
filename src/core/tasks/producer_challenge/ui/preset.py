@@ -17,6 +17,20 @@ _PRESET_INDEX_PATTERN = re.compile(r"(\d+)\s*/\s*(\d+)")
 
 
 def _call_ui_attr(name: str, fallback, *args, **kwargs):
+    """动态调用 UI 模块中的函数，支持运行时替换实现。
+
+    优先从 `src.core.tasks.producer_challenge.ui` 模块中按名称获取函数，
+    如果不存在或模块未加载则回退到 fallback。
+
+    Args:
+        name: 要在 UI 模块中查找的函数名。
+        fallback: 默认实现函数，当 UI 模块中找不到 name 时使用。
+        *args: 位置参数，透传给目标函数。
+        **kwargs: 关键字参数，透传给目标函数。
+
+    Returns:
+        目标函数的返回值，类型取决于被调用的函数。
+    """
     ui_module = sys.modules.get("src.core.tasks.producer_challenge.ui")
     if ui_module is not None:
         candidate = getattr(ui_module, name, fallback)
@@ -26,6 +40,16 @@ def _call_ui_attr(name: str, fallback, *args, **kwargs):
 
 
 def parse_preset_index(text: str | None) -> tuple[int, int] | None:
+    """从文本中解析编组编号信息（当前编号/总数）。
+
+    使用正则匹配 "数字/数字" 格式（如 "1/3"），去除空格后进行解析。
+
+    Args:
+        text: 待解析的文本，通常来自按钮的 OCR 识别结果。
+
+    Returns:
+        tuple[int, int] | None: (当前编组编号, 总编组数)，解析失败或文本为空时返回 None。
+    """
     normalized = str(text or "").replace(" ", "")
     if not normalized:
         return None
@@ -36,6 +60,17 @@ def parse_preset_index(text: str | None) -> tuple[int, int] | None:
 
 
 def get_current_preset_index(app: "AppProcessor") -> tuple[int, int] | None:
+    """从当前画面按钮中获取编组编号信息。
+
+    遍历画面中所有按钮，对每个按钮的 text 属性调用 parse_preset_index，
+    返回第一个匹配到的 "数字/数字" 格式结果。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 中的 YOLO 检测结果。
+
+    Returns:
+        tuple[int, int] | None: (当前编组编号, 总编组数)，未找到匹配按钮时返回 None。
+    """
     for button in get_buttons(app):
         if parsed := parse_preset_index(button.text):
             return parsed
@@ -47,6 +82,18 @@ def build_preset_swipe_paths(
     *,
     frame_width: int,
 ) -> list[tuple[int, int, int, int]]:
+    """根据卡片检测框计算编组横滑路径。
+
+    从检测框的坐标范围计算滑动的起始 X 和结束 X，然后根据 Y 坐标将检测框
+    分组为多行，每行生成一条横滑路径（start_x, cy, end_x, cy）。
+
+    Args:
+        boxes: 卡片检测框序列，需具有 x, w, cy 属性。
+        frame_width: 画面宽度（像素），用于边界约束。
+
+    Returns:
+        list[tuple[int, int, int, int]]: 每条路径为 (start_x, start_y, end_x, end_y) 元组。
+    """
     if not boxes:
         return []
 
@@ -91,6 +138,21 @@ def get_preset_swipe_paths(
     *,
     card_labels: Sequence[str],
 ) -> list[tuple[int, int, int, int]]:
+    """从当前画面获取编组横滑路径。
+
+    优先使用指定 card_labels 检测卡片区域，未找到时回退到 BLANK_SLOT 标签。
+    获取到检测框后委托给 build_preset_swipe_paths 计算路径。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 和 latest_frame。
+        card_labels: 要检测的卡片标签名称列表（如支援卡/记忆卡标签）。
+
+    Returns:
+        list[tuple[int, int, int, int]]: 横滑路径列表。
+
+    Raises:
+        TimeoutError: 未检测到卡片区域或无法计算路径时抛出。
+    """
     boxes = list(app.latest_results.filter_by_labels(list(card_labels)))
     if not boxes:
         boxes = list(app.latest_results.filter_by_label(BaseUILabels.BLANK_SLOT))
@@ -112,6 +174,26 @@ def select_preset_by_horizontal_swipe(
     description: str,
     max_swipes: int | None = None,
 ) -> bool:
+    """通过横向滑动切换到目标编组。
+
+    先 OCR 识别当前编组编号，然后循环横滑直到到达目标编号。每次滑动后重新
+    识别编号以判断是否到达目标，同时自动校准 left_swipe_increases 方向。
+    支持多行路径轮询，处理滑动卡住的情况。
+
+    Args:
+        app: 应用处理器实例，提供 latest_results 和 device 操作。
+        target_index: 目标编组编号（1-based）。
+        card_labels: 要检测的卡片标签名称列表，用于计算滑动路径。
+        description: 日志和异常信息中的描述性前缀（如 "支援卡"、"记忆卡"）。
+        max_swipes: 最大滑动次数，默认根据目标距离自动计算。
+
+    Returns:
+        bool: 已在目标编组返回 True（含初始就在目标的情况）。
+
+    Raises:
+        ValueError: target_index 超出范围时抛出。
+        TimeoutError: 无法识别编组编号或超过最大滑动次数时抛出。
+    """
     current_info = _call_ui_attr(
         "get_current_preset_index",
         get_current_preset_index,
