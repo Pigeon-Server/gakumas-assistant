@@ -73,7 +73,6 @@ class AppProcessor:
             "message": "正在初始化设备...",
         }
         self._device_polling_thread = threading.Thread(target=self._poll_device_state_loop, daemon=True)
-        self._device_polling_thread.start()
         self._init_environment()
         self._init_database()
         self.config_service = ConfigService()
@@ -96,6 +95,7 @@ class AppProcessor:
         else:
             logger.warning("游戏数据库资源尚未就绪，等待用户确认后下载。")
             logger.success("Application Started In Bootstrap Mode")
+        self._device_polling_thread.start()
 
     def _register_task_services(self):
         if self._task_services_registered:
@@ -213,6 +213,13 @@ class AppProcessor:
             self.yolo_engine.stop()
         except Exception as exc:
             logger.debug(f"Skip inference stop during shutdown: {exc}")
+        thread = getattr(self, "_device_polling_thread", None)
+        if thread is not None and thread is not threading.current_thread():
+            try:
+                if thread.is_alive():
+                    thread.join(timeout=3)
+            except Exception as exc:
+                logger.debug(f"Skip device polling thread join during shutdown: {exc}")
         self._close_device(getattr(self, "device", None))
 
     def _close_device(self, device: BaseDevice | None):
@@ -226,7 +233,7 @@ class AppProcessor:
         except Exception as exc:
             logger.debug(f"Skip device close: {exc}")
 
-    def _describe_device_state(self, device: BaseDevice) -> dict:
+    def _describe_device_state(self, device: BaseDevice | None) -> dict:
         if bool(device):
             return {
                 "available": True,
@@ -247,18 +254,20 @@ class AppProcessor:
         """定期检测设备状态并广播更新"""
         while not self.is_shutdown_requested():
             try:
-                self._update_device_state(self.device)
-                
+                self._update_device_state(getattr(self, "device", None))
+
                 # If device recently became available and inference hasn't started, start it
                 with self._device_state_lock:
                     is_available = self._device_status.get('available', False)
-                if is_available and not getattr(self.yolo_engine, "running", False):
+                yolo_engine = getattr(self, "yolo_engine", None)
+                if is_available and yolo_engine is not None and not getattr(yolo_engine, "running", False):
                     self.start_inference_if_possible()
             except Exception as exc:
                 logger.debug(f"Device polling error: {exc}")
-            sleep(2)
+            if self._shutdown_requested.wait(timeout=2):
+                break
 
-    def _update_device_state(self, device: BaseDevice):
+    def _update_device_state(self, device: BaseDevice | None):
         with self._device_state_lock:
             previous = dict(self._device_status)
             current = self._describe_device_state(device)
@@ -323,7 +332,7 @@ class AppProcessor:
             return dict(self._device_status)
 
     def _handle_device_capture_failure(self, exc: Exception):
-        self._update_device_state(self.device)
+        self._update_device_state(getattr(self, "device", None))
 
     def start_inference_if_possible(self) -> bool:
         if not self.is_resource_ready():

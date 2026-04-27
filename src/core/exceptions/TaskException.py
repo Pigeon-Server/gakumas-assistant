@@ -26,3 +26,19 @@ class TaskTimeout(BaseException):
         if self.task:
             return f"Task '{self.task.id}' execution timed out."
         return "Task execution timed out."
+
+
+class TaskUserMessage(BaseException):
+    """
+    受控中止当前任务，并向前端展示一条用户可读消息。
+
+    与普通异常不同，这类异常不应触发失败 dump / 失败包，
+    而是由 TaskService 直接广播 message 后结束任务。
+    """
+
+    def __init__(self, message: str, task: "Task" = None):
+        self.task = task
+        self.message = str(message)
+
+    def __str__(self):
+        return self.message

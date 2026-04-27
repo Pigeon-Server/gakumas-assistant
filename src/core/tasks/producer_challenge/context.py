@@ -56,6 +56,8 @@ class ProduceContext:
     use_boost_items: bool = False
     schedule_notebook_mode: str = "before_decision"  # P手帳读取策略（disabled / before_decision）
     resume_interrupted: bool = False      # 是否恢复上次中断的培育
+    allow_ap_recovery: bool = True        # 是否允许 AP 不足时自动恢复
+    allow_destroy_production_data: bool = True  # 是否允许确认跨设备旧局销毁提示
 
     # ── 执行期间填充 ──
     resumed_from_interrupt: bool = False  # 实际恢复了中断培育（跳过编成步骤）

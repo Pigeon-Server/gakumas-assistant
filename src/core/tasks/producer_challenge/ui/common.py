@@ -267,7 +267,7 @@ def click_modal_action_with_retry(
     app: "AppProcessor",
     modal: "Modal | None" = None,
     *,
-    prefer_confirm: True,
+    prefer_confirm: bool = True,
     retries: int = 3,
     timeout: float = 5.0,
     action_name: str = "modal action",

@@ -19,7 +19,7 @@ except Exception:
 from src.constants.task_status import TaskStatus
 from src.constants.websocket_actions import WebsocketActions
 from src.core.device.windows_compat import is_windows_device
-from src.core.exceptions.TaskException import UserCancelTask, TaskTimeout
+from src.core.exceptions.TaskException import UserCancelTask, TaskTimeout, TaskUserMessage
 from src.core.services.config_service import ConfigService
 from src.core.web.websocket import WebSocketManager
 from src.entity.Task import Task
@@ -688,6 +688,23 @@ class TaskService:
             task.update_status(TaskStatus.CANCELED)
             record_task_step(self._app, "task.run.canceled", task_id=task.id)
             logger.warning(f"Task '{task.task_name}({task.id})' cancelled")
+        except TaskUserMessage as e:
+            sys.settrace(None)
+            task.update_status(TaskStatus.CANCELED)
+            record_task_step(
+                self._app,
+                "task.run.user_message",
+                task_id=task.id,
+                error_type=type(e).__name__,
+                error=str(e),
+            )
+            self._broadcast_task_execution_error(
+                task,
+                e,
+                None,
+                None,
+            )
+            logger.warning(f"Task '{task.task_name}({task.id})' stopped with user message: {e}")
         except TaskTimeout as e:
             timeout_event.clear()
             sys.settrace(None)

@@ -1,10 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
-import auto_purchase_setting from "@/components/lists/config/task_settings/auto_purchase_setting.vue"
-import auto_contest_setting from "@/components/lists/config/task_settings/auto_contest_setting.vue";
-import dispatch_work_setting from "@/components/lists/config/task_settings/dispatch_work_setting.vue";
-import auto_enhancement_support_card_setting from "@/components/lists/config/task_settings/auto_enhancement_support_card_setting.vue";
-import auto_producer_setting from "@/components/lists/config/task_settings/auto_producer_setting.vue";
+import TaskConfigSectionForm from "@/components/lists/config/task_config_section_form.vue";
 import { useAppStore } from "@/stores/app.js";
 import { TaskStatus } from "@/scripts/constants";
 import dialogs from "@/scripts/utils/dialogs.js";
@@ -29,14 +25,6 @@ const props = defineProps({
   },
 })
 const emit = defineEmits(["update:modelValue"])
-
-const settingComponents = {
-  auto_purchase: auto_purchase_setting,
-  auto_contest: auto_contest_setting,
-  dispatch_work: dispatch_work_setting,
-  auto_enhancement_support_card: auto_enhancement_support_card_setting,
-  auto_producer: auto_producer_setting,
-}
 
 const statusMap = {
   PENDING: {color: "orange", icon: "md:schedule", label: "等待中"},
@@ -103,6 +91,14 @@ function isTaskBusy(taskName) {
 
 function canRunTaskFrom(task) {
   return !task.manual_only && app_store.status.task === TaskStatus.PENDING
+}
+
+function taskConfigSection(taskName) {
+  return app_store.config?.[`task__${taskName}`] || null
+}
+
+function saveTaskConfig(taskName) {
+  return app_store.save_task_config(taskName)
 }
 
 async function runTask(taskName) {
@@ -263,12 +259,13 @@ async function toggleTask(taskName, enable) {
                 </v-btn>
               </div>
             </div>
-            <div v-if="settingComponents[task_name]" class="mt-4">
+            <div v-if="taskConfigSection(task_name)" class="mt-4">
               <h4>任务设置</h4>
-              <component
-                :is="settingComponents[task_name]"
-                :task="task"
-                :task_name="task_name"
+              <TaskConfigSectionForm
+                :config="app_store.config"
+                :section="taskConfigSection(task_name)"
+                :section-name="`task__${task_name}`"
+                :save="() => saveTaskConfig(task_name)"
               />
             </div>
           </v-expansion-panel-text>

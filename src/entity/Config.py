@@ -79,6 +79,7 @@ class ConfigItemUI:
     label: Optional[str] = None
     hint: Optional[str] = None
     component: Optional[str] = None
+    component_props: Dict[str, Any] = field(default_factory=dict)
     options: List[Dict[str, Any]] = field(default_factory=list)
     visible_if: Optional[Dict[str, Any]] = None
     readonly: bool = False
@@ -91,6 +92,7 @@ class ConfigItemUI:
             "label": self.label,
             "hint": self.hint,
             "component": self.component,
+            "component_props": self.component_props,
             "options": self.options,
             "visible_if": self.visible_if,
             "readonly": self.readonly,
@@ -612,47 +614,233 @@ class _Task:
 
     class DispatchWork(_BaseConfigGroup):
         # 每次重新配置工作时间
-        reconfigure_work_hours = ConfigItem(default_value=True, data_type=bool)
+        reconfigure_work_hours = ConfigItem(
+            default_value=True,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="重新配置任务派遣时间",
+                hint="开启后会在派遣前重新设置工作时长",
+                component="switch",
+                order=10,
+            ),
+        )
         # 工作时间
-        working_hours = ConfigItem(default_value="12H", data_type=str, verify=r"4H|8H|12H", use_verify=True)
+        working_hours = ConfigItem(
+            default_value="12H",
+            data_type=str,
+            verify=r"4H|8H|12H",
+            use_verify=True,
+            ui=ConfigItemUI(
+                label="任务派遣时间",
+                hint="仅在开启“重新配置任务派遣时间”时生效",
+                component="select",
+                options=[
+                    {"title": "4小时（最低）", "value": "4H"},
+                    {"title": "8小时", "value": "8H"},
+                    {"title": "12小时（最高）", "value": "12H"},
+                ],
+                visible_if={"task__dispatch_work.reconfigure_work_hours": True},
+                order=20,
+            ),
+        )
 
     class AutoPurchase(_BaseConfigGroup):
         # 是否购买每周礼包
-        weekly_gift = ConfigItem(default_value=True, data_type=bool)
+        weekly_gift = ConfigItem(
+            default_value=True,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="购买每周礼包",
+                hint="每日检查礼包页面是否有免费可购买项",
+                component="switch",
+                order=10,
+            ),
+        )
         # 每日购买的物品
-        daily_buy_list = ConfigItem(default_value=[], data_type=list)
+        daily_buy_list = ConfigItem(
+            default_value=[],
+            data_type=list,
+            ui=ConfigItemUI(
+                label="每日购买物品",
+                hint="从交换所中选择允许自动购买的物品",
+                component="task_auto_purchase_item_selector",
+                order=40,
+            ),
+        )
         # 自动刷新可购买列表（免费）
-        refresh_shop = ConfigItem(default_value=True, data_type=bool)
+        refresh_shop = ConfigItem(
+            default_value=True,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="自动刷新交换所",
+                hint="每日自动刷新交换所",
+                component="switch",
+                order=20,
+            ),
+        )
         # 使用石头刷新列表
-        use_gem_refresh = ConfigItem(default_value=False, data_type=bool)
+        use_gem_refresh = ConfigItem(
+            default_value=False,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="使用钻石刷新交换所",
+                hint="免费刷新后仍可用钻石继续刷新",
+                component="switch",
+                visible_if={"task__auto_purchase.refresh_shop": True},
+                order=30,
+            ),
+        )
 
     class AutoContest(_BaseConfigGroup):
         # 挑战前自动重新配置队伍
-        auto_reconfigure_team_before_challenge = ConfigItem(default_value=False, data_type=bool)
+        auto_reconfigure_team_before_challenge = ConfigItem(
+            default_value=False,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="挑战前自动重新配置队伍",
+                hint="如果队伍中有空位仍会触发自动配置",
+                component="switch",
+                order=10,
+            ),
+        )
         # 挑战顺序
-        challenge_order = ConfigItem(default_value="random", data_type=str, verify=r"random|highest_power|lowest_power|balanced_power", use_verify=True)
+        challenge_order = ConfigItem(
+            default_value="random",
+            data_type=str,
+            verify=r"random|highest_power|lowest_power|balanced_power",
+            use_verify=True,
+            ui=ConfigItemUI(
+                label="挑战顺序",
+                hint="脚本会按设定顺序寻找符合条件的挑战对象",
+                component="select",
+                options=[
+                    {"title": "随机选择", "value": "random"},
+                    {"title": "最高", "value": "highest_power"},
+                    {"title": "最低", "value": "lowest_power"},
+                    {"title": "中间", "value": "balanced_power"},
+                ],
+                order=20,
+            ),
+        )
 
     class AutoEnhancementSupportCard(_BaseConfigGroup):
         # 是否强化 R 卡
-        enhance_r = ConfigItem(default_value=False, data_type=bool)
+        enhance_r = ConfigItem(
+            default_value=False,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="强化 R 卡",
+                hint="自动强化 R 品级的支援卡",
+                component="switch",
+                order=30,
+            ),
+        )
         # R 卡最大强化等级（4★上限=40）
-        enhance_r_max_level = ConfigItem(default_value=40, data_type=int)
+        enhance_r_max_level = ConfigItem(
+            default_value=40,
+            data_type=int,
+            ui=ConfigItemUI(
+                label="R 最大强化等级",
+                hint="R 卡的最大目标等级",
+                component="slider",
+                component_props={"min": 1, "max": 40, "step": 1, "thumb_label": "always"},
+                visible_if={"task__auto_enhancement_support_card.enhance_r": True},
+                order=31,
+            ),
+        )
         # 是否强化 SR 卡
-        enhance_sr = ConfigItem(default_value=True, data_type=bool)
+        enhance_sr = ConfigItem(
+            default_value=True,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="强化 SR 卡",
+                hint="自动强化 SR 品级的支援卡",
+                component="switch",
+                order=20,
+            ),
+        )
         # SR 卡最大强化等级（4★上限=50）
-        enhance_sr_max_level = ConfigItem(default_value=50, data_type=int)
+        enhance_sr_max_level = ConfigItem(
+            default_value=50,
+            data_type=int,
+            ui=ConfigItemUI(
+                label="SR 最大强化等级",
+                hint="SR 卡的最大目标等级",
+                component="slider",
+                component_props={"min": 1, "max": 50, "step": 1, "thumb_label": "always"},
+                visible_if={"task__auto_enhancement_support_card.enhance_sr": True},
+                order=21,
+            ),
+        )
         # 是否强化 SSR 卡
-        enhance_ssr = ConfigItem(default_value=True, data_type=bool)
+        enhance_ssr = ConfigItem(
+            default_value=True,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="强化 SSR 卡",
+                hint="自动强化 SSR 品级的支援卡",
+                component="switch",
+                order=10,
+            ),
+        )
         # SSR 卡最大强化等级（4★上限=60）
-        enhance_ssr_max_level = ConfigItem(default_value=60, data_type=int)
+        enhance_ssr_max_level = ConfigItem(
+            default_value=60,
+            data_type=int,
+            ui=ConfigItemUI(
+                label="SSR 最大强化等级",
+                hint="SSR 卡的最大目标等级",
+                component="slider",
+                component_props={"min": 1, "max": 60, "step": 1, "thumb_label": "always"},
+                visible_if={"task__auto_enhancement_support_card.enhance_ssr": True},
+                order=11,
+            ),
+        )
         # 是否自动执行上限解放（需要同名卡作为素材）
-        auto_limit_break = ConfigItem(default_value=False, data_type=bool)
+        auto_limit_break = ConfigItem(
+            default_value=False,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="自动执行上限解放",
+                hint="有同名卡片且未达到星级上限时，自动进行上限解放",
+                component="switch",
+                order=40,
+            ),
+        )
         # 是否自动执行サポート変換（将多余卡片变换为サポートの証）
-        auto_convert = ConfigItem(default_value=False, data_type=bool)
+        auto_convert = ConfigItem(
+            default_value=False,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="自动交换溢出的支援卡",
+                hint="自动将溢出的支援卡变换为「サポートの証」",
+                component="switch",
+                order=50,
+            ),
+        )
         # 白名单模式（仅强化白名单内的卡）
-        whitelist_mode = ConfigItem(default_value=False, data_type=bool)
+        whitelist_mode = ConfigItem(
+            default_value=False,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="白名单模式",
+                hint="仅强化白名单中选择的卡牌",
+                component="switch",
+                order=60,
+            ),
+        )
         # 白名单卡 ID 列表
-        whitelist_card_ids = ConfigItem(default_value=[], data_type=list)
+        whitelist_card_ids = ConfigItem(
+            default_value=[],
+            data_type=list,
+            ui=ConfigItemUI(
+                label="白名单卡片",
+                hint="选择允许被自动强化的支援卡",
+                component="task_auto_enhancement_support_card_whitelist",
+                visible_if={"task__auto_enhancement_support_card.whitelist_mode": True},
+                order=61,
+            ),
+        )
 
     class AutoProducer(_BaseConfigGroup):
         # 剧本选择: "hajime" (初) / "nia" (NIA)
@@ -717,6 +905,7 @@ class _Task:
             ui=ConfigItemUI(
                 label="目标偶像卡",
                 hint="目标 P アイドル ID（留空使用默认选中的卡；需先执行「刷新偶像卡存储」学习卡片特征）",
+                component="task_auto_producer_idol_card_browser",
                 order=30,
             ),
         )
@@ -793,7 +982,7 @@ class _Task:
             data_type=bool,
             ui=ConfigItemUI(
                 label="使用加成道具",
-                hint="開始確認页面是否使用加成道具（編成詳细按钮上方）",
+                hint="「開始確認」页面是否使用加成道具（編成詳细按钮上方）",
                 component="switch",
                 order=80,
             ),
@@ -807,6 +996,28 @@ class _Task:
                 hint="检测到上次中断的培育时自动恢复（点击「再開する」），而非放弃重新开始",
                 component="switch",
                 order=82,
+            ),
+        )
+        # 是否允许 AP 不足时自动消耗道具恢复
+        allow_ap_recovery = ConfigItem(
+            default_value=True,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="是否允许使用道具恢复AP",
+                hint="AP 不足时是否允许自动消耗道具恢复",
+                component="switch",
+                order=83,
+            ),
+        )
+        # 是否允许确认跨设备旧局销毁提示并重新开始
+        allow_destroy_production_data = ConfigItem(
+            default_value=True,
+            data_type=bool,
+            ui=ConfigItemUI(
+                label="是否允许销毁跨设备未完成培育的会话",
+                hint="检测到「プロデュースデータの破棄」时是否允许确认继续",
+                component="switch",
+                order=84,
             ),
         )
         # 行程决策阶段 P手帳 读取策略
@@ -823,7 +1034,7 @@ class _Task:
                     {"title": "关闭读取", "value": "disabled"},
                     {"title": "仅决策前读取", "value": "before_decision"},
                 ],
-                order=83,
+                order=85,
             ),
         )
         # 记忆卡面（フォト）选择模式
@@ -840,7 +1051,7 @@ class _Task:
                     {"title": "默认选择第一个", "value": "first"},
                     {"title": "VL 视觉模型自动选择最优卡面", "value": "vl"},
                 ],
-                order=85,
+                order=87,
             ),
         )
         # VL 模型自定义提示词
@@ -854,8 +1065,10 @@ class _Task:
             ui=ConfigItemUI(
                 label="VL 选卡面提示词",
                 hint="自定义 VL 模型选择卡面时使用的提示词（留空使用默认）",
+                component="textarea",
+                component_props={"rows": 4, "auto_grow": True},
                 visible_if={"task__auto_producer.memory_photo_mode": "vl"},
-                order=86,
+                order=88,
             ),
         )
 

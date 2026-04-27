@@ -76,7 +76,12 @@ class SelectMemoriesStep(ProduceStep):
         # 等待弹窗 → 点击「決定」
         modal = app.game_utils.wait_for_modal(None, timeout=5, no_body=True)
         if modal:
-            if not click_modal_action_with_retry(app, modal, action_name="memory auto-select confirm"):
+            if not click_modal_action_with_retry(
+                app,
+                modal,
+                prefer_confirm=True,
+                action_name="memory auto-select confirm",
+            ):
                 raise TimeoutError("记忆自动编成确认弹窗未能关闭")
         else:
             app.game_utils.click_button(
@@ -85,7 +90,12 @@ class SelectMemoriesStep(ProduceStep):
             )
             sleep(0.5)
             if pending_modal := app.game_utils.try_get_modal(no_body=True):
-                if not click_modal_action_with_retry(app, pending_modal, action_name="memory auto-select fallback confirm"):
+                if not click_modal_action_with_retry(
+                    app,
+                    pending_modal,
+                    prefer_confirm=True,
+                    action_name="memory auto-select fallback confirm",
+                ):
                     raise TimeoutError("记忆自动编成确认弹窗未能关闭")
         sleep(1)
 
@@ -194,7 +204,12 @@ class SelectMemoriesStep(ProduceStep):
             ):
                 logger.info(f"检测到レンタル弹窗（{modal.modal_title!r}），确认")
                 ctx.has_rental_memory = True
-                if not click_modal_action_with_retry(app, modal, action_name="memory rental modal"):
+                if not click_modal_action_with_retry(
+                    app,
+                    modal,
+                    prefer_confirm=True,
+                    action_name="memory rental modal",
+                ):
                     raise TimeoutError(f"{modal.modal_title!r} 弹窗未能关闭")
                 sleep(1)
                 modal = app.game_utils.try_get_modal(no_body=True)

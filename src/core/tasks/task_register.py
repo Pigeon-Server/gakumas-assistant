@@ -299,6 +299,8 @@ def register_tasks(processor: "AppProcessor"):
             use_boost_items=cfg.use_boost_items.value,
             schedule_notebook_mode=cfg.schedule_notebook_mode.value,
             resume_interrupted=cfg.resume_interrupted.value,
+            allow_ap_recovery=cfg.allow_ap_recovery.value,
+            allow_destroy_production_data=cfg.allow_destroy_production_data.value,
         )
         base = app.config_service().base
         decision_backend = str(getattr(base, "producer_decision_backend", "llm") or "llm")

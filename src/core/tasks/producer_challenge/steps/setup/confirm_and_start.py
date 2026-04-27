@@ -91,7 +91,12 @@ class ConfirmAndStartStep(ProduceStep):
             # 在弹窗中选择道具（通常点击第一个可用道具后确认）
             modal = app.game_utils.try_get_modal(no_body=True)
             if modal:
-                if not click_modal_action_with_retry(app, modal, action_name=f"boost item {idx + 1} confirm"):
+                if not click_modal_action_with_retry(
+                    app,
+                    modal,
+                    prefer_confirm=True,
+                    action_name=f"boost item {idx + 1} confirm",
+                ):
                     raise TimeoutError(f"加成道具槽位 {idx + 1} 的确认弹窗未能关闭")
                 sleep(0.5)
             else:
@@ -113,11 +118,21 @@ class ConfirmAndStartStep(ProduceStep):
             MatchConfig(fuzz_threshold=70),
         ):
             logger.info(f"确认页检测到レンタル弹窗（{modal.modal_title!r}）")
-            if not click_modal_action_with_retry(app, modal, action_name="final confirm rental modal"):
+            if not click_modal_action_with_retry(
+                app,
+                modal,
+                prefer_confirm=True,
+                action_name="final confirm rental modal",
+            ):
                 raise TimeoutError("确认页的レンタル可能弹窗未能关闭")
             return
 
         # 其他弹窗：尝试关闭
         logger.warning(f"确认页出现未知弹窗: {modal.modal_title!r}")
-        if not click_modal_action_with_retry(app, modal, action_name="final confirm modal close"):
+        if not click_modal_action_with_retry(
+            app,
+            modal,
+            prefer_confirm=False,
+            action_name="final confirm modal close",
+        ):
             raise TimeoutError(f"确认页弹窗未能关闭: {modal.modal_title!r}")

@@ -14,10 +14,17 @@ NIA Pro 对应默认选项，NIA Master 需要向下滑动或在列表中选择�
 from time import sleep
 from typing import TYPE_CHECKING
 
+from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.produce_text import ProduceText
+from src.core.exceptions.TaskException import TaskUserMessage
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
-from src.core.tasks.producer_challenge.ui import find_button, inertial_swipe, wait_frame_stable
+from src.core.tasks.producer_challenge.ui import (
+    click_modal_action_with_retry,
+    find_button,
+    inertial_swipe,
+    wait_frame_stable,
+)
 from src.core.tasks.producer_challenge.shared.common import ocr_text
 from src.utils.logger import logger
 
@@ -118,7 +125,7 @@ class SelectDifficultyStep(ProduceStep):
 
             app.game_utils.wait_loading()
             try:
-                return self._wait_idol_selection_page(app)
+                return self._wait_idol_selection_page(app, ctx)
             except TimeoutError:
                 # AP 恢复后可能回到难度页，检测难度标签存在则重试
                 if app.latest_results.exists_label(label):
@@ -147,14 +154,14 @@ class SelectDifficultyStep(ProduceStep):
         # 先检查当前是否已经在 Legend 页面
         if self._is_legend_page_visible(app):
             logger.debug("已经在 Legend 难度页面")
-            return self._click_legend_and_enter(app)
+            return self._click_legend_and_enter(app, ctx)
 
         # 从 HAJIME 页面向左滑动到 Legend
         for attempt in range(MAX_SWIPE_ATTEMPTS):
             logger.debug(f"尝试向左滑动到 Legend ({attempt + 1}/{MAX_SWIPE_ATTEMPTS})")
             inertial_swipe(app, w * 3 // 4, cy, w // 4, cy)
             if self._is_legend_page_visible(app):
-                return self._click_legend_and_enter(app)
+                return self._click_legend_and_enter(app, ctx)
 
         raise TimeoutError(f"滑动 {MAX_SWIPE_ATTEMPTS} 次后仍未找到 Legend 页面")
 
@@ -172,7 +179,7 @@ class SelectDifficultyStep(ProduceStep):
 
         return find_button(app, ProduceText.LEGEND, fuzz_threshold=70, use_contains=False) is not None
 
-    def _click_legend_and_enter(self, app: "AppProcessor") -> bool:
+    def _click_legend_and_enter(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """在 Legend 页面点击「レジェンド」按钮进入偶像卡选择。"""
         legend_btn = find_button(app, ProduceText.LEGEND, fuzz_threshold=70, use_contains=False)
         if legend_btn is None:
@@ -180,7 +187,7 @@ class SelectDifficultyStep(ProduceStep):
 
         app.game_utils.click_element_and_wait_trigger(legend_btn, retries=3)
         app.game_utils.wait_loading()
-        return self._wait_idol_selection_page(app)
+        return self._wait_idol_selection_page(app, ctx)
 
     def _select_nia_difficulty(self, app: "AppProcessor", ctx: "ProduceContext", difficulty: str) -> bool:
         """NIA 剧本 Pro/Master 选择。
@@ -206,7 +213,7 @@ class SelectDifficultyStep(ProduceStep):
             if diff_btn is not None:
                 app.game_utils.click_element_and_wait_trigger(diff_btn, retries=3)
                 app.game_utils.wait_loading()
-                return self._wait_idol_selection_page(app)
+                return self._wait_idol_selection_page(app, ctx)
             sleep(1)
 
         # 回退：NIA 只有一个标签时，直接点击
@@ -215,12 +222,12 @@ class SelectDifficultyStep(ProduceStep):
         if boxes:
             app.game_utils.click_element_and_wait_trigger(boxes.first(), retries=3)
             app.game_utils.wait_loading()
-            return self._wait_idol_selection_page(app)
+            return self._wait_idol_selection_page(app, ctx)
 
         raise TimeoutError(f"NIA 难度 '{difficulty}' 选择失败")
 
     @staticmethod
-    def _wait_idol_selection_page(app: "AppProcessor") -> bool:
+    def _wait_idol_selection_page(app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """等待偶像卡选择页出现，自动处理 AP 不足弹窗。
         AP 恢复后若仍在难度选择页，抛出 TimeoutError 由外层重试。"""
         ap_recovered = False
@@ -241,6 +248,9 @@ class SelectDifficultyStep(ProduceStep):
             # 检查 AP 不足弹窗
             text = ocr_text(app.latest_frame)
             if ProduceText.AP_SHORTAGE in text:
+                if not getattr(ctx, "allow_ap_recovery", True):
+                    logger.warning("检测到 AP 不足弹窗，但用户配置禁止自动恢复")
+                    SelectDifficultyStep._cancel_ap_recovery_and_return_home(app)
                 logger.info("检测到 AP 不足弹窗，尝试自动恢复")
                 SelectDifficultyStep._handle_ap_shortage(app)
                 ap_recovered = True
@@ -249,6 +259,45 @@ class SelectDifficultyStep(ProduceStep):
             sleep(1)
 
         raise TimeoutError("等待偶像卡选择页超时")
+
+    @staticmethod
+    def _cancel_ap_recovery_and_return_home(app: "AppProcessor") -> None:
+        """拒绝 AP 恢复弹窗，并返回主页终止本次培育。"""
+        modal = app.game_utils.try_get_modal(no_body=True, require_header=False)
+        cancelled = False
+        if modal is not None:
+            cancelled = click_modal_action_with_retry(
+                app,
+                modal,
+                prefer_confirm=False,
+                retries=2,
+                timeout=4.0,
+                action_name="select_difficulty ap recovery cancel",
+            )
+        else:
+            for text in (ProduceText.AP_CANCEL, ButtonText.CLOSE):
+                button = find_button(app, text, fuzz_threshold=60)
+                if button is None:
+                    continue
+                cancelled = app.game_utils.click_element_and_wait_trigger(
+                    button,
+                    retries=2,
+                    timeout=3.0,
+                )
+                if not cancelled:
+                    app.device.click_element(button)
+                    cancelled = True
+                break
+
+        if not cancelled:
+            raise TimeoutError("未能取消 AP 恢复弹窗")
+
+        wait_frame_stable(app, timeout=2.0)
+        try:
+            app.game_utils.go_home()
+        except Exception as exc:
+            raise TaskUserMessage("用户配置禁止 AP 恢复，且取消后返回主页失败") from exc
+        raise TaskUserMessage("用户配置禁止 AP 恢复，已取消并返回主页")
 
     @staticmethod
     def _handle_ap_shortage(app: "AppProcessor") -> None:
@@ -327,15 +376,15 @@ class SelectDifficultyStep(ProduceStep):
 
             # 阶段 1：仅出现 AP 不足（尚未打开 AP 恢复弹窗）→ 点击“回復する”。
             if ProduceText.AP_SHORTAGE in full_text and ProduceText.AP_RECOVERY not in full_text:
-                pos = find_ocr_center("回復する")
+                pos = find_ocr_center(ProduceText.AP_RECOVER_BUTTON)
                 if pos:
                     logger.debug(f"AP不足: 点击回復する OCR位置 {pos}")
-                    app.device.click(pos[0], pos[1], el_label="回復する")
+                    app.device.click(pos[0], pos[1], el_label=ProduceText.AP_RECOVER_BUTTON)
                     sleep(1.5)
                     continue
 
             # 阶段: 回復完了 → 有按钮就点
-            if "回復完了" in full_text or "回復しました" in full_text:
+            if ProduceText.AP_RECOVERY_COMPLETE in full_text or ProduceText.AP_RECOVERY_DONE in full_text:
                 if yolo_buttons:
                     btn = yolo_buttons.first()
                     logger.debug(f"AP回復完了: 点击确认 ({btn.cx:.0f}, {btn.cy:.0f})")

@@ -72,7 +72,12 @@ class SelectSupportCardsStep(ProduceStep):
         # 等待弹窗 → 点击「決定」
         modal = app.game_utils.wait_for_modal(None, timeout=5, no_body=True)
         if modal:
-            if not click_modal_action_with_retry(app, modal, action_name="support auto-select confirm"):
+            if not click_modal_action_with_retry(
+                app,
+                modal,
+                prefer_confirm=True,
+                action_name="support auto-select confirm",
+            ):
                 raise TimeoutError("支援卡自动编成确认弹窗未能关闭")
         else:
             # 回退：直接点击確定按钮
@@ -82,7 +87,12 @@ class SelectSupportCardsStep(ProduceStep):
             )
             sleep(0.5)
             if pending_modal := app.game_utils.try_get_modal(no_body=True):
-                if not click_modal_action_with_retry(app, pending_modal, action_name="support auto-select fallback confirm"):
+                if not click_modal_action_with_retry(
+                    app,
+                    pending_modal,
+                    prefer_confirm=True,
+                    action_name="support auto-select fallback confirm",
+                ):
                     raise TimeoutError("支援卡自动编成确认弹窗未能关闭")
         sleep(1)
 

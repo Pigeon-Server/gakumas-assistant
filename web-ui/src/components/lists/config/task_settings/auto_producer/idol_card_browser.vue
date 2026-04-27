@@ -13,6 +13,10 @@
       type: String,
       default: 'auto_producer',
     },
+    save: {
+      type: Function,
+      default: null,
+    },
   })
 
   const dialog = ref(false)
@@ -393,6 +397,10 @@
     () => idolCardField.value?.value ?? '',
     (value, previousValue) => {
       if (value === previousValue || !props.taskName) {
+        return
+      }
+      if (typeof props.save === 'function') {
+        void props.save()
         return
       }
       void store.save_task_config(props.taskName)

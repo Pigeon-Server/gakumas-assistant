@@ -2468,7 +2468,7 @@ def _build_llm_snapshot(
         "remaining": hud_state.get("remaining_turns", 0),
         "max_turns": None,
         "battle_kind": "exam" if phase_key == GameplayPhase.EXAM else "lesson",
-        "battle_kind_label": "試験" if phase_key == GameplayPhase.EXAM else "レッスン",
+        "battle_kind_label": ProduceText.EXAM if phase_key == GameplayPhase.EXAM else ProduceText.LESSON,
         "score": hud_state.get("score", 0),
         "target": effective_target,
         "ratio": (
@@ -2856,7 +2856,7 @@ def build_followup_decision_state(
         )
         llm_snapshot.setdefault(
             "battle_kind_label",
-            "試験" if phase_key == GameplayPhase.EXAM else "レッスン",
+            ProduceText.EXAM if phase_key == GameplayPhase.EXAM else ProduceText.LESSON,
         )
         llm_snapshot.setdefault("turn", None)
         llm_snapshot.setdefault("remaining", None)

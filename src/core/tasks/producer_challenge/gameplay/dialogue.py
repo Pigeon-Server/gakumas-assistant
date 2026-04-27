@@ -109,12 +109,12 @@ _ACTION_INFO_HINT_KEYWORDS = (
     ProduceText.STAMINA_RECOVERY,
     ProduceText.SKILL_CARD,
     ProduceText.SKILL_CARD_REMOVE,
-    "上昇",
-    "獲得",
-    "回復",
-    "強化",
-    "ランダム",
-    "チェンジ",
+    ProduceText.INCREASE,
+    ProduceText.ACQUIRE,
+    ProduceText.RECOVERY,
+    ProduceText.ENHANCE,
+    ProduceText.RANDOM_KEYWORD,
+    ProduceText.CHANGE,
 )
 _DIALOGUE_FAST_FORWARD_ENABLED_KEY = "dialogue_fast_forward_enabled"
 _DIALOGUE_FAST_FORWARD_LAST_CLICK_TS_KEY = "dialogue_fast_forward_last_click_ts"

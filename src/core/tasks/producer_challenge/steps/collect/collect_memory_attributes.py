@@ -1136,7 +1136,12 @@ class CollectMemoryAttributesStep(ProduceStep):
             ):
                 logger.info(f"检测到レンタル弹窗（{modal.modal_title!r}），确认")
                 ctx.has_rental_memory = True
-                if not click_modal_action_with_retry(app, modal, action_name="memory rental modal"):
+                if not click_modal_action_with_retry(
+                    app,
+                    modal,
+                    prefer_confirm=True,
+                    action_name="memory rental modal",
+                ):
                     raise TimeoutError(f"{modal.modal_title!r} 弹窗未能关闭")
                 sleep(1)
             else:

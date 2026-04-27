@@ -2,6 +2,7 @@ export interface ConfigItemUI {
   label?: string
   hint?: string
   component?: string
+  component_props?: Record<string, any>
   options?: Array<Record<string, any> & {
     title?: string
     value?: any

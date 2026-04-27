@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.modal_text import ModalText
 from src.constants.game.text.produce_text import ProduceText
+from src.core.exceptions.TaskException import TaskUserMessage
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.inference.ocr_engine import OCRService
@@ -96,6 +97,16 @@ def _is_retire_confirmation_title(title: str | None) -> bool:
             normalize_text(ButtonText.RETIRE),
         )
     )
+
+
+def _is_destroying_production_data_modal(modal) -> bool:
+    """判断是否命中了“プロデュースデータの破棄”提示弹窗。"""
+    if modal is None:
+        return False
+    normalized_title = normalize_text(getattr(modal, "modal_title", None))
+    if not normalized_title:
+        return False
+    return normalize_text(ModalText.TITLE.DESTROYING_PRODUCTION_DATA) in normalized_title
 
 
 def _build_frame_box(
@@ -684,6 +695,10 @@ class NavigateToProduceStep(ProduceStep):
             sleep(1.5)
             if self._try_resume_interrupted(app, ctx):
                 return True
+        if self._confirm_destroying_production_data_modal(app, ctx):
+            if _is_on_scenario_page(app):
+                logger.debug("确认跨设备旧局提示后成功进入剧本选择页")
+                return True
 
         # 等待剧本页面出现
         for _ in range(20):
@@ -694,7 +709,9 @@ class NavigateToProduceStep(ProduceStep):
             if getattr(ctx, "resume_interrupted", False):
                 if self._try_resume_interrupted(app, ctx):
                     return True
-            elif self._retire_resumable_produce(app):
+            if self._confirm_destroying_production_data_modal(app, ctx):
+                continue
+            if not getattr(ctx, "resume_interrupted", False) and self._retire_resumable_produce(app):
                 # 清掉旧局后会回到主页，需要重新点一次 Produce 进入新流程。
                 if app.game_utils.wait_for_label(BaseUILabels.HOME_PRODUCE_BTN, timeout=8):
                     open_produce_entry_from_home(app, timeout=8)
@@ -735,6 +752,52 @@ class NavigateToProduceStep(ProduceStep):
             f"week={resume_info.get('current_week', '?')}/{resume_info.get('total_weeks', '?')}, "
             f"idol={resume_info.get('idol_name', '?')}"
         )
+        return True
+
+    @staticmethod
+    def _confirm_destroying_production_data_modal(app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """确认跨设备旧局提示弹窗，继续进入新的培育入口。"""
+        modal = app.game_utils.try_get_modal(no_body=True)
+        if not _is_destroying_production_data_modal(modal):
+            return False
+
+        if not getattr(ctx, "allow_destroy_production_data", True):
+            logger.warning("navigate_to_produce: 用户配置禁止确认「プロデュースデータの破棄」，取消后返回主页")
+            if not click_modal_action_with_retry(
+                app,
+                modal,
+                prefer_confirm=False,
+                retries=2,
+                timeout=4.0,
+                action_name="navigate_to_produce destroy production data cancel",
+            ):
+                raise TimeoutError("未能取消「プロデュースデータの破棄」弹窗")
+            wait_frame_stable(app, timeout=2.0)
+            try:
+                app.game_utils.go_home()
+            except Exception as exc:
+                raise TaskUserMessage("用户配置禁止确认「プロデュースデータの破棄」，且取消后返回主页失败") from exc
+            raise TaskUserMessage("用户配置禁止确认「プロデュースデータの破棄」，已取消并返回主页")
+
+        if getattr(ctx, "resume_interrupted", False):
+            logger.warning(
+                "[恢复培育] 命中「プロデュースデータの破棄」提示；当前设备无法直接恢复另一端旧局，将确认后改为重新开始"
+            )
+        else:
+            logger.info("navigate_to_produce: 检测到跨设备进行中培育提示，确认后继续进入剧本页")
+
+        if not click_modal_action_with_retry(
+            app,
+            modal,
+            prefer_confirm=True,
+            retries=2,
+            timeout=4.0,
+            action_name="navigate_to_produce destroy production data confirm",
+        ):
+            raise TimeoutError("未能确认「プロデュースデータの破棄」弹窗")
+
+        app.game_utils.wait_loading()
+        wait_frame_stable(app, timeout=3.0)
         return True
 
     @staticmethod

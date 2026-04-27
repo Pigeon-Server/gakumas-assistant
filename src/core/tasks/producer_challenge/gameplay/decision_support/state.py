@@ -500,8 +500,8 @@ _SIM_RESOURCE_KEYS = (
     "lesson_buff",
 )
 _SIM_DECAY_KEYS = ("parameter_buff", "aggressive")
-_SIM_DESTINATION_HOLD_KEYWORDS = ("保留",)
-_SIM_DESTINATION_LOST_KEYWORDS = ("除外", "削除", "消去")
+_SIM_DESTINATION_HOLD_KEYWORDS = (ProduceText.CARD_HOLD,)
+_SIM_DESTINATION_LOST_KEYWORDS = (ProduceText.CARD_EXCLUDE, ProduceText.SKILL_CARD_REMOVE, ProduceText.CARD_ERASE)
 
 
 def _default_virtual_battle_state() -> dict[str, Any]:

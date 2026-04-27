@@ -521,47 +521,47 @@ def _looks_like_skill_reward_showcase(results, frame_text: str) -> bool:
     if results is None:
         return False
 
-       def _collect_reward_layout_boxes(labels: tuple[str, ...]) -> list[tuple[str, object]]:
-            """按指定标签收集检测框，返回 (label, box) 元组列表。
+    def _collect_reward_layout_boxes(labels: tuple[str, ...]) -> list[tuple[str, object]]:
+        """按指定标签收集检测框，返回 (label, box) 元组列表。
 
-            Args:
-                labels: 要查询的 YOLO 标签名称元组。
+        Args:
+            labels: 要查询的 YOLO 标签名称元组。
 
-            Returns:
-                list[tuple[str, object]]: 每个匹配检测框与其标签的元组列表。
-            """
+        Returns:
+            list[tuple[str, object]]: 每个匹配检测框与其标签的元组列表。
+        """
         collected: list[tuple[str, object]] = []
         for label in labels:
             for box in results.filter_by_label(label):
                 collected.append((label, box))
         return collected
 
-       def _box_area(box) -> int:
-            """计算检测框的面积（宽高乘积）。
+    def _box_area(box) -> int:
+        """计算检测框的面积（宽高乘积）。
 
-            Args:
-                box: 检测框对象，需具有 x, y, w, h 属性。
+        Args:
+            box: 检测框对象，需具有 x, y, w, h 属性。
 
-            Returns:
-                int: 检测框面积，宽高为负时返回 0。
-            """
+        Returns:
+            int: 检测框面积，宽高为负时返回 0。
+        """
         return max(0, int(getattr(box, "w", 0) - getattr(box, "x", 0))) * max(
             0, int(getattr(box, "h", 0) - getattr(box, "y", 0))
         )
 
-      def _dedup_reward_layout_boxes(boxes: list[tuple[str, object]]) -> list[tuple[str, object]]:
-            """对技能奖励检测框进行去重，保留优先级更高的框。
+    def _dedup_reward_layout_boxes(boxes: list[tuple[str, object]]) -> list[tuple[str, object]]:
+        """对技能奖励检测框进行去重，保留优先级更高的框。
 
-            以中心点坐标为基准，在容差范围（56px）内的框视为重复。去重策略：
-            - 非 INFO 标签优先替换 INFO 标签（具体类型优先于通用类型）
-            - 同类标签时面积更大的优先保留
+        以中心点坐标为基准，在容差范围（56px）内的框视为重复。去重策略：
+        - 非 INFO 标签优先替换 INFO 标签（具体类型优先于通用类型）
+        - 同类标签时面积更大的优先保留
 
-            Args:
-                boxes: (label, box) 元组列表。
+        Args:
+            boxes: (label, box) 元组列表。
 
-            Returns:
-                list[tuple[str, object]]: 去重后的元组列表。
-            """
+        Returns:
+            list[tuple[str, object]]: 去重后的元组列表。
+        """
         deduped: list[tuple[str, object]] = []
         for label, box in boxes:
             cx = int(getattr(box, "cx", 0))

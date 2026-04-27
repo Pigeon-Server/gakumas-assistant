@@ -24,6 +24,11 @@ class ProduceText:
     PARAMETER_UP = "パラメータ上昇"
     PARAMETER_UP_INCREASE = "パラメータ上昇量増加"
     INCREASE = "上昇"
+    ACQUIRE = "獲得"  # 获得
+    RECOVERY = "回復"  # 回复
+    ENHANCE = "強化"  # 强化
+    CHANGE = "チェンジ"  # 更换
+    RANDOM_KEYWORD = "ランダム"  # 随机
     SCORE = "スコア"
     BLOCK = "ブロック"
     TURN = "ターン"
@@ -243,6 +248,7 @@ class ProduceText:
     SELF_LESSON = "自主"  # 自主训练
     HARD_LESSON = "追い込み"  # 追い込み训练
     LESSON = "レッスン"  # 课程 / レッスン
+    EXAM = "試験"  # 考试
     AUDITION = "オーディション"  # 选秀 / 试镜
     SECOND_AUDITION = "2次オーディション"  # 第二次选秀
     FINALE = "FINALE"  # 最终舞台
@@ -338,6 +344,13 @@ class ProduceText:
     AP_DRINK_USE = "使う"  # 使用 AP 道具按钮
     AP_RECOVER_BUTTON = "回復する"  # AP 回复确认按钮
     AP_CANCEL = "キャンセル"  # 取消按钮
+    AP_RECOVERY_COMPLETE = "回復完了"  # AP 回复完成提示
+    AP_RECOVERY_DONE = "回復しました"  # AP 回复完成（替代写法）
+
+    # ── 技能卡模拟 - 效果目标关键词 ──
+    CARD_HOLD = "保留"  # 保留
+    CARD_EXCLUDE = "除外"  # 除外
+    CARD_ERASE = "消去"  # 消去
 
     # ── ライブ演出テキスト ──
     LANDSCAPE_START_NOTICE = "横画面で開始します"  # live 开始前的横屏提示

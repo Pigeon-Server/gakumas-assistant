@@ -239,7 +239,7 @@ def _humanize_runtime_text(text: str) -> str:
         ("热意", ProduceText.ENTHUSIASM),
         ("全力值", ProduceText.FULL_POWER_POINT),
         ("技能卡使用数追加", ProduceText.SKILL_CARD_USE_COUNT_UP),
-        ("体力回复", "回复体力"),
+        ("体力回复", ProduceText.STAMINA_RECOVERY),
     )
     for before, after in replacements:
         cleaned = cleaned.replace(before, after)
