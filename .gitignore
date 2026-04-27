@@ -40,3 +40,5 @@ _debug*
 *ANALYSIS.md
 *plan.md
 *test_*.json
+/.opencode/opencode.json
+/CLAUDE.md
