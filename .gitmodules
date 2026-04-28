@@ -4,6 +4,9 @@
 [submodule "assets/GakumasTranslationData"]
 	path = assets/GakumasTranslationData
 	url = https://github.com/chinosk6/GakumasTranslationData.git
+[submodule "train/gakumas_rl"]
+	path = train/gakumas_rl
+	url = https://github.com/Pigeon-Server/gakumas-rl.git
 [submodule "vendor/GkmasObjectManager"]
 	path = vendor/GkmasObjectManager
 	url = https://github.com/AllenHeartcore/GkmasObjectManager.git
