@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-runs/
-runs_*/
-trajectories/
-checkpoints/
-.gakumas_rl_cache/
-assets/gakumasu-diff/
-assets/GakumasTranslationData/
