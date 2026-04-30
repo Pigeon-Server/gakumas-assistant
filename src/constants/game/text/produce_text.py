@@ -385,6 +385,12 @@ class ProduceText:
 
     # ── Pドリンク詳細モーダル ──
     P_DRINK_DETAIL = "Pドリンク詳細"  # P饮料详情模态标题
+    P_DRINK_DETAIL_ALTS = (
+        P_DRINK_DETAIL,
+        "Pドリンク詳绅",
+        "Pドリンク詳細_",
+        "Pドリンク詳細-",
+    )
     P_DRINK_USE = "使う"  # P饮料详情模态内的使用按钮
     P_DRINK_LIMIT_NO_RECEIVE = "受け取らない"  # 所持上限页：不领取新饮料
     P_DRINK_LIMIT_KEEP = "残す"  # 所持上限页：保留新饮料/确认文案之一

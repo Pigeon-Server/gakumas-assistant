@@ -314,7 +314,6 @@ async function toggleTask(taskName, enable) {
   margin-top: 6px;
   font-size: 0.84rem;
   line-height: 1.4;
-  color: rgba(0, 0, 0, 0.64);
 }
 
 .task_panels {

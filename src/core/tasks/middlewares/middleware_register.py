@@ -33,7 +33,11 @@ def register_middlewares(processor: "AppProcessor"):
 
         if last_modal and not string_match(
             last_modal_title,
-            [ModalText.TITLE.CONNECTION_ERROR, ModalText.TITLE.INFO_FETCH_FAILED],
+            [
+                ModalText.TITLE.CONNECTION_ERROR,
+                ModalText.TITLE.INFO_FETCH_FAILED,
+                ModalText.TITLE.USAGE_EXPIRATION_CONFIRM,
+            ],
         ):
             return True
 
@@ -50,6 +54,18 @@ def register_middlewares(processor: "AppProcessor"):
                 app.game_utils.wait_loading()
             else:
                 logger.warning("Connection modal has no actionable button.")
+            last_modal = False
+            last_modal_title = modal.modal_title or ""
+            return True
+
+        if string_match(modal.modal_title, ModalText.TITLE.USAGE_EXPIRATION_CONFIRM):
+            logger.warning("Usage expiration modal detected, dismissing with cancel")
+            action_button = modal.cancel_button or modal.confirm_button
+            if action_button is not None:
+                app.device.click_element(action_button)
+                app.game_utils.wait_loading()
+            else:
+                logger.warning("Usage expiration modal has no actionable button.")
             last_modal = False
             last_modal_title = modal.modal_title or ""
             return True

@@ -84,6 +84,15 @@ Windows 可将激活命令替换为：
 ```powershell
 .venv\Scripts\Activate.ps1
 ```
+
+编译前端：
+```bash
+cd web-ui
+npm i
+npm run build
+cd ..
+```
+
 运行项目:
 ```bash
 python app.py

@@ -1193,22 +1193,59 @@ def _handle_tabbar__manny_exchange(app: "AppProcessor", commodity_target):
         _reset_daily_exchange_to_top(app)
 
 
+def _detect_daily_exchange_tabbar(
+        app: "AppProcessor",
+        retries: int = 3,
+) -> Optional[TabBar]:
+    """
+    在每日交换页面重试识别 TabBar。
+
+    识别过程可能受动画、压缩噪点或瞬时漏检影响，这里采用多次重试并在每轮稳帧后重取结果；
+    当识别到候选框时会打 Debug 框，便于线上问题回放。
+    """
+    for attempt in range(1, retries + 1):
+        app.game_utils.wait_for_label(BaseUILabels.TAB_BAR, timeout=2, interval=0.2)
+        tabbar_element = app.latest_results.filter_by_label(BaseUILabels.TAB_BAR).first()
+        if tabbar_element is None:
+            logger.warning(f"Daily exchange tab bar not detected ({attempt}/{retries})")
+            app.game_utils.wait_frame_stable(min_stable_duration=0.2)
+            continue
+
+        if hasattr(app, "debug_tools"):
+            app.debug_tools.add_box(
+                int(tabbar_element.x),
+                int(tabbar_element.y),
+                int(tabbar_element.w),
+                int(tabbar_element.h),
+                label=f"每日交换TabBar候选 {attempt}/{retries}",
+                color=(255, 105, 180),
+            )
+
+        tabbar = TabBar(tabbar_element)
+        if tabbar:
+            return tabbar
+        logger.warning(f"Daily exchange tab bar parsed empty ({attempt}/{retries})")
+        app.game_utils.wait_frame_stable(min_stable_duration=0.2)
+
+    return None
+
+
 def action__daily_exchange(app: "AppProcessor"):
     app.game_utils.click_button(ButtonText.SHOP.DAILY_EXCHANGE, match_config=MatchConfig(fuzz_threshold=90))
     app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.SHOP_SUB_PAGE.DAILY_EXCHANGE)
     _wait_exchange_item_groups(app)
-    tabbar: Optional[TabBar] = None
-    for _ in range(3):
-        app.game_utils.wait_for_label(BaseUILabels.TAB_BAR)
-        tabbar = TabBar(app.latest_results.filter_by_label(BaseUILabels.TAB_BAR).first())
-        if tabbar:
-            break
-    if not tabbar:
-        return False
+
     commodity_target = []
     for item_id in app.config_service().task__auto_purchase.daily_buy_list.value:
         if (result := item_db.get_by_id(item_id)) is not None:
             commodity_target.append(result.name)
+
+    tabbar = _detect_daily_exchange_tabbar(app)
+    if not tabbar:
+        logger.warning("Daily exchange tab bar unavailable, fallback to current tab exchange flow")
+        _exchange_items(app, commodity_target)
+        return True
+
     for index, tab_item in enumerate(tabbar):
         app.device.click_element(tab_item)
         app.game_utils.wait_frame_stable()

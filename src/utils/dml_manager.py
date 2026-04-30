@@ -191,9 +191,11 @@ class DMLManager:
                                extra_dim_overrides: dict[str, int] | None = None) -> str:
         model_scope = hashlib.sha256(str(Path(model_path).resolve()).encode("utf-8")).hexdigest()[:12]
         digest = hashlib.sha256()
-        with open(model_path, "rb") as model_file:
-            for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
-                digest.update(chunk)
+        for file_path in cls._iter_model_fingerprint_files(model_path):
+            digest.update(str(file_path).encode("utf-8"))
+            with open(file_path, "rb") as model_file:
+                for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
+                    digest.update(chunk)
         digest.update(repr(sorted(provider_options.items())).encode("utf-8"))
         # 维度覆盖会影响 CoreML 编译产物，纳入缓存 key 以避免使用旧缓存
         if cls._free_dimension_overrides:
@@ -201,6 +203,56 @@ class DMLManager:
         if extra_dim_overrides:
             digest.update(repr(sorted(extra_dim_overrides.items())).encode("utf-8"))
         return f"{model_scope}-{digest.hexdigest()[:12]}"
+
+    @staticmethod
+    def _iter_model_fingerprint_files(model_path: str) -> list[Path]:
+        """
+        返回参与 CoreML 缓存 key 的模型文件集合。
+
+        说明：ONNX 可能采用 external data（例如 xxx.onnx.data），
+        仅哈希 .onnx 主文件会导致模型更新后缓存 key 不变。
+        """
+        model_file = Path(model_path).resolve()
+        candidates = [model_file]
+        # 常见 external data 命名：model.onnx.data
+        candidates.append(Path(f"{model_file}.data"))
+        # 兼容切片 external data：model.onnx.data.0 / .1 ...
+        candidates.extend(sorted(model_file.parent.glob(f"{model_file.name}.data*")))
+        files: list[Path] = []
+        seen: set[Path] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.is_file():
+                files.append(candidate)
+        return files
+
+    @staticmethod
+    def _extract_coreml_cache_dir(providers) -> Path | None:
+        for provider in providers:
+            if not isinstance(provider, tuple):
+                continue
+            provider_name, provider_options = provider
+            if provider_name != "CoreMLExecutionProvider":
+                continue
+            if not isinstance(provider_options, dict):
+                continue
+            cache_dir = provider_options.get("ModelCacheDirectory")
+            if not cache_dir:
+                continue
+            return Path(str(cache_dir))
+        return None
+
+    @staticmethod
+    def _clear_coreml_cache_dir(cache_dir: Path) -> None:
+        if not cache_dir.exists():
+            return
+        try:
+            shutil.rmtree(cache_dir)
+            logger.warning("Removed invalid CoreML cache directory: {}", cache_dir)
+        except OSError as exc:
+            logger.warning("Failed to remove invalid CoreML cache {}: {}", cache_dir, exc)
 
     @classmethod
     def _prune_stale_coreml_cache(cls, cache_root: Path, model_path: str, model_cache_key: str) -> None:
@@ -288,6 +340,31 @@ class DMLManager:
             fallback_providers = ["CPUExecutionProvider"]
             if providers == fallback_providers:
                 raise
+            coreml_cache_dir = DMLManager._extract_coreml_cache_dir(providers)
+            if coreml_cache_dir is not None:
+                # CoreML 缓存损坏时先清理并重试一次加速会话，再回退 CPU。
+                DMLManager._clear_coreml_cache_dir(coreml_cache_dir)
+                retry_providers = DMLManager._build_provider_config(model_path, extra)
+                try:
+                    logger.warning(
+                        "Retry accelerated ONNX session after clearing CoreML cache for {}",
+                        model_path,
+                    )
+                    return DMLManager._remember_session(
+                        ort.InferenceSession(
+                            model_path,
+                            sess_options=so,
+                            providers=retry_providers,
+                        ),
+                        model_path,
+                        retry_providers,
+                    )
+                except Exception as retry_exc:
+                    logger.warning(
+                        "Retry accelerated ONNX session failed for {}: {}",
+                        model_path,
+                        retry_exc,
+                    )
             logger.warning(
                 "Create accelerated ONNX session failed for {}, fallback to CPUExecutionProvider: {}",
                 model_path,

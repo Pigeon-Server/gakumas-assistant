@@ -62,6 +62,12 @@ def _handle__modal_boxes(app: "AppProcessor"):
     elif string_match(ModalText.TITLE.INFO_FETCH_FAILED, modal.modal_title):
         logger.warning("Information fetch failed, dismiss modal and retry waiting.")
         _click_action_button()
+    elif string_match(ModalText.TITLE.USAGE_EXPIRATION_CONFIRM, modal.modal_title):
+        logger.warning("Usage expiration modal detected during start flow, dismissing with cancel")
+        if modal.cancel_button is not None:
+            app.device.click_element(modal.cancel_button)
+        else:
+            _click_action_button()
     elif string_match(
         modal.modal_title,
         [
