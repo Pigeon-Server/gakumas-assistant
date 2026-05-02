@@ -38,68 +38,68 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 class PyWebviewWindowBridge:
     def __init__(self):
-        self.window = None
+        self._window = None
         self._maximized = False
         self._normal_bounds = None
 
-    def bind_window(self, window):
-        self.window = window
+    def _bind_window(self, window):
+        self._window = window
         self._maximized = False
         self._normal_bounds = None
 
     def _capture_bounds(self):
-        if self.window is None:
+        if self._window is None:
             return None
         return {
-            "x": int(self.window.x),
-            "y": int(self.window.y),
-            "width": int(self.window.width),
-            "height": int(self.window.height),
+            "x": int(self._window.x),
+            "y": int(self._window.y),
+            "width": int(self._window.width),
+            "height": int(self._window.height),
         }
 
     def _apply_bounds(self, bounds):
-        if self.window is None or not bounds:
+        if self._window is None or not bounds:
             return
-        self.window.resize(int(bounds["width"]), int(bounds["height"]))
-        self.window.move(int(bounds["x"]), int(bounds["y"]))
+        self._window.resize(int(bounds["width"]), int(bounds["height"]))
+        self._window.move(int(bounds["x"]), int(bounds["y"]))
 
     def get_window_state(self):
         return {
-            "frameless": bool(getattr(self.window, "frameless", False)),
+            "frameless": bool(getattr(self._window, "frameless", False)),
             "maximized": self._maximized,
         }
 
     def minimize_window(self):
-        if self.window is not None:
-            self.window.minimize()
+        if self._window is not None:
+            self._window.minimize()
         return self.get_window_state()
 
     def toggle_maximize_window(self):
-        if self.window is None:
+        if self._window is None:
             return self.get_window_state()
         if platform.system() == "Darwin":
             if self._maximized:
                 self._apply_bounds(self._normal_bounds)
             else:
-                screen = getattr(self.window, "screen", None)
+                screen = getattr(self._window, "screen", None)
                 self._normal_bounds = self._capture_bounds()
                 if screen is None:
-                    self.window.maximize()
+                    self._window.maximize()
                 else:
-                    self.window.resize(int(screen.width), int(screen.height))
-                    self.window.move(int(screen.x), int(screen.y))
+                    self._window.resize(int(screen.width), int(screen.height))
+                    self._window.move(int(screen.x), int(screen.y))
             self._maximized = not self._maximized
             return self.get_window_state()
         if self._maximized:
-            self.window.restore()
+            self._window.restore()
         else:
-            self.window.maximize()
+            self._window.maximize()
         self._maximized = not self._maximized
         return self.get_window_state()
 
     def close_window(self):
-        if self.window is not None:
-            threading.Timer(0.1, self.window.destroy).start()
+        if self._window is not None:
+            threading.Timer(0.1, self._window.destroy).start()
         return {"closing": True}
 
 
@@ -172,7 +172,7 @@ def _start_pywebview(url: str):
     window_options["js_api"] = PYWEBVIEW_WINDOW_BRIDGE
 
     window = webview_module.create_window("Gakumas Assistant", url, **window_options)
-    PYWEBVIEW_WINDOW_BRIDGE.bind_window(window)
+    PYWEBVIEW_WINDOW_BRIDGE._bind_window(window)
     icon_path = resolve_runtime_str("assets", "images", "gakumas_logo.png")
     start_kwargs = {}
     # On Windows, pywebview's WinForms backend passes the icon to

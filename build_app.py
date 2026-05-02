@@ -23,13 +23,15 @@ from src.utils.runtime_paths import (
     STORAGE_MODE_PORTABLE,
 )
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+if "pytest" not in sys.modules:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 WEBUI_DIR = PROJECT_ROOT / "web-ui"
 PROJECT_NAME = "Gakumas Assistant"
 TARGET_PLATFORM = platform.system()
 NUITKA_OUTPUT_DIR = PROJECT_ROOT / "out"
+APP_BUILD_DIR = NUITKA_OUTPUT_DIR / f"{PROJECT_NAME}.build"
 APP_DIST_DIR = NUITKA_OUTPUT_DIR / f"{PROJECT_NAME}.dist"
 APP_BUNDLE_DIR = NUITKA_OUTPUT_DIR / f"{PROJECT_NAME}.app"
 MACOS_PORTABLE_DIR = NUITKA_OUTPUT_DIR / PROJECT_NAME
@@ -400,11 +402,16 @@ def _prepare_nuitka_output_paths():
     if os.getenv("NUITKA_CLEAN_BUILD"):
         _remove_existing_path(NUITKA_OUTPUT_DIR / "app.build")
     _remove_existing_path(NUITKA_OUTPUT_DIR / "app.build")
-    _remove_existing_path(NUITKA_OUTPUT_DIR / "app.dist")
+    _remove_existing_path(APP_BUILD_DIR)
+    _remove_existing_path(_get_default_nuitka_dist_dir())
     _remove_existing_path(APP_DIST_DIR)
     _remove_existing_path(APP_BUNDLE_DIR)
     _remove_existing_path(MACOS_PORTABLE_DIR)
     _remove_existing_path(NUITKA_OUTPUT_DIR / _get_output_filename())
+
+
+def _get_default_nuitka_dist_dir() -> Path:
+    return NUITKA_OUTPUT_DIR / "app.dist"
 
 
 def _use_macos_app_bundle(storage_mode: str) -> bool:
@@ -426,7 +433,7 @@ def _get_nuitka_platform_options(storage_mode: str) -> list[str]:
                 f"--macos-app-name={PROJECT_NAME}",
             ]
         )
-    elif TARGET_PLATFORM == "Darwin":
+    else:
         nuitka_cmd.append(f"--output-folder-name={PROJECT_NAME}")
 
     nuitka_cmd = [
@@ -851,11 +858,33 @@ exec "$APP_DIR/{main_binary_name}"
     script_path.chmod(0o755)
 
 
-def _finalize_macos_portable_output() -> Path:
-    if not APP_DIST_DIR.exists():
-        raise FileNotFoundError(APP_DIST_DIR)
-    _remove_existing_path(MACOS_PORTABLE_DIR)
-    APP_DIST_DIR.rename(MACOS_PORTABLE_DIR)
+def _resolve_existing_nuitka_output(candidates: list[Path]) -> Path:
+    existing_paths = [path for path in candidates if path.is_dir()]
+    if len(existing_paths) == 1:
+        return existing_paths[0]
+    checked_paths = ", ".join(str(path) for path in candidates)
+    if not existing_paths:
+        raise FileNotFoundError(f"未找到 Nuitka 输出目录，已检查：{checked_paths}")
+    found_paths = ", ".join(str(path) for path in existing_paths)
+    raise RuntimeError(f"Nuitka 输出目录不唯一，已找到：{found_paths}")
+
+
+def _resolve_nuitka_runtime_target_dir(storage_mode: str) -> Path:
+    if _use_macos_app_bundle(storage_mode):
+        return _resolve_existing_nuitka_output([APP_BUNDLE_DIR / "Contents" / "MacOS"])
+    return _resolve_existing_nuitka_output([APP_DIST_DIR, _get_default_nuitka_dist_dir()])
+
+
+def _finalize_macos_portable_output(output_dir: Path | None = None) -> Path:
+    output_dir = APP_DIST_DIR if output_dir is None else output_dir
+    if not output_dir.exists():
+        raise FileNotFoundError(output_dir)
+    main_binary = output_dir / _get_output_filename()
+    if not main_binary.exists():
+        raise FileNotFoundError(main_binary)
+    if output_dir != MACOS_PORTABLE_DIR:
+        _remove_existing_path(MACOS_PORTABLE_DIR)
+        output_dir.rename(MACOS_PORTABLE_DIR)
     _codesign_macos_portable(MACOS_PORTABLE_DIR)
     _create_macos_launch_script(MACOS_PORTABLE_DIR)
     return MACOS_PORTABLE_DIR
@@ -919,17 +948,15 @@ def build_project(storage_mode: str = DEFAULT_PACKAGE_STORAGE_MODE):
         cwd=str(PROJECT_ROOT),
         check=True,
     )
-    runtime_target_dir = APP_DIST_DIR
-    if _use_macos_app_bundle(storage_mode):
-        runtime_target_dir = APP_BUNDLE_DIR / "Contents" / "MacOS"
+    runtime_target_dir = _resolve_nuitka_runtime_target_dir(storage_mode)
     _copy_runtime_files(runtime_target_dir, storage_mode)
     _write_runtime_metadata(runtime_target_dir, storage_mode)
-    final_output_path = APP_DIST_DIR
+    final_output_path = runtime_target_dir
     if _use_macos_app_bundle(storage_mode):
         _finalize_macos_bundle(APP_BUNDLE_DIR)
         final_output_path = APP_BUNDLE_DIR
     elif TARGET_PLATFORM == "Darwin":
-        final_output_path = _finalize_macos_portable_output()
+        final_output_path = _finalize_macos_portable_output(runtime_target_dir)
     print(f"Packaged runtime storage mode: {storage_mode}")
     print(f"Final packaged output: {final_output_path}")
 
