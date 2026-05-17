@@ -1,4 +1,11 @@
-"""RL 决策策略——通过无状态 HTTP 推理服务处理战斗阶段决策。"""
+"""RL 决策策略——通过无状态 HTTP 推理服务处理战斗阶段决策。
+
+内部结构：
+- ScheduleRLStrategy: 周行程决策（暂不支持，返回 None）
+- BattleRLStrategy: 战斗决策（lesson/exam）
+- OtherRLStrategy: 其他决策（暂不支持，返回 None）
+- RLStrategy: 统一入口，内部持有3个子策略，按 phase 路由
+"""
 
 from __future__ import annotations
 
@@ -12,33 +19,10 @@ if TYPE_CHECKING:
     from src.main import AppProcessor
 
 
-_BATTLE_PHASES = {"lesson", "exam"}
-_TURN_COLOR_MAP = {
-    "vocal": "vocal",
-    "dance": "dance",
-    "visual": "visual",
-    "vocalturn": "vocal",
-    "danceturn": "dance",
-    "visualturn": "visual",
-    "ボーカル": "vocal",
-    "ダンス": "dance",
-    "ビジュアル": "visual",
-    "vocalcolor": "vocal",
-    "dancecolor": "dance",
-    "visualcolor": "visual",
-}
+# ── 工具函数 ───────────────────────────────────────────────
 
 
 def _coerce_int(value: Any, default: int = 0) -> int:
-    """处理coerce、int并返回结果。
-
-    Args:
-        value: 用于提供value相关输入。
-        default: 用于提供default相关输入。
-
-    Returns:
-        int: 计算得到的数值结果。
-    """
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -46,27 +30,17 @@ def _coerce_int(value: Any, default: int = 0) -> int:
 
 
 def _normalize_turn_color(value: Any) -> str:
-    """标准化turn、color并返回结果。
-
-    Args:
-        value: 用于提供value相关输入。
-
-    Returns:
-        str: 处理后的文本结果。
-    """
     normalized = str(value or "").strip().lower().replace(" ", "").replace("_", "")
+    _TURN_COLOR_MAP = {
+        "vocal": "vocal", "dance": "dance", "visual": "visual",
+        "vocalturn": "vocal", "danceturn": "dance", "visualturn": "visual",
+        "ボーカル": "vocal", "ダンス": "dance", "ビジュアル": "visual",
+        "vocalcolor": "vocal", "dancecolor": "dance", "visualcolor": "visual",
+    }
     return _TURN_COLOR_MAP.get(normalized, "")
 
 
 def _derive_action_kind(payload: dict[str, Any]) -> str:
-    """处理derive、操作、kind并返回结果。
-
-    Args:
-        payload: 用于提供载荷相关输入。
-
-    Returns:
-        str: 处理后的文本结果。
-    """
     action_id = str(payload.get("id") or payload.get("action_id") or "")
     if action_id.startswith("produce_card:") or action_id.startswith("produce_card_unknown"):
         return "card"
@@ -84,14 +58,6 @@ def _derive_action_kind(payload: dict[str, Any]) -> str:
 
 
 def _estimate_max_turns(snapshot: dict[str, Any]) -> int:
-    """处理estimate、max、turns并返回结果。
-
-    Args:
-        snapshot: 用于提供snapshot相关输入。
-
-    Returns:
-        int: 计算得到的数值结果。
-    """
     explicit = _coerce_int(snapshot.get("max_turns"))
     if explicit > 0:
         return explicit
@@ -103,14 +69,6 @@ def _estimate_max_turns(snapshot: dict[str, Any]) -> int:
 
 
 def _build_card_payload(card: dict[str, Any]) -> dict[str, Any]:
-    """构建卡牌、载荷并返回结果。
-
-    Args:
-        card: 用于提供卡牌相关输入。
-
-    Returns:
-        dict: 结构化结果字典。
-    """
     return {
         "db_id": str(card.get("db_id") or card.get("id") or ""),
         "name": str(card.get("name") or ""),
@@ -128,14 +86,6 @@ def _build_card_payload(card: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_drink_payload(drink: dict[str, Any]) -> dict[str, Any]:
-    """构建饮料、载荷并返回结果。
-
-    Args:
-        drink: 用于提供饮料相关输入。
-
-    Returns:
-        dict: 结构化结果字典。
-    """
     return {
         "db_id": str(drink.get("db_id") or drink.get("id") or ""),
         "name": str(drink.get("name") or ""),
@@ -150,14 +100,6 @@ def _build_drink_payload(drink: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_legal_action_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """构建legal、操作、载荷并返回结果。
-
-    Args:
-        payload: 用于提供载荷相关输入。
-
-    Returns:
-        dict: 结构化结果字典。
-    """
     metadata = dict(payload.get("metadata") or {})
     return {
         "index": _coerce_int(payload.get("index")),
@@ -179,6 +121,7 @@ def _build_legal_action_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def build_battle_predict_payload(decision_state: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
     """把 producer battle 决策快照转换成 RL 服务需要的无状态请求。"""
 
+    _BATTLE_PHASES = {"lesson", "exam"}
     phase = str(decision_state.get("phase") or "")
     if phase not in _BATTLE_PHASES:
         return None
@@ -271,35 +214,27 @@ def build_battle_predict_payload(decision_state: dict[str, Any]) -> tuple[dict[s
     return state, legal_actions
 
 
-class RLStrategy:
-    """通过 RL HTTP 推理服务做 lesson / exam 决策。"""
+# ── Phase 路由映射 ───────────────────────────────────────────
 
-    def __init__(
-        self,
-        base_url: str = "http://127.0.0.1:8001",
-        *,
-        info_timeout: float = 5.0,
-        predict_timeout: float = 10.0,
-        deterministic: bool = True,
-    ):
-        """处理init并返回结果。
 
-        Args:
-            base_url: 用于提供base、url相关输入。
-            info_timeout: 用于提供info、timeout相关输入。
-            predict_timeout: 用于提供predict、timeout相关输入。
-            deterministic: 用于提供deterministic相关输入。
+_PHASE_TO_STRATEGY = {
+    "schedule": "schedule",
+    "lesson": "battle",
+    "exam": "battle",
+    "dialogue": "other",
+    "p_drink": "other",
+    "skill_reward": "other",
+    "consult": "other",
+    "item_select": "other",
+    "modal": "other",
+}
 
-        Returns:
-            返回处理结果，具体类型见返回注解。
-        """
-        self.base_url = base_url.rstrip("/")
-        self.deterministic = bool(deterministic)
-        self._client = RLInferenceClient(
-            self.base_url,
-            info_timeout=info_timeout,
-            predict_timeout=predict_timeout,
-        )
+
+# ── Schedule RL 策略 ─────────────────────────────────────────
+
+
+class ScheduleRLStrategy:
+    """周行程 RL 决策（暂不支持）。"""
 
     def __call__(
         self,
@@ -308,33 +243,47 @@ class RLStrategy:
         candidates: Sequence[Any],
         decision_state: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """处理call并返回结果。
+        phase = str(decision_state.get("phase") or "")
+        if phase != "schedule":
+            return None
+        return None
 
-        Args:
-            app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
-            ctx: 培育上下文对象，保存跨步骤状态与策略配置。
-            candidates: 候选项列表，供策略或规则选择目标动作。
-            decision_state: 决策快照，包含上下文、候选项与当前理由。
 
-        Returns:
-            dict: 结构化结果字典。
-        """
-        del app, ctx
-        if not candidates or decision_state is None:
+# ── Battle RL 策略 ───────────────────────────────────────────
+
+
+class BattleRLStrategy:
+    """战斗 RL 决策（lesson/exam）。"""
+
+    def __init__(
+        self,
+        parent: "RLStrategy",
+    ) -> None:
+        self._parent = parent
+
+    def __call__(
+        self,
+        app: "AppProcessor",
+        ctx: "ProduceContext",
+        candidates: Sequence[Any],
+        decision_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        phase = str(decision_state.get("phase") or "")
+        if phase not in ("lesson", "exam"):
             return None
 
-        phase = str(decision_state.get("phase") or "")
-        if phase not in _BATTLE_PHASES:
+        if not candidates or decision_state is None:
             return None
 
         payload = build_battle_predict_payload(decision_state)
         if payload is None:
             return None
         state, legal_actions = payload
-        result = self._client.predict(
+        client = self._parent._client_for_phase(phase)
+        result = client.predict(
             state,
             legal_actions,
-            deterministic=self.deterministic,
+            deterministic=self._parent.deterministic,
         )
         if not result:
             return None
@@ -350,7 +299,7 @@ class RLStrategy:
             if not legal_indexes or action_index in legal_indexes:
                 return result
             logger.warning(
-                "[RL] {} 返回非法动作索引 {}，legal={}",
+                "[RL][battle] {} 返回非法动作索引 {}，legal={}",
                 phase,
                 action_index,
                 sorted(legal_indexes),
@@ -378,10 +327,110 @@ class RLStrategy:
         return None
 
 
+# ── Other RL 策略 ────────────────────────────────────────────
+
+
+class OtherRLStrategy:
+    """其他 RL 决策（暂不支持）。"""
+
+    def __call__(
+        self,
+        app: "AppProcessor",
+        ctx: "ProduceContext",
+        candidates: Sequence[Any],
+        decision_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        phase = str(decision_state.get("phase") or "")
+        if phase in ("schedule", "lesson", "exam"):
+            return None
+        return None
+
+
+# ── 统一 RL 策略入口 ─────────────────────────────────────────
+
+
+class RLStrategy:
+    """通过 RL HTTP 推理服务做游戏决策的统一策略。
+
+    内部持有3个子策略，按 decision_state["phase"] 路由：
+    - ScheduleRLStrategy: schedule（暂不支持）
+    - BattleRLStrategy: lesson / exam
+    - OtherRLStrategy: dialogue / p_drink 等（暂不支持）
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8001",
+        *,
+        lesson_base_url: str | None = None,
+        exam_base_url: str | None = None,
+        info_timeout: float = 5.0,
+        predict_timeout: float = 10.0,
+        deterministic: bool = True,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.lesson_base_url = str(lesson_base_url or self.base_url).rstrip("/")
+        self.exam_base_url = str(exam_base_url or self.base_url).rstrip("/")
+        self.deterministic = bool(deterministic)
+        self._client = RLInferenceClient(
+            self.base_url,
+            info_timeout=info_timeout,
+            predict_timeout=predict_timeout,
+        )
+        self._lesson_client = RLInferenceClient(
+            self.lesson_base_url,
+            info_timeout=info_timeout,
+            predict_timeout=predict_timeout,
+        )
+        self._exam_client = RLInferenceClient(
+            self.exam_base_url,
+            info_timeout=info_timeout,
+            predict_timeout=predict_timeout,
+        )
+
+        self._schedule = ScheduleRLStrategy()
+        self._battle = BattleRLStrategy(self)
+        self._other = OtherRLStrategy()
+
+    def _client_for_phase(self, phase: str) -> RLInferenceClient:
+        """按 battle phase 选择对应的 RL 推理客户端。"""
+
+        if str(phase or '') == 'lesson':
+            return self._lesson_client
+        if str(phase or '') == 'exam':
+            return self._exam_client
+        return self._client
+
+    def __call__(
+        self,
+        app: "AppProcessor",
+        ctx: "ProduceContext",
+        candidates: Sequence[Any],
+        decision_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if decision_state is None:
+            return None
+
+        phase = str(decision_state.get("phase") or "")
+        target = _PHASE_TO_STRATEGY.get(phase, "schedule")
+
+        if target == "battle":
+            return self._battle(app, ctx, candidates, decision_state)
+        elif target == "other":
+            return self._other(app, ctx, candidates, decision_state)
+        else:
+            return self._schedule(app, ctx, candidates, decision_state)
+
+
+# ── 工厂与注入 ──────────────────────────────────────────────
+
+
 def inject_rl_strategy(
     ctx: "ProduceContext",
     *,
     base_url: str = "http://127.0.0.1:8001",
+    lesson_base_url: str | None = None,
+    exam_base_url: str | None = None,
     info_timeout: float = 5.0,
     predict_timeout: float = 10.0,
     deterministic: bool = True,
@@ -390,18 +439,30 @@ def inject_rl_strategy(
 
     strategy = RLStrategy(
         base_url=base_url,
+        lesson_base_url=lesson_base_url,
+        exam_base_url=exam_base_url,
         info_timeout=info_timeout,
         predict_timeout=predict_timeout,
         deterministic=deterministic,
     )
     ctx.rl_inference_url = strategy.base_url
+    ctx.schedule_strategy = strategy
     ctx.lesson_strategy = strategy
     ctx.exam_strategy = strategy
+    ctx.dialogue_strategy = strategy
+    ctx.skill_reward_strategy = strategy
+    ctx.p_drink_strategy = strategy
+    ctx.consult_strategy = strategy
+    ctx.item_select_strategy = strategy
+    ctx.modal_strategy = strategy
     return strategy
 
 
 __all__ = [
     "RLStrategy",
+    "ScheduleRLStrategy",
+    "BattleRLStrategy",
+    "OtherRLStrategy",
     "build_battle_predict_payload",
     "inject_rl_strategy",
 ]

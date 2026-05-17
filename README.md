@@ -42,6 +42,7 @@
 > - 自动培育
 >   - LLM自动决策
 >   - 使用视觉模型自动分析并选择记忆卡卡面
+> - 界面多语言化
 
 ### 待实现/待完善：
 > - 工具框架
@@ -97,6 +98,21 @@ cd ..
 ```bash
 python app.py
 ```
+使用命令行模式:
+```bash
+python app.py --cli status
+python app.py --cli tasks list
+python app.py --cli tasks run auto_purchase
+python app.py --cli tasks run --from dispatch_work
+python app.py --cli config get base.run_mode
+python app.py --cli config set base.run_mode Phone
+python app.py --cli resources status
+python app.py --cli adb devices
+```
+说明：
+- `python app.py --cli tasks run` 不带任务 ID 时会执行全部已启用的自动任务；带任务 ID 时只执行该任务；加 `--from` 时从指定任务开始执行后续自动任务。
+- `status` 默认是轻量状态，不初始化设备和模型；需要完整设备/推理状态时使用 `python app.py --cli status --full`。
+- 所有命令都可加 `--json` 获取结构化输出，便于脚本集成。
 说明：
 - Windows 安装依赖时会自动安装 `pywin32`，用于 `PC / DMM` 模式。
 - macOS / Linux 首次启动会默认进入 `Phone / ADB` 模式；若本机 `pywebview` 后端不可用，程序会自动回退到浏览器模式。

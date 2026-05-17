@@ -1,6 +1,6 @@
 opencv-python
 onnxruntime-directml; platform_system == "Windows"
-onnxruntime
+onnxruntime==1.24.4
 pyautogui
 loguru
 numpy
@@ -28,3 +28,4 @@ pandas
 UnityPy
 Pillow
 pydub
+jinja2

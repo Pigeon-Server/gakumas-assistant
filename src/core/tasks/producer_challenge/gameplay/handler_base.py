@@ -50,6 +50,8 @@ _RESULT_EXAM_FAILURE_CENTER_TAP_LIMIT_KEY = "result_exam_failure_center_tap_limi
 _RESULT_EXAM_FAILURE_CENTER_TAP_LIMIT = 2
 _RESULT_PANEL_WHITE_HSV_LOWER = (0, 0, 145)
 _RESULT_PANEL_WHITE_HSV_UPPER = (180, 60, 255)
+_RESULT_CHAIN_FAST_UNKNOWN_RETRY_LIMIT = 3
+_RESULT_CHAIN_FAST_UNKNOWN_RETRY_SLEEP = 0.35
 
 
 # ────────────────────────────────────────────────────────────
@@ -277,7 +279,6 @@ class ResultHandler(GameplayHandler):
 
     # 到达这些位置时切换到 BASE_UI 收尾（记忆卡面选择及之后的通用 UI）
     _BASEUI_POSITIONS = {
-        GameplayPosition.RESULT_MEMORY_PAGE,
         GameplayPosition.RESULT_REWARD_SUMMARY,
         GameplayPosition.RESULT_ACHIEVEMENT_PROGRESS,
         GameplayPosition.RESULT_EVENT_REWARD_PROGRESS,
@@ -287,7 +288,23 @@ class ResultHandler(GameplayHandler):
     _PENDING_POSITIONS = {
         GameplayPosition.RESULT_FINAL_EVALUATION,
         GameplayPosition.RESULT_MEMORY_GENERATION,
+        GameplayPosition.RESULT_MEMORY_PAGE,
     }
+
+    @staticmethod
+    def _build_result_unknown_retry_override(position: str) -> dict[str, float | int | str]:
+        """按结果页位置生成 unknown 重试策略。"""
+        if position in ResultHandler._PENDING_POSITIONS:
+            return {
+                "reason": f"result_chain_pending_transition:{position}",
+                "retry_limit": _RESULT_CHAIN_FAST_UNKNOWN_RETRY_LIMIT,
+                "retry_sleep": _RESULT_CHAIN_FAST_UNKNOWN_RETRY_SLEEP,
+            }
+        return {
+            "reason": "result_midgame_transition",
+            "retry_limit": 10,
+            "retry_sleep": 1.0,
+        }
 
     def can_handle(self, app, ctx, phase, position):
         """当当前画面阶段为 RESULT 时返回 True，表示由该处理器接管所有结果页面。
@@ -637,12 +654,8 @@ class ResultHandler(GameplayHandler):
             app.device.click_element(box)
         else:
             click_relative_point(app, x_ratio=0.5, y_ratio=0.5, label="result-advance")
-        # 结果页后常有切页动画或对话过渡，因此给更长的 unknown 重试
-        ctx.handler_state["unknown_retry_override"] = {
-            "reason": "result_midgame_transition",
-            "retry_limit": 10,
-            "retry_sleep": 1.0,
-        }
+        # 结果链尾页通常会很快落入 BASE_UI / 外层恢复，没必要长时间白等。
+        ctx.handler_state["unknown_retry_override"] = ResultHandler._build_result_unknown_retry_override(position)
         return HandlerResult.ok(f"result ({position}) → advance", sleep_after=0.8)
 
 

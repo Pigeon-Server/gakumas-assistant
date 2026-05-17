@@ -1,0 +1,21 @@
+已有滚动摘要：
+{% if existing_summary %}{{ existing_summary }}{% else %}（无）{% endif %}
+
+本次需要折叠的历史决策：
+{{ compact_turns_text }}
+
+{% if current_planning_note %}当前局面仍需保持关注的规划信息：
+{{ current_planning_note }}
+
+{% endif %}请输出一段新的滚动摘要，尽量控制在 {{ summary_target_tokens }} token 以内，并覆盖以下内容：
+1. 当前长期目标 / 主路线
+2. 当前主要压力或门槛
+3. 最近已验证的重要选择逻辑
+4. 已暴露的失败边界、失败结果或 fallback 情况
+5. 后续阶段仍要继续坚持或避免的点
+
+要求：
+- 只保留对后续决策有持续价值的内容
+- 若某条经验只在特定条件下成立，必须明确写出适用边界
+- 若某次决策被后续 outcome 反驳，也必须保留“这条经验不稳定”而不是写成成功结论
+- 不要输出标题之外的废话

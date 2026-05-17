@@ -60,3 +60,19 @@ class Location:
             PRODUCE = "プロデュース"
             # P图鉴
             PRODUCER_ILLUSTRATED = "P図鑑"
+            # 培育
+            PRODUCER = "プロデュース"
+            # 偶像卡选择
+            PRODUCER_IDOL_SELECTION = "アイドル選択"
+            # 支援卡选择
+            PRODUCER_SUPPORT_SELECTION = "サポート選択"
+            # 记忆卡选择
+            PRODUCER_MEMORY_SELECTION = "メモリー選択"
+            # 开始前确认
+            PRODUCER_START_CONFIRMATION = "開始確認"
+            # 编组信息
+            PRODUCER_FORMATION_DETAIL = "編成詳細"
+            # 记忆卡编组列表
+            PRODUCER_MEMORY_FORMATION_LIST = "メモリー編成一覧"
+            # 支援卡编组列表
+            PRODUCER_SUPPORT_FORMATION_LIST = "サポート編成一覧"

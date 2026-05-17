@@ -2,6 +2,7 @@
 import { computed, ref, watch, onBeforeUnmount, nextTick } from 'vue'
 import apis from '@/scripts/apis.js'
 import { useAppStore } from '@/stores/app.ts'
+import { translateAny, translateKey } from '@/scripts/i18n/translate'
 
 const store = useAppStore()
 
@@ -85,26 +86,26 @@ const scrollSentinelRef = ref(null)
 let observer = null
 
 // 数据库实际枚举值（基于 gakumasu-diff/SupportCard.yaml 分析）
-const rarityOptions = [
-  { value: 'SupportCardRarity_Ssr', label: 'SSR', color: '#FFD700' },
-  { value: 'SupportCardRarity_Sr', label: 'SR', color: '#C0C0C0' },
-  { value: 'SupportCardRarity_R', label: 'R', color: '#CD7F32' },
-]
+const rarityOptions = computed(() => [
+  { value: 'SupportCardRarity_Ssr', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.ssr'), color: '#FFD700' },
+  { value: 'SupportCardRarity_Sr', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.sr'), color: '#C0C0C0' },
+  { value: 'SupportCardRarity_R', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.r'), color: '#CD7F32' },
+])
 
-const typeOptions = [
-  { value: 'SupportCardType_Vocal', label: '声乐 Vo' },
-  { value: 'SupportCardType_Dance', label: '舞蹈 Da' },
-  { value: 'SupportCardType_Visual', label: '形象 Vi' },
-  { value: 'SupportCardType_Assist', label: '支援 As' },
-]
+const typeOptions = computed(() => [
+  { value: 'SupportCardType_Vocal', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.vocal') },
+  { value: 'SupportCardType_Dance', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.dance') },
+  { value: 'SupportCardType_Visual', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.visual') },
+  { value: 'SupportCardType_Assist', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.assist') },
+])
 
 // 路线：Plan1=感性, Plan2=逻辑, Plan3=异常, Common=通用
-const planOptions = [
-  { value: 'ProducePlanType_Plan1', label: '感性' },
-  { value: 'ProducePlanType_Plan2', label: '逻辑' },
-  { value: 'ProducePlanType_Plan3', label: '异常' },
-  { value: 'ProducePlanType_Common', label: '通用' },
-]
+const planOptions = computed(() => [
+  { value: 'ProducePlanType_Plan1', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.plan1') },
+  { value: 'ProducePlanType_Plan2', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.plan2') },
+  { value: 'ProducePlanType_Plan3', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.plan3') },
+  { value: 'ProducePlanType_Common', label: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.common') },
+])
 
 const rarityOrder = {
   SupportCardRarity_Ssr: 0,
@@ -118,26 +119,26 @@ const rarityColor = {
   SupportCardRarity_R: '#CD7F32',
 }
 
-const rarityLabel = {
-  SupportCardRarity_Ssr: 'SSR',
-  SupportCardRarity_Sr: 'SR',
-  SupportCardRarity_R: 'R',
-}
+const rarityLabels = computed(() => ({
+  SupportCardRarity_Ssr: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.ssr'),
+  SupportCardRarity_Sr: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.sr'),
+  SupportCardRarity_R: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.r'),
+}))
 
-const typeLabel = {
-  SupportCardType_Vocal: 'Vo',
-  SupportCardType_Dance: 'Da',
-  SupportCardType_Visual: 'Vi',
-  SupportCardType_Stamina: 'St',
-  SupportCardType_Assist: 'As',
-}
+const typeLabels = computed(() => ({
+  SupportCardType_Vocal: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.vocal_short'),
+  SupportCardType_Dance: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.dance_short'),
+  SupportCardType_Visual: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.visual_short'),
+  SupportCardType_Stamina: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.stamina_short'),
+  SupportCardType_Assist: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.type.assist_short'),
+}))
 
-const planLabel = {
-  ProducePlanType_Plan1: '感性',
-  ProducePlanType_Plan2: '逻辑',
-  ProducePlanType_Plan3: '异常',
-  ProducePlanType_Common: '通用',
-}
+const planLabels = computed(() => ({
+  ProducePlanType_Plan1: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.plan1'),
+  ProducePlanType_Plan2: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.plan2'),
+  ProducePlanType_Plan3: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.plan3'),
+  ProducePlanType_Common: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.plan.common'),
+}))
 
 const pitemRarityColor = {
   ProduceItemRarity_Ssr: '#FFD700',
@@ -146,19 +147,19 @@ const pitemRarityColor = {
   ProduceItemRarity_N: '#AAAAAA',
 }
 
-const pitemRarityLabel = {
-  ProduceItemRarity_Ssr: 'SSR',
-  ProduceItemRarity_Sr: 'SR',
-  ProduceItemRarity_R: 'R',
-  ProduceItemRarity_N: 'N',
-}
+const pitemRarityLabels = computed(() => ({
+  ProduceItemRarity_Ssr: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.ssr'),
+  ProduceItemRarity_Sr: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.sr'),
+  ProduceItemRarity_R: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.r'),
+  ProduceItemRarity_N: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.n'),
+}))
 
 function itemRarityColor(rarity) {
   return pitemRarityColor[rarity] || pcardRarityColor[rarity] || '#AAAAAA'
 }
 
 function itemRarityLabel(rarity) {
-  return pitemRarityLabel[rarity] || pcardRarityLabel[rarity] || ''
+  return pitemRarityLabels.value[rarity] || pcardRarityLabels.value[rarity] || ''
 }
 
 // ProduceCard (skill card) rarity
@@ -169,25 +170,25 @@ const pcardRarityColor = {
   ProduceCardRarity_N: '#AAAAAA',
 }
 
-const pcardRarityLabel = {
-  ProduceCardRarity_Ssr: 'SSR',
-  ProduceCardRarity_Sr: 'SR',
-  ProduceCardRarity_R: 'R',
-  ProduceCardRarity_N: 'N',
-}
+const pcardRarityLabels = computed(() => ({
+  ProduceCardRarity_Ssr: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.ssr'),
+  ProduceCardRarity_Sr: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.sr'),
+  ProduceCardRarity_R: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.r'),
+  ProduceCardRarity_N: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.rarity.n'),
+}))
 
-const cardCategoryLabel = {
-  ProduceCardCategory_ActiveSkill: 'アクティブ',
-  ProduceCardCategory_MentalSkill: 'メンタル',
-  ProduceCardCategory_Trouble: 'トラブル',
-  ProduceCardCategory_FreeSkill: 'フリー',
-}
+const cardCategoryLabels = computed(() => ({
+  ProduceCardCategory_ActiveSkill: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.card_category.active_skill'),
+  ProduceCardCategory_MentalSkill: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.card_category.mental_skill'),
+  ProduceCardCategory_Trouble: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.card_category.trouble'),
+  ProduceCardCategory_FreeSkill: translateKey('backend.config.task__auto_enhancement_support_card.whitelist.card_category.free_skill'),
+}))
 
 function eventItemKindLabel(item) {
   if (item.kind === 'card') {
-    return cardCategoryLabel[item.category] || 'スキルカード'
+    return cardCategoryLabels.value[item.category] || translateKey('backend.config.task__auto_enhancement_support_card.whitelist.card_category.skill_card')
   }
-  return 'Pアイテム'
+  return translateKey('backend.config.task__auto_enhancement_support_card.whitelist.card_category.p_item')
 }
 
 function eventItemKindColor(item) {
@@ -207,9 +208,9 @@ function displayName(card) {
 }
 
 function cardSubtitle(card) {
-  const r = rarityLabel[card.rarity] || ''
-  const t = typeLabel[card.type] || ''
-  const p = planLabel[card.planType] || ''
+  const r = rarityLabels.value[card.rarity] || ''
+  const t = typeLabels.value[card.type] || ''
+  const p = planLabels.value[card.planType] || ''
   return [r, t, p].filter(Boolean).join(' · ')
 }
 
@@ -507,7 +508,7 @@ refreshAssetStatus()
       </v-chip>
     </div>
     <div v-else class="no-selection-hint">
-      尚未选择卡牌
+      {{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.no_selection') }}
     </div>
 
     <!-- Open dialog button -->
@@ -518,7 +519,7 @@ refreshAssetStatus()
       @click="openDialog"
       :loading="loading"
     >
-      选择白名单卡牌
+      {{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.open_dialog') }}
     </v-btn>
 
     <!-- Card selection modal -->
@@ -530,12 +531,12 @@ refreshAssetStatus()
     >
       <v-card class="card-dialog">
         <v-card-title class="dialog-title">
-          <span>选择白名单卡牌</span>
+          <span>{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.dialog_title') }}</span>
           <v-chip size="small" color="primary" variant="tonal" class="ml-2">
-            已选 {{ localSelection.length }}
+            {{ translateKey('dialogs.selector.selectedCount', { count: localSelection.length }) }}
           </v-chip>
           <v-chip size="small" variant="tonal" class="ml-2">
-            {{ filteredCards.length }} 张
+            {{ translateKey('dialogs.selector.totalCards', { count: filteredCards.length }) }}
           </v-chip>
         </v-card-title>
 
@@ -544,7 +545,7 @@ refreshAssetStatus()
           <v-text-field
             v-model="search"
             prepend-inner-icon="md:search"
-            label="搜索卡牌名称（支持中文/日文/ID）"
+            :label="translateKey('backend.config.task__auto_enhancement_support_card.whitelist.search_placeholder')"
             density="compact"
             variant="outlined"
             clearable
@@ -555,7 +556,7 @@ refreshAssetStatus()
           <!-- Filters -->
           <div class="filter-section">
             <div class="filter-group">
-              <span class="filter-label">稀有度</span>
+              <span class="filter-label">{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.filter.rarity') }}</span>
               <v-chip-group v-model="filterRarity" multiple>
                 <v-chip
                   v-for="opt in rarityOptions"
@@ -571,7 +572,7 @@ refreshAssetStatus()
               </v-chip-group>
             </div>
             <div class="filter-group">
-              <span class="filter-label">类型</span>
+              <span class="filter-label">{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.filter.type') }}</span>
               <v-chip-group v-model="filterType" multiple>
                 <v-chip
                   v-for="opt in typeOptions"
@@ -586,7 +587,7 @@ refreshAssetStatus()
               </v-chip-group>
             </div>
             <div class="filter-group">
-              <span class="filter-label">路线</span>
+              <span class="filter-label">{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.filter.plan') }}</span>
               <v-chip-group v-model="filterPlan" multiple>
                 <v-chip
                   v-for="opt in planOptions"
@@ -612,7 +613,7 @@ refreshAssetStatus()
               height="4"
               class="flex-grow-1"
             />
-            <span class="asset-status-text">{{ assetStatus.message || '正在下载图片...' }}</span>
+            <span class="asset-status-text">{{ translateAny(assetStatus.message) || translateKey('backend.config.task__auto_enhancement_support_card.whitelist.downloading_images') }}</span>
           </div>
 
           <!-- Main + Sidebar layout -->
@@ -642,7 +643,7 @@ refreshAssetStatus()
                     />
                     <div v-else class="card-image-placeholder">
                       <span class="placeholder-rarity" :style="{ color: rarityColor[card.rarity] }">
-                        {{ rarityLabel[card.rarity] }}
+                  {{ rarityLabels[card.rarity] }}
                       </span>
                     </div>
                     <v-icon
@@ -654,7 +655,7 @@ refreshAssetStatus()
                       md:check_circle
                     </v-icon>
                     <div class="card-rarity-badge" :style="{ backgroundColor: rarityColor[card.rarity] }">
-                      {{ rarityLabel[card.rarity] }}
+                    {{ rarityLabels[card.rarity] }}
                     </div>
                     <!-- Info button overlay -->
                     <v-btn
@@ -678,7 +679,7 @@ refreshAssetStatus()
 
               <!-- Empty state -->
               <div v-if="filteredCards.length === 0 && !loading" class="empty-state">
-                没有匹配的卡牌
+                {{ translateKey('dialogs.selector.noMatchedCards') }}
               </div>
 
               <!-- Infinite scroll sentinel -->
@@ -713,12 +714,12 @@ refreshAssetStatus()
                   />
                   <div v-else class="card-image-placeholder detail-placeholder">
                     <span class="placeholder-rarity" :style="{ color: rarityColor[detailCard.rarity] }">
-                      {{ rarityLabel[detailCard.rarity] }}
+                      {{ rarityLabels[detailCard.rarity] }}
                     </span>
                   </div>
                   <!-- Rarity + Level badge -->
                   <div class="detail-badge" :style="{ backgroundColor: rarityColor[detailCard.rarity] }">
-                    {{ rarityLabel[detailCard.rarity] }} Lv{{ detailLevel }}
+                    {{ rarityLabels[detailCard.rarity] }} Lv{{ detailLevel }}
                   </div>
                   <!-- Downloading overlay -->
                   <div v-if="downloadingFullImageFor === detailCard.id" class="detail-image-loading">
@@ -740,22 +741,22 @@ refreshAssetStatus()
                     variant="flat"
                     class="detail-tag"
                   >
-                    {{ rarityLabel[detailCard.rarity] }}
+                    {{ rarityLabels[detailCard.rarity] }}
                   </v-chip>
                   <v-chip size="x-small" variant="outlined" class="detail-tag">
-                    {{ typeLabel[detailCard.type] || detailCard.type }}
+                    {{ typeLabels[detailCard.type] || detailCard.type }}
                   </v-chip>
                   <v-chip size="x-small" variant="outlined" class="detail-tag">
-                    {{ planLabel[detailCard.planType] || detailCard.planType }}
+                    {{ planLabels[detailCard.planType] || detailCard.planType }}
                   </v-chip>
                   <v-chip v-if="detailCard.isLimited" size="x-small" color="red" variant="outlined" class="detail-tag">
-                    限定
+                    {{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.limit_only') }}
                   </v-chip>
                 </div>
 
                 <!-- Level slider -->
                 <div class="detail-level-slider">
-                  <span class="detail-level-label">Lv</span>
+                  <span class="detail-level-label">{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.levelShort') }}</span>
                   <v-slider
                     v-model="detailLevel"
                     :min="1"
@@ -774,14 +775,14 @@ refreshAssetStatus()
                 <div class="detail-trigger-rate" v-if="detailCard.produceCardUpgradePermil">
                   <span class="trigger-rate-icon">⬆</span>
                   <span class="trigger-rate-text">
-                    支援発生率:
+                    {{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.trigger_rate') }}:
                     <strong>{{ supportTriggerRate(detailCard) }}%</strong>
                   </span>
                 </div>
 
                 <!-- サポートアビリティ (level-aware) -->
                 <div class="detail-section" v-if="skillDescriptionsAtLevel(detailCard, detailLevel).length > 0">
-                  <div class="detail-section-title">サポートアビリティ</div>
+                  <div class="detail-section-title">{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.section.support_ability') }}</div>
                   <div class="detail-skill-list">
                     <div
                       v-for="(desc, idx) in skillDescriptionsAtLevel(detailCard, detailLevel)"
@@ -796,7 +797,7 @@ refreshAssetStatus()
 
                 <!-- サポートイベント (level-aware) -->
                 <div class="detail-section" v-if="eventsAtLevel(detailCard, detailLevel).length > 0">
-                  <div class="detail-section-title">サポートイベント</div>
+                  <div class="detail-section-title">{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.section.support_event') }}</div>
                   <div class="detail-skill-list">
                     <div
                       v-for="evt in eventsAtLevel(detailCard, detailLevel)"
@@ -817,7 +818,7 @@ refreshAssetStatus()
 
                 <!-- P-item / スキルカード list -->
                 <div class="detail-section" v-if="detailCard.eventItems && detailCard.eventItems.length > 0">
-                  <div class="detail-section-title">附帯Pアイテム / スキルカード</div>
+                  <div class="detail-section-title">{{ translateKey('backend.config.task__auto_enhancement_support_card.whitelist.section.attachments') }}</div>
                   <div class="detail-skill-list">
                     <div
                       v-for="item in detailCard.eventItems"
@@ -862,7 +863,7 @@ refreshAssetStatus()
                     block
                     @click="toggleCard(detailCard)"
                   >
-                    {{ isSelected(detailCard) ? '取消选择' : '加入白名单' }}
+                    {{ isSelected(detailCard) ? translateKey('dialogs.selector.cancelSelect') : translateKey('backend.config.task__auto_enhancement_support_card.whitelist.add_to_whitelist') }}
                   </v-btn>
                 </div>
               </div>
@@ -871,11 +872,11 @@ refreshAssetStatus()
         </v-card-text>
 
         <v-card-actions class="dialog-actions">
-          <v-btn variant="text" size="small" @click="clearAll">清空选择</v-btn>
+          <v-btn variant="text" size="small" @click="clearAll">{{ translateKey('dialogs.selector.clearSelection') }}</v-btn>
           <v-spacer />
-          <v-btn color="error" variant="text" @click="cancelDialog">取消</v-btn>
+          <v-btn color="error" variant="text" @click="cancelDialog">{{ translateKey('common.cancel') }}</v-btn>
           <v-btn color="primary" variant="flat" @click="confirmSelection">
-            确认 ({{ localSelection.length }})
+            {{ translateKey('dialogs.selector.confirmMulti', { count: localSelection.length }) }}
           </v-btn>
         </v-card-actions>
       </v-card>
@@ -901,7 +902,7 @@ refreshAssetStatus()
 }
 
 .no-selection-hint {
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.5);
   font-size: 0.875rem;
 }
 
@@ -934,7 +935,7 @@ refreshAssetStatus()
 
 .asset-status-text {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.5);
   white-space: nowrap;
 }
 
@@ -946,7 +947,7 @@ refreshAssetStatus()
 
 .filter-label {
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   white-space: nowrap;
   min-width: 42px;
 }
@@ -990,7 +991,7 @@ refreshAssetStatus()
 }
 
 .card-item:hover {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .card-item--selected {
@@ -999,7 +1000,7 @@ refreshAssetStatus()
 }
 
 .card-item--active {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-on-surface), 0.3);
 }
 
 .card-image-wrapper {
@@ -1008,7 +1009,7 @@ refreshAssetStatus()
   aspect-ratio: 1;
   border-radius: 6px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .card-image {
@@ -1022,7 +1023,7 @@ refreshAssetStatus()
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(var(--v-theme-on-surface), 0.03);
 }
 
 .placeholder-rarity {
@@ -1075,14 +1076,14 @@ refreshAssetStatus()
 
 .card-type {
   font-size: 0.65rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.5);
   line-height: 1.3;
 }
 
 .empty-state {
   text-align: center;
   padding: 32px 0;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(var(--v-theme-on-surface), 0.4);
 }
 
 .scroll-sentinel {
@@ -1097,10 +1098,10 @@ refreshAssetStatus()
 
 /* Detail sidebar */
 .detail-panel {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(var(--v-theme-on-surface), 0.03);
   border-radius: 10px;
   padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .detail-header {
@@ -1115,7 +1116,7 @@ refreshAssetStatus()
   border-radius: 8px;
   overflow: hidden;
   margin-bottom: 10px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .detail-image-loading {
@@ -1160,7 +1161,7 @@ refreshAssetStatus()
 
 .detail-name-sub {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(var(--v-theme-on-surface), 0.45);
   margin-bottom: 8px;
   line-height: 1.3;
 }
@@ -1183,7 +1184,7 @@ refreshAssetStatus()
 .detail-section-title {
   font-size: 0.75rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-surface), 0.7);
   margin-bottom: 4px;
 }
 
@@ -1197,7 +1198,7 @@ refreshAssetStatus()
 .detail-level-label {
   font-size: 0.75rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   flex-shrink: 0;
 }
 
@@ -1208,7 +1209,7 @@ refreshAssetStatus()
 .detail-level-value {
   font-size: 0.75rem;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(var(--v-theme-on-surface), 0.85);
   min-width: 20px;
   text-align: right;
   flex-shrink: 0;
@@ -1232,7 +1233,7 @@ refreshAssetStatus()
 
 .trigger-rate-text {
   font-size: 0.78rem;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(var(--v-theme-on-surface), 0.75);
 }
 
 .trigger-rate-text strong {
@@ -1251,7 +1252,7 @@ refreshAssetStatus()
   align-items: flex-start;
   gap: 8px;
   padding: 5px 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--v-theme-on-surface), 0.04);
   border-radius: 4px;
 }
 
@@ -1267,7 +1268,7 @@ refreshAssetStatus()
 .skill-text {
   font-size: 0.72rem;
   line-height: 1.45;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .event-item-rarity {
@@ -1291,7 +1292,7 @@ refreshAssetStatus()
 
 .reward-name {
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(var(--v-theme-on-surface), 0.85);
   font-size: 0.72rem;
 }
 
@@ -1303,7 +1304,7 @@ refreshAssetStatus()
 
 .reward-desc {
   font-size: 0.66rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.5);
   line-height: 1.35;
   display: flex;
   flex-direction: column;
@@ -1320,7 +1321,7 @@ refreshAssetStatus()
   border-radius: 4px;
   object-fit: cover;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .detail-event-entry .skill-text {
@@ -1338,7 +1339,7 @@ refreshAssetStatus()
 
 .event-title {
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.88);
+  color: rgba(var(--v-theme-on-surface), 0.88);
   font-size: 0.72rem;
 }
 
@@ -1356,7 +1357,7 @@ refreshAssetStatus()
 
 .event-desc {
   font-size: 0.68rem;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(var(--v-theme-on-surface), 0.55);
 }
 
 .detail-actions {
@@ -1386,7 +1387,7 @@ refreshAssetStatus()
     overflow-y: auto;
     overscroll-behavior: contain;
     background: rgb(var(--v-theme-surface));
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
     border-radius: 12px 12px 0 0;
     padding: 8px;

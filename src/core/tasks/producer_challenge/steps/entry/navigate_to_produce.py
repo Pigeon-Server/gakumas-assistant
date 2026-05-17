@@ -5,6 +5,7 @@ import numpy as np
 from time import sleep, time
 from typing import TYPE_CHECKING
 
+from src.constants.game.producer_gameplay import GameplayPosition
 from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.modal_text import ModalText
 from src.constants.game.text.produce_text import ProduceText
@@ -12,12 +13,18 @@ from src.core.exceptions.TaskException import TaskUserMessage
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.inference.ocr_engine import OCRService
-from src.core.tasks.producer_challenge.shared.common import normalize_text
+from src.core.tasks.producer_challenge.shared.common import (
+    normalize_lookup_text,
+    normalize_text,
+    ocr_text,
+)
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.ui import (
     click_modal_action_with_retry,
     detect_gameplay_phase,
+    detect_gameplay_state,
     find_button,
+    get_pipeline_position,
     go_back_in_gameplay,
     wait_frame_stable,
 )
@@ -35,6 +42,15 @@ _SCENARIO_LABELS = (
     BaseUILabels.PRODUCER_PRO,
     BaseUILabels.PRODUCER_MASTER,
     BaseUILabels.PRODUCER_NIA,
+)
+_MAIN_HOME_SIGNAL_LABELS = (
+    BaseUILabels.HOME_PRODUCE_BTN,
+    BaseUILabels.HOME_SHOP_BTN,
+    BaseUILabels.HOME_GIFT_BTN,
+    BaseUILabels.HOME_DAILY_TASK,
+    BaseUILabels.HOME_ACHIEVEMENT,
+    BaseUILabels.HOME_DISPATCH_WORK,
+    BaseUILabels.HOME_GET_EXPENDITURE,
 )
 _GAMEPLAY_SIGNAL_LABELS = (
     ProducerLabels.PC_SKIP,
@@ -58,14 +74,29 @@ _GAMEPLAY_MENU_MARKERS = (
     ProduceText.GAMEPLAY_MENU_SETTINGS,
     ButtonText.RETIRE,
 )
+_RESUMABLE_GAMEPLAY_POSITIONS = {
+    GameplayPosition.LESSON_SUMMARY_SHOWCASE,
+    GameplayPosition.RESULT,
+    GameplayPosition.RESULT_EXAM_FAILURE,
+    GameplayPosition.RESULT_EXAM_SUMMARY_SHOWCASE,
+    GameplayPosition.RESULT_EXAM_RANKING_SUMMARY,
+    GameplayPosition.RESULT_MEMORY_GENERATION,
+    GameplayPosition.RESULT_MEMORY_PAGE,
+    GameplayPosition.RESULT_FINAL_EVALUATION,
+    GameplayPosition.RESULT_REWARD_SUMMARY,
+    GameplayPosition.RESULT_ACHIEVEMENT_PROGRESS,
+    GameplayPosition.RESULT_EVENT_REWARD_PROGRESS,
+}
 _ocr_service = OCRService()
+_LESSON_SUMMARY_BUBBLE_WHITE_LOWER = (0, 0, 235)
+_LESSON_SUMMARY_BUBBLE_WHITE_UPPER = (179, 48, 255)
 
 
 def _is_on_scenario_page(app: "AppProcessor") -> bool:
-    """当前画面能检测到任意难度标签 → 说明在剧本选择页。"""
+    """判断是否在剧本选择页面"""
     return any(
         app.latest_results.exists_label(lbl) for lbl in _SCENARIO_LABELS
-    )
+    ) and app.game_utils.update_current_location() == GamePageTypes.HOME_TAB.PRODUCER
 
 
 def _is_produce_resume_modal(app: "AppProcessor", modal=None) -> bool:
@@ -107,6 +138,14 @@ def _is_destroying_production_data_modal(modal) -> bool:
     if not normalized_title:
         return False
     return normalize_text(ModalText.TITLE.DESTROYING_PRODUCTION_DATA) in normalized_title
+
+
+def _is_menu_overlay_modal(modal) -> bool:
+    """判断是否命中了主页/标题侧的“メニュー”残留浮层。"""
+    if modal is None:
+        return False
+    normalized_title = normalize_text(getattr(modal, "modal_title", None))
+    return normalized_title == normalize_text("メニュー")
 
 
 def _build_frame_box(
@@ -386,6 +425,274 @@ def _find_gameplay_retire_menu_entry(frame) -> Yolo_Box | None:
     return retire_box
 
 
+def _detect_resume_lesson_summary_bubble(frame) -> tuple[int, int, int, int] | None:
+    """检测底部参数展示白色气泡，作为 lesson summary 的视觉兜底特征。"""
+    if frame is None or getattr(frame, "size", 0) <= 0:
+        return None
+
+    frame_h, frame_w = frame.shape[:2]
+    roi_top = int(frame_h * 0.74)
+    roi_bottom = int(frame_h * 0.98)
+    if roi_bottom <= roi_top:
+        return None
+
+    roi = frame[roi_top:roi_bottom, :]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, _LESSON_SUMMARY_BUBBLE_WHITE_LOWER, _LESSON_SUMMARY_BUBBLE_WHITE_UPPER)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    best_rect: tuple[int, int, int, int] | None = None
+    best_score = -1.0
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        x, y, w_rect, h_rect = cv2.boundingRect(contour)
+        if w_rect <= 0 or h_rect <= 0:
+            continue
+        abs_y = roi_top + y
+        if w_rect < int(frame_w * 0.68):
+            continue
+        if h_rect < int(frame_h * 0.06) or h_rect > int(frame_h * 0.18):
+            continue
+        if abs_y < int(frame_h * 0.76):
+            continue
+        if (abs_y + h_rect) > int(frame_h * 0.98):
+            continue
+        center_x = x + w_rect / 2.0
+        center_penalty = abs(center_x - frame_w / 2.0) / max(frame_w / 2.0, 1.0)
+        score = float(w_rect * h_rect) - center_penalty * float(frame_w * frame_h * 0.08)
+        if score > best_score:
+            best_score = score
+            best_rect = (x, abs_y, x + w_rect, abs_y + h_rect)
+    return best_rect
+
+
+def _looks_like_resume_lesson_summary_showcase(app: "AppProcessor") -> bool:
+    """在恢复链中识别 lesson 结束后的参数展示页。
+
+    真机恢复时，这一页偶发会在 producer 模型下出现“零检测框”，导致常规
+    `detect_gameplay_state()` 无法命中。这里直接对底部 ROI 做局部 OCR 兜底，
+    仅在缺少常规 gameplay 控件时认定为可恢复的 lesson summary 展示页。
+    """
+    frame = getattr(app, "latest_frame", None)
+    if frame is None or getattr(frame, "size", 0) <= 0:
+        return False
+
+    results = getattr(app, "latest_results", None)
+    frame_h, frame_w = frame.shape[:2]
+
+    if results is not None:
+        has_blocking_controls = any(
+            results.exists_label(label)
+            for label in (
+                ProducerLabels.PC_ACTION,
+                ProducerLabels.PC_RECOMMEND_ACTION,
+                ProducerLabels.PC_SKIP,
+                ProducerLabels.PC_BONUS_INDICATOR,
+                ProducerLabels.SKILL_CARD_ACTIVE,
+                ProducerLabels.SKILL_CARD_MENTAL,
+                ProducerLabels.SKILL_CARD_TRAP,
+                ProducerLabels.SKILL_CARD_INFO,
+                ProducerLabels.UNIVERSAL_OPTIONS,
+                ProducerLabels.CONFIRM_BUTTON,
+                ProducerLabels.DISABLE_BUTTON,
+                ProducerLabels.CANCEL_BUTTON,
+                ProducerLabels.P_DRINK,
+                BaseUILabels.BUTTON,
+                BaseUILabels.CURRENT_LOCATION,
+                BaseUILabels.SKIP_BUTTON,
+            )
+        )
+        if has_blocking_controls:
+            return False
+        param_label_count = sum(
+            1
+            for label in (
+                ProducerLabels.PARAM_VOCAL,
+                ProducerLabels.PARAM_DANCE,
+                ProducerLabels.PARAM_VISUAL,
+            )
+            if results.exists_label(label)
+        )
+        detected_labels = {
+            str(getattr(box, "label", "") or "")
+            for box in getattr(results, "boxes", []) or []
+        }
+        only_param_labels = bool(detected_labels) and detected_labels.issubset({
+            ProducerLabels.PARAM_VOCAL,
+            ProducerLabels.PARAM_DANCE,
+            ProducerLabels.PARAM_VISUAL,
+        })
+    else:
+        param_label_count = 0
+        only_param_labels = False
+
+    if param_label_count >= 2 and only_param_labels:
+        DebugTools().add_box(
+            0,
+            int(frame_h * 0.56),
+            frame_w - 1,
+            frame_h - 1,
+            label="resume_lesson_summary:param_only_layout",
+            color=(0, 200, 255),
+            alpha=0.08,
+            duration=2.5,
+            font_size=18,
+        )
+        logger.debug("navigate_to_produce: 恢复链命中 lesson summary 参数布局兜底")
+        return True
+
+    roi_left = int(frame_w * 0.04)
+    roi_top = int(frame_h * 0.78)
+    roi_right = int(frame_w * 0.96)
+    roi_bottom = int(frame_h * 0.98)
+    if roi_right <= roi_left or roi_bottom <= roi_top:
+        return False
+
+    roi = frame[roi_top:roi_bottom, roi_left:roi_right]
+    roi_text = normalize_lookup_text(ocr_text(roi))
+    short_attr_tokens = (
+        ProduceText.VOCAL_SHORT,
+        ProduceText.DANCE_SHORT,
+        ProduceText.VISUAL_SHORT,
+    )
+    long_attr_tokens = (
+        ProduceText.VOCAL,
+        ProduceText.DANCE,
+        ProduceText.VISUAL,
+    )
+    has_short_attr = any(normalize_lookup_text(token) in roi_text for token in short_attr_tokens)
+    has_long_attr = any(normalize_lookup_text(token) in roi_text for token in long_attr_tokens)
+    has_increased = normalize_lookup_text(ProduceText.INCREASED) in roi_text
+    ocr_matched = bool(roi_text and has_increased and (has_short_attr or has_long_attr or param_label_count >= 1))
+
+    bubble_rect = _detect_resume_lesson_summary_bubble(frame)
+    visual_matched = bool(bubble_rect is not None and param_label_count >= 1)
+    if not ocr_matched and not visual_matched:
+        return False
+
+    debugger = DebugTools()
+    if ocr_matched:
+        debugger.add_box(
+            roi_left,
+            roi_top,
+            roi_right,
+            roi_bottom,
+            label="resume_lesson_summary:ocr_roi",
+            color=(0, 220, 120),
+            alpha=0.12,
+            duration=2.5,
+            font_size=18,
+        )
+        logger.debug(
+            "navigate_to_produce: 恢复链命中 lesson summary OCR 兜底 text={!r}",
+            roi_text,
+        )
+    if bubble_rect is not None:
+        debugger.add_box(
+            bubble_rect[0],
+            bubble_rect[1],
+            bubble_rect[2],
+            bubble_rect[3],
+            label="resume_lesson_summary:bubble",
+            color=(0, 200, 255),
+            alpha=0.10,
+            duration=2.5,
+            font_size=18,
+        )
+        if not ocr_matched:
+            logger.debug("navigate_to_produce: 恢复链命中 lesson summary 白色气泡兜底")
+    return True
+
+
+def _looks_like_resume_lesson_p_drink_showcase(app: "AppProcessor") -> bool:
+    """在恢复链中识别 lesson 收尾后的 P 饮料获得展示页。"""
+    frame = getattr(app, "latest_frame", None)
+    if frame is None or getattr(frame, "size", 0) <= 0:
+        return False
+
+    results = getattr(app, "latest_results", None)
+    frame_h, frame_w = frame.shape[:2]
+    if results is not None:
+        has_blocking_controls = any(
+            results.exists_label(label)
+            for label in (
+                ProducerLabels.PC_ACTION,
+                ProducerLabels.PC_RECOMMEND_ACTION,
+                ProducerLabels.PC_PROGRESS,
+                ProducerLabels.PC_STAMINA,
+                ProducerLabels.PC_P_POINT,
+                ProducerLabels.PC_TRAINING_SCORE,
+                ProducerLabels.PC_TRAINING_REMAINING,
+                ProducerLabels.PC_SKIP,
+                ProducerLabels.PC_BONUS_INDICATOR,
+                ProducerLabels.SKILL_CARD_ACTIVE,
+                ProducerLabels.SKILL_CARD_MENTAL,
+                ProducerLabels.SKILL_CARD_TRAP,
+                ProducerLabels.SKILL_CARD_INFO,
+                ProducerLabels.UNIVERSAL_OPTIONS,
+                ProducerLabels.CONFIRM_BUTTON,
+                ProducerLabels.DISABLE_BUTTON,
+                ProducerLabels.CANCEL_BUTTON,
+                ProducerLabels.P_DRINK,
+                BaseUILabels.BUTTON,
+                BaseUILabels.CURRENT_LOCATION,
+                BaseUILabels.SKIP_BUTTON,
+            )
+        )
+        if has_blocking_controls:
+            return False
+
+    roi_left = int(frame_w * 0.06)
+    roi_top = int(frame_h * 0.55)
+    roi_right = int(frame_w * 0.94)
+    roi_bottom = int(frame_h * 0.92)
+    if roi_right <= roi_left or roi_bottom <= roi_top:
+        return False
+
+    roi = frame[roi_top:roi_bottom, roi_left:roi_right]
+    roi_text = normalize_lookup_text(ocr_text(roi))
+    has_drink_hint = (
+        normalize_lookup_text(ProduceText.DRINK) in roi_text
+        or normalize_lookup_text(ProduceText.ACQUIRE) in roi_text
+    )
+    has_gain_hint = (
+        normalize_lookup_text(ProduceText.PARAMETER) in roi_text
+        or normalize_lookup_text(ProduceText.P_POINT) in roi_text
+        or normalize_lookup_text("+10") in roi_text
+    )
+    if not (roi_text and has_drink_hint and has_gain_hint):
+        return False
+
+    roi_rgb = roi.astype("int16")
+    bright_mask = (
+        (roi_rgb[:, :, 0] >= 185)
+        & (roi_rgb[:, :, 1] >= 185)
+        & (roi_rgb[:, :, 2] >= 185)
+    )
+    near_gray_mask = (roi_rgb.max(axis=2) - roi_rgb.min(axis=2)) <= 45
+    white_ratio = float((bright_mask & near_gray_mask).mean())
+    if white_ratio < 0.18:
+        return False
+
+    DebugTools().add_box(
+        roi_left,
+        roi_top,
+        roi_right,
+        roi_bottom,
+        label="resume_lesson_p_drink_showcase:roi",
+        color=(80, 220, 255),
+        alpha=0.10,
+        duration=2.5,
+        font_size=18,
+    )
+    logger.debug(
+        "navigate_to_produce: 恢复链命中 lesson p_drink showcase OCR 兜底 text={!r}",
+        roi_text,
+    )
+    return True
+
+
 def _wait_for_gameplay_retire_menu(app: "AppProcessor", *, timeout: float = 3.0) -> bool:
     """等待局内底部菜单展开到可识别出退出文本。"""
     end_time = time() + timeout
@@ -509,7 +816,7 @@ def _retire_active_gameplay_produce(app: "AppProcessor") -> bool:
     return True
 
 
-def open_produce_entry_from_home(app: "AppProcessor", *, timeout: float = 10.0) -> None:
+def open_produce_entry_from_home(app: "AppProcessor", *, timeout: float = 10.0, location_timeout: float = 15.0) -> None:
     """在主页点击 Produce 入口，并等待入口动画/过场收敛。"""
     if not app.game_utils.wait_for_label(BaseUILabels.HOME_PRODUCE_BTN, timeout=timeout):
         raise TimeoutError("等待 Home: Produce Button 超时")
@@ -623,11 +930,82 @@ class NavigateToProduceStep(ProduceStep):
 
     step_name = "navigate_to_produce"
 
+    @staticmethod
+    def _looks_like_main_home(app: "AppProcessor") -> bool:
+        """用稳定的主页 UI 标签兜底识别主主页，避免被位置 OCR 误导。
+
+        真机上主页弹窗关闭后的短时间内，`update_current_location()` 偶发会把顶部
+        文本误读成 `PASS_REWARD` 一类页面，但此时底部 Home Tab 和主页 Produce 入口
+        不一定会同帧稳定返回。这里优先用 YOLO 标签做兜底，避免恢复流程走错分支。
+        """
+        results = getattr(app, "latest_results", None)
+        if results is None:
+            return False
+        has_home_tab = results.exists_label(BaseUILabels.TAB_HOME)
+        has_home_signal = any(results.exists_label(label) for label in _MAIN_HOME_SIGNAL_LABELS)
+        return bool(has_home_tab and has_home_signal)
+
+    @classmethod
+    def _wait_for_main_home_signal(
+        cls,
+        app: "AppProcessor",
+        *,
+        timeout: float = 2.0,
+        interval: float = 0.25,
+    ) -> bool:
+        """短轮询主页信号，兼容弹窗关闭后主页标签晚几帧才稳定回来的情况。"""
+        end_time = time() + timeout
+        while time() < end_time:
+            if cls._looks_like_main_home(app):
+                return True
+            sleep(interval)
+        return cls._looks_like_main_home(app)
+
+    @staticmethod
+    def _enter_from_home_entry(app: "AppProcessor", ctx: "ProduceContext") -> bool:
+        """统一走主页入口进入培育，并复用已有的恢复弹窗判定。
+
+        这里不重新发明主页识别流程，只做两件事：
+        1. 进入主页入口前先切回 BASE_UI，确保 `HOME_PRODUCE_BTN` 使用对的模型；
+        2. 点击入口后立即复用已有弹窗逻辑，判断是恢复旧局还是进入新培育。
+        """
+        from src.constants.yolo.model_type import YoloModelType
+
+        app.switch_yolo_model(YoloModelType.BASE_UI, settle_seconds=1.0)
+        open_produce_entry_from_home(app)
+        wait_frame_stable(app, timeout=2.0)
+
+        if NavigateToProduceStep._try_resume_interrupted(app, ctx):
+            return True
+        if NavigateToProduceStep._confirm_destroying_production_data_modal(app, ctx):
+            return True
+        return True
+
+    @staticmethod
+    def _recover_from_start_game(app: "AppProcessor") -> None:
+        """从标题启动页恢复到主页，避免把启动页误判成 producer 页面。
+
+        这里直接复用现有的启动页处理逻辑：
+        1. 点击「Tap / Click Continue」
+        2. 等待加载结束
+        3. 处理启动阶段可能出现的弹窗，并确保回到主页
+        """
+        from src.core.tasks.base_ui.start_game import (
+            action__click_start_game,
+            action__wait_enter_home,
+        )
+
+        logger.info("navigate_to_produce: 当前位于 START_GAME，先恢复到主页再继续培育导航")
+        action__click_start_game(app)
+        app.game_utils.wait_loading()
+        action__wait_enter_home(app)
+        wait_frame_stable(app, timeout=3.0)
+
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """把当前会话导航到剧本选择页，或在恢复模式下直接接管旧局。
 
         Args:
-            app: 当前应用处理器，用于返回主页、点击入口、识别弹窗以及处理局内退局链。
+            app: 当前应用处理器，用于点击入口、识别弹窗以及处理局内恢复链。
             ctx: 培育上下文；当 `resume_interrupted` 为 True 时，会优先尝试恢复旧局或直接接管当前 gameplay。
 
         Returns:
@@ -640,92 +1018,150 @@ class NavigateToProduceStep(ProduceStep):
             该步骤会根据当前界面状态自动选择三条路径：
             1. 已在剧本页则直接返回；
             2. 恢复模式下命中旧局则直接恢复或接管；
-            3. 其余情况先清理残留弹窗、必要时退出旧局，再从主页重新进入培育入口。
+            3. 其余情况先清理残留弹窗、必要时退出旧局，再直接接管当前 producer 页面。
         """
         if _is_on_scenario_page(app):
             logger.debug("已经在培育剧本选择页面")
             return True
 
-        is_resume = getattr(ctx, "resume_interrupted", False)
-
-        # ── 恢复模式：优先检测是否已在 gameplay 局内，直接接管 ──
-        if is_resume:
-            if self._try_detect_existing_gameplay(app, ctx):
-                return True
+        is_resume = ctx.resume_interrupted
 
         self._dismiss_residual_modal(app)
 
-        # ── 恢复中断模式：检测到再开弹窗时恢复旧局 ──
+        if self._wait_for_main_home_signal(app):
+            logger.debug("navigate_to_produce: 通过 BASE_UI 主页信号确认当前在主页，优先走主页入口点击流程")
+            if self._try_resume_interrupted(app, ctx):
+                return True
+            return self._enter_from_home_entry(app, ctx)
+
+        current_location = app.game_utils.update_current_location()
+        if current_location == GamePageTypes.START_GAME:
+            self._recover_from_start_game(app)
+            if self._wait_for_main_home_signal(app):
+                logger.debug("navigate_to_produce: START_GAME 恢复后命中主页信号，继续走主页入口")
+                if self._try_resume_interrupted(app, ctx):
+                    return True
+                return self._enter_from_home_entry(app, ctx)
+            current_location = app.game_utils.update_current_location()
+        producer_sub_pages = {
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__IDOL_SELECTION,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_SELECTION,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_SELECTION,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__START_CONFIRMATION,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FORMATION_DETAIL,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_FORMATION_LIST,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_FORMATION_LIST,
+        }
+        if current_location in producer_sub_pages:
+            logger.debug(f"navigate_to_produce: 已在 producer 子页 {current_location}，直接交给后续步骤")
+            ctx.resumed_from_interrupt = True
+            if current_location == GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__IDOL_SELECTION:
+                ctx.resume_pipeline_step = "select_idol_card"
+            elif current_location == GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_SELECTION:
+                ctx.resume_pipeline_step = "select_support_cards"
+            elif current_location == GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_SELECTION:
+                ctx.resume_pipeline_step = "select_memories"
+            elif current_location == GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__START_CONFIRMATION:
+                ctx.resume_pipeline_step = "confirm_and_start"
+            elif current_location == GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FORMATION_DETAIL:
+                ctx.resume_pipeline_step = "collect_formation_details"
+            elif current_location in {
+                GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_FORMATION_LIST,
+                GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_FORMATION_LIST,
+            }:
+                ctx.resume_pipeline_step = "select_memories"
+            return True
+        if current_location == GamePageTypes.HOME_TAB.PRODUCER and self._looks_like_producer_entry_page(app):
+            logger.debug("navigate_to_produce: 已在 producer 专用选择页，直接交给后续步骤")
+            ctx.resumed_from_interrupt = True
+            ctx.resume_pipeline_step = "select_scenario"
+            return True
+        if current_location == GamePageTypes.MAIN_MENU__HOME:
+            logger.debug("navigate_to_produce: 当前在主页，优先走主页入口点击流程")
+            if self._try_resume_interrupted(app, ctx):
+                return True
+            return self._enter_from_home_entry(app, ctx)
+
+        # 恢复中断模式：检测到再开弹窗时恢复旧局
         if is_resume:
             if self._try_resume_interrupted(app, ctx):
                 return True
-            # 没有中断弹窗，走正常新建流程
-            logger.info("navigate_to_produce: resume_interrupted=True 但未检测到中断弹窗，走正常流程")
+            if self._wait_for_main_home_signal(app):
+                logger.debug("navigate_to_produce: resume 模式当前仍像主页，优先走主页入口点击流程")
+                return self._enter_from_home_entry(app, ctx)
+            # 没有中断弹窗，但屏幕上可能仍停在 producer 专用页面。
+            # 继续通过 producer 模型直接判断，不回主页重进。
+            logger.debug("navigate_to_produce: resume 模式未找到中断弹窗，继续直接恢复当前 producer 页面")
+            if self._try_detect_existing_gameplay(app, ctx):
+                return True
+            self._dismiss_residual_modal(app)
+            if self._wait_for_main_home_signal(app):
+                logger.debug("navigate_to_produce: 清理后重新判定为主页，改走主页入口点击流程")
+                return self._enter_from_home_entry(app, ctx)
 
         if not self._retire_resumable_produce(app):
             self._dismiss_residual_modal(app)
+            if self._wait_for_main_home_signal(app):
+                logger.debug("navigate_to_produce: 关闭可恢复旧局弹窗后回到主页，改走主页入口点击流程")
+                return self._enter_from_home_entry(app, ctx)
 
-        # 先走通用返回；若当前其实卡在 producer 局内，则退回专用退局链。
-        try:
-            app.game_utils.go_home()
-        except RuntimeError:
-            logger.warning("navigate_to_produce: 常规 go_home 失败，尝试局内旧局退出链")
-            if go_back_in_gameplay(app):
-                sleep(0.8)
-                self._dismiss_residual_modal(app)
-                try:
-                    app.game_utils.go_home()
-                except RuntimeError:
-                    if not _retire_active_gameplay_produce(app):
-                        raise
-                    self._dismiss_residual_modal(app)
-                    app.game_utils.go_home()
-            else:
-                if not _retire_active_gameplay_produce(app):
-                    raise
-                self._dismiss_residual_modal(app)
-                app.game_utils.go_home()
-        app.game_utils.wait_loading()
+        # 再次确认当前是否已经在 producer 局内或剧本页。
+        if self._try_detect_existing_gameplay(app, ctx):
+            return True
 
-        # 点击培育按钮
-        open_produce_entry_from_home(app, timeout=10)
+        # 如果仍然停留在可恢复的 producer 页面，继续专用恢复链，不回主页。
+        if app.latest_results and app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
+            modal_pre_recover = app.game_utils.try_get_modal(no_body=True, require_header=False)
+            if modal_pre_recover is not None and _is_produce_resume_modal(app, modal_pre_recover):
+                logger.info("navigate_to_produce: 命中培育再开弹窗，先关闭")
+                if self._retire_resumable_produce(app):
+                    sleep(0.5)
+                elif not self._force_close_resume_modal(app):
+                    logger.warning("navigate_to_produce: 无法关闭培育再开弹窗，继续恢复尝试")
 
-        # ── 恢复中断模式：点击培育后检测到弹窗 ──
-        if getattr(ctx, "resume_interrupted", False):
-            sleep(1.5)
+        # 直接走 producer 恢复链，不再回主页。
+        if go_back_in_gameplay(app):
+            sleep(0.8)
+            self._dismiss_residual_modal(app)
+            if self._try_detect_existing_gameplay(app, ctx):
+                return True
             if self._try_resume_interrupted(app, ctx):
                 return True
-        if self._confirm_destroying_production_data_modal(app, ctx):
-            if _is_on_scenario_page(app):
-                logger.debug("确认跨设备旧局提示后成功进入剧本选择页")
+            if not _retire_active_gameplay_produce(app):
+                raise TimeoutError("无法在当前 producer 页面完成恢复")
+            self._dismiss_residual_modal(app)
+            if self._try_detect_existing_gameplay(app, ctx):
                 return True
-
-        # 等待剧本页面出现
-        for _ in range(20):
-            if _is_on_scenario_page(app):
-                logger.debug("成功进入剧本选择页")
+        else:
+            if not _retire_active_gameplay_produce(app):
+                raise TimeoutError("无法在当前 producer 页面完成恢复")
+            self._dismiss_residual_modal(app)
+            if self._try_detect_existing_gameplay(app, ctx):
                 return True
-            # 恢复模式下再次检测弹窗
-            if getattr(ctx, "resume_interrupted", False):
-                if self._try_resume_interrupted(app, ctx):
-                    return True
-            if self._confirm_destroying_production_data_modal(app, ctx):
-                continue
-            if not getattr(ctx, "resume_interrupted", False) and self._retire_resumable_produce(app):
-                # 清掉旧局后会回到主页，需要重新点一次 Produce 进入新流程。
-                if app.game_utils.wait_for_label(BaseUILabels.HOME_PRODUCE_BTN, timeout=8):
-                    open_produce_entry_from_home(app, timeout=8)
-                continue
-            sleep(1)
 
         raise TimeoutError("导航到培育剧本选择页超时")
+
+    @staticmethod
+    def _looks_like_producer_entry_page(app: "AppProcessor") -> bool:
+        """判断是否已在 producer 的剧本/难度/选卡入口页。"""
+        results = getattr(app, "latest_results", None)
+        if results is None:
+            return False
+        entry_labels = _SCENARIO_LABELS + (
+            BaseUILabels.PRODUCER_NIA,
+            BaseUILabels.PRODUCE_CARD_VOCAL,
+            BaseUILabels.PRODUCE_CARD_DANCE,
+            BaseUILabels.PRODUCE_CARD_VISUAL,
+        )
+        return any(results.exists_label(lbl) for lbl in entry_labels)
 
     @staticmethod
     def _try_resume_interrupted(app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """检测并恢复中断的培育。
 
         如果检测到「プロデュース再開」弹窗，提取信息后点击「再開する」恢复旧局。
-        成功恢复后设置 ctx.resumed_from_interrupt = True，pipeline 会跳过编成步骤。
+        成功恢复后设置 ctx.resumed_from_interrupt = True，并把 resume_pipeline_step
+        指向 gameplay 主循环，让流水线从当前局面接着跑。
         """
         modal = app.game_utils.try_get_modal(no_body=True)
         if not _is_produce_resume_modal(app, modal):
@@ -747,6 +1183,7 @@ class NavigateToProduceStep(ProduceStep):
             return False
 
         ctx.resumed_from_interrupt = True
+        ctx.resume_pipeline_step = "produce_gameplay_loop"
         logger.success(
             f"[恢复培育] 成功恢复中断培育: "
             f"week={resume_info.get('current_week', '?')}/{resume_info.get('total_weeks', '?')}, "
@@ -810,54 +1247,118 @@ class NavigateToProduceStep(ProduceStep):
         from src.constants.game.producer_gameplay import GameplayPhase
         from src.constants.yolo.model_type import YoloModelType
 
-        original_model = getattr(app.yolo_engine, "model_type", YoloModelType.BASE_UI)
+        original_model = app.yolo_engine.model_type
         try:
-            app.yolo_engine.load_model(YoloModelType.PRODUCER)
-            sleep(2.0)  # 等待首帧推理稳定
+            app.switch_yolo_model(YoloModelType.PRODUCER, settle_seconds=2.0)
 
             for _ in range(5):
-                phase = detect_gameplay_phase(app, ctx)
+                # 这里必须基于同一帧快照同时判定 phase / position，避免跨帧读到
+                # 「phase=unknown 但 position=transition_empty」的撕裂状态，从而把主页
+                # “培育中”入口卡片误当成 gameplay 局内恢复锚点。
+                phase, position = detect_gameplay_state(app, ctx)
+                results = getattr(app, "latest_results", None)
+                has_lesson_summary_signature = bool(
+                    results is not None
+                    and results.exists_label(ProducerLabels.PC_ACTION_INFO)
+                    and any(
+                        results.exists_label(label)
+                        for label in (
+                            ProducerLabels.PARAM_VOCAL,
+                            ProducerLabels.PARAM_DANCE,
+                            ProducerLabels.PARAM_VISUAL,
+                        )
+                    )
+                )
+
                 # MODAL / STARTUP_MODALS 也属于 gameplay 内的合法阶段
                 # （例如休息确认、饮料确认等模态都在培育局内）
                 if phase not in {GameplayPhase.UNKNOWN, ""}:
                     ctx.resumed_from_interrupt = True
+                    ctx.resume_pipeline_step = "produce_gameplay_loop"
                     logger.success(
-                        f"[恢复培育] 已在 gameplay 中，检测到阶段: {phase}，跳过导航"
+                        f"[恢复培育] 已在 gameplay 中，检测到阶段: {phase}，位置: {position}，跳过导航"
                     )
                     return True
+
+                if position in _RESUMABLE_GAMEPLAY_POSITIONS:
+                    ctx.resumed_from_interrupt = True
+                    ctx.resume_pipeline_step = "produce_gameplay_loop"
+                    logger.success(
+                        f"[恢复培育] 已在 gameplay 中，检测到位置: {position}，跳过导航"
+                    )
+                    return True
+
+                if has_lesson_summary_signature:
+                    ctx.resumed_from_interrupt = True
+                    ctx.resume_pipeline_step = "produce_gameplay_loop"
+                    logger.success(
+                        "[恢复培育] 命中 lesson-summary 展示页特征，直接交给 gameplay loop 接管"
+                    )
+                    return True
+
+                if _looks_like_resume_lesson_summary_showcase(app):
+                    ctx.resumed_from_interrupt = True
+                    ctx.resume_pipeline_step = "produce_gameplay_loop"
+                    logger.success(
+                        "[恢复培育] 命中 lesson-summary 展示页 OCR 兜底，直接交给 gameplay loop 接管"
+                    )
+                    return True
+
+                if _looks_like_resume_lesson_p_drink_showcase(app):
+                    ctx.resumed_from_interrupt = True
+                    ctx.resume_pipeline_step = "produce_gameplay_loop"
+                    logger.success(
+                        "[恢复培育] 命中 lesson p_drink 展示页 OCR 兜底，直接交给 gameplay loop 接管"
+                    )
+                    return True
+
                 sleep(1.0)
 
             # 未检测到 gameplay，恢复原模型
             logger.info("[恢复培育] 未检测到 gameplay 阶段，恢复原模型继续导航")
-            app.yolo_engine.load_model(original_model)
-            sleep(1.0)
+            app.switch_yolo_model(original_model, settle_seconds=1.0)
             return False
         except Exception:
-            app.yolo_engine.load_model(original_model)
-            sleep(1.0)
+            app.switch_yolo_model(original_model, settle_seconds=1.0)
             return False
 
-    @staticmethod
-    def _dismiss_residual_modal(app: "AppProcessor") -> None:
+    def _dismiss_residual_modal(self, app: "AppProcessor") -> None:
         """清理任务起跑前残留的弹窗。
 
         真机断点恢复时，可能停在启动弹窗、提示弹窗或确认弹窗上。
-        这些弹窗会让 `go_home()` 的返回路径失效，因此先尽量关闭。
+        这些弹窗会阻塞后续的 producer 模型识别，因此先尽量关闭。
         注意：主页上 require_header=False 容易把 UI 元素误判为弹窗，
         导致点到通行证等按钮，因此主页上跳过此流程。
         """
-        # 主页上不执行弹窗清理，避免误点通行证等 UI 元素
+        # 检查是否在主页且无任何弹窗——只有在真正确认无弹窗时才跳过清理。
+        # 注意：培育再开弹窗覆盖主页时，HOME_PRODUCE_BTN 仍可能被检测到，
+        # 因此先尝试检测弹窗，只有确认无弹窗时才跳过。
         if app.latest_results and app.latest_results.exists_label(BaseUILabels.HOME_PRODUCE_BTN):
-            logger.debug("navigate_to_produce: 当前在主页，跳过残留弹窗清理")
-            return
+            modal_check = app.game_utils.try_get_modal(no_body=True, require_header=False)
+            if modal_check is None:
+                logger.debug("navigate_to_produce: 当前在主页且无残留弹窗，跳过清理")
+                return
 
         for attempt in range(3):
             modal = app.game_utils.try_get_modal(no_body=True, require_header=False)
             if modal is None:
                 return
+            if _is_menu_overlay_modal(modal):
+                logger.info("navigate_to_produce: 检测到菜单残留弹窗，优先点击閉じる关闭")
+                close_button = find_button(app, ButtonText.CLOSE, fuzz_threshold=70)
+                if close_button is not None and app.game_utils.click_element_and_wait_trigger(close_button, timeout=3.0):
+                    sleep(0.5)
+                    continue
+                logger.warning("navigate_to_produce: 菜单残留弹窗未识别到閉じる按钮，回退到通用弹窗点击")
             if _is_produce_resume_modal(app, modal):
                 logger.debug("navigate_to_produce: 起跑前命中培育再开弹窗，交由专用 retire 流处理")
-                return
+                # 恢复模式下也应关闭弹窗（不恢复旧局，只是退到主页新建），避免阻塞导航
+                if self._retire_resumable_produce(app):
+                    return
+                # retire 失败，尝试直接点击弹窗中的リタイア按钮兜底
+                if self._force_close_resume_modal(app):
+                    return
+                # 仍失败则继续循环重试
             prefer_confirm = _is_retire_confirmation_title(getattr(modal, "modal_title", None))
             logger.info(f"navigate_to_produce: 清理残留弹窗 {attempt + 1}: {modal.modal_title!r}")
             if click_modal_action_with_retry(
@@ -886,7 +1387,8 @@ class NavigateToProduceStep(ProduceStep):
         logger.info("navigate_to_produce: 检测到未完成培育，先执行リタイア后重新进入")
         retire_button = find_button(app, ButtonText.RETIRE, fuzz_threshold=60)
         if retire_button is None:
-            raise TimeoutError("检测到培育再开弹窗，但未识别到リタイア按钮")
+            logger.warning("navigate_to_produce: 培育再开弹窗存在，但未识别到リタイア按钮，返回 False 交给 _dismiss_residual_modal 处理")
+            return False
 
         if not app.game_utils.click_element_and_wait_trigger(retire_button, timeout=3.0):
             raise TimeoutError("点击リタイア后未触发界面变化")
@@ -907,4 +1409,42 @@ class NavigateToProduceStep(ProduceStep):
 
         app.game_utils.wait_loading()
         wait_frame_stable(app, timeout=3.0)
+        return True
+
+    @staticmethod
+    def _force_close_resume_modal(app: "AppProcessor") -> bool:
+        """通过 YOLO 结果直接定位并点击培育再开弹窗的リタイア按钮（不依赖 OCR/文本识别）。
+
+        当 PRODUCER 模型检测失败导致 OCR 无法识别按钮文本时，直接基于按钮位置和文本标签点击。
+        培育再开弹窗中，リタイア 按钮位于弹窗右侧，通常是下半屏中面积最大的按钮。
+        """
+        results = app.latest_results
+        if results is None:
+            return False
+
+        # 收集所有通用按钮标签
+        all_labels = ("Universal Confirm button", "Universal Cancel button", "Universal button")
+        all_boxes = []
+        for label in all_labels:
+            all_boxes.extend(list(results.filter_by_label(label)))
+
+        # 找到下半屏最大按钮（リタイア 通常在弹窗右侧下半区）
+        candidates = [b for b in all_boxes if b.cy > results.frame_shape[0] * 0.5]
+        if not candidates:
+            logger.debug("navigate_to_produce: 降级方案未找到下半屏候选按钮")
+            return False
+
+        box = max(candidates, key=lambda b: b.w * b.h)
+        logger.debug(f"navigate_to_produce: 降级点击 {box.text!r} @ ({box.cx},{box.cy})")
+        app.device.click_element(box)
+        sleep(0.5)
+
+        confirm_modal = _wait_for_modal_relaxed(app, timeout=3.0)
+        if confirm_modal is not None:
+            click_modal_action_with_retry(
+                app, confirm_modal, prefer_confirm=True, retries=2, timeout=4.0,
+                action_name="navigate_to_produce force close confirm",
+            )
+            app.game_utils.wait_loading()
+            wait_frame_stable(app, timeout=3.0)
         return True

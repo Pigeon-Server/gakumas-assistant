@@ -7,15 +7,15 @@
       <v-btn
         :loading="shutdownPending"
         color="warning"
-        prepend-icon="md:power_settings_new"
         variant="tonal"
+        prepend-icon="md:power_settings_new"
         @click="shutdownApp"
       >
-        退出应用
+        {{ translateKey('app.footer.exit') }}
       </v-btn>
     </div>
     <div class="app-footer__meta text-caption text-disabled">
-      &copy; 2020-{{ (new Date()).getFullYear() }} <span class="d-none d-sm-inline-block">Pigeon Server Team</span>
+      &copy; 2020-{{ (new Date()).getFullYear() }} <span class="d-none d-sm-inline-block">{{ translateKey('app.footer.teamName') }}</span>
       —
       <a
         class="text-decoration-none on-surface"
@@ -23,7 +23,7 @@
         rel="noopener noreferrer"
         target="_blank"
       >
-        GPLv3 License
+        {{ translateKey('app.footer.licenseLabel') }}
       </a>
     </div>
   </v-footer>
@@ -35,6 +35,7 @@
   import apis from "@/scripts/apis.js";
   import message from "@/scripts/utils/message.js";
   import { addWindowHostReadyListener, isWindowHostAvailable } from "@/scripts/utils/windowHost.js";
+  import { translateKey } from "@/scripts/i18n/translate";
 
   const nativeWindowHost = ref(isWindowHostAvailable());
   const shutdownPending = ref(false);
@@ -53,7 +54,7 @@
     shutdownPending.value = true;
     try {
       await apis.shutdown_app();
-      message.showInfo("应用正在退出...");
+      message.showInfo(translateKey('app.footer.exiting'));
       window.setTimeout(() => {
         window.close();
       }, 300);

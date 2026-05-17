@@ -1,0 +1,34 @@
+以下是当前步的决策数据，请提炼出一条可迁移的策略洞察。
+
+== 战术层上下文 ==
+轴属性: {{ idol_plan_type }} ({{ parameter_priority }})
+流派关键词: {{ idol_plan_focus }}
+Buff状态: 好调={{ resources.parameter_buff }}, 好印象={{ resources.aggressive }}, 集中={{ resources.review }}, 元气={{ resources.block }}
+牌组: {{ deck_plan_summary }}
+牌组缺口: {{ deck_plan_needs }}
+P物品: {{ p_items_desc }}
+体力: {{ stamina }}/{{ max_stamina }} | P点: {{ p_point }}
+资源压力: {{ resource_pressure }}
+
+== 最近决策时间线 ==
+{% for step in recent_steps %}
+第{{ step.week }}周 [{{ step.phase }}] 目标={{ step.decision_goal }} | 选择={{ step.decision_tags }} | 成本={{ step.cost }} | 收益={{ step.gain }} | 结果={{ step.outcome }}
+{% endfor %}
+
+== 当前决策 ==
+阶段: {{ phase }} | 位置: {{ position }}
+目标: {{ decision_goal }}
+候选动作（角色标签）:
+{% for c in candidates %}
+- {{ c.index }}: {{ c.decision_tags }} (成本={{ c.cost }}, 收益={{ c.gain }})
+{% endfor %}
+选了: {{ chosen_tags }}
+结果: {{ outcome_type }} {% if outcome_notes %}({{ outcome_notes }}){% endif %}
+
+请输出 JSON：
+{
+  "strategy_description": "...",
+  "setup_pattern": "...",
+  "when_to_apply": "...",
+  "when_not_to_apply": "..."
+}

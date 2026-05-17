@@ -19,11 +19,16 @@ class ProduceText:
     VOCAL_LESSON = "ボーカルレッスン"
     DANCE_LESSON = "ダンスレッスン"
     VISUAL_LESSON = "ビジュアルレッスン"
+    VOCAL_SHORT = "Vo."
+    DANCE_SHORT = "Da."
+    VISUAL_SHORT = "Vi."
     PARAMETER = "パラメータ"
     PARAMETER_OCR_VARIANTS = (PARAMETER, "バラメータ")
     PARAMETER_UP = "パラメータ上昇"
     PARAMETER_UP_INCREASE = "パラメータ上昇量増加"
     INCREASE = "上昇"
+    INCREASED = "上昇した"
+    EFFECT = "効果"
     ACQUIRE = "獲得"  # 获得
     RECOVERY = "回復"  # 回复
     ENHANCE = "強化"  # 强化
@@ -190,8 +195,16 @@ class ProduceText:
     MEMORY_CONVERT = "メモリー変換"  # 记忆转换
     PRODUCE_RESULT = "プロデュース結果"  # 培育结果
     PRODUCE = "プロデュース"  # 培育 / Produce
+    PRODUCING = "プロデュース中"  # 主页上的培育进行中卡片标题
     PRODUCE_EVALUATION = "プロデュース評価"  # 培育评价
     PRODUCE_COMPLETE = "プロデュース完了"  # 培育完成
+    ITEM_ACQUIRED = "アイテム獲得"  # 道具获得弹层标题
+    ITEM_ACQUIRED_OCR_VARIANTS = (
+        ITEM_ACQUIRED,
+        "アイテム獲得",
+        "アイテム獲得!",
+        "アイテム獲得 ",
+    )  # 道具获得标题常见 OCR 形式
     PRODUCE_RESUME = "プロデュース再開"  # 继续未完成的培育弹窗标题
     PRODUCE_RETIRE_CONFIRM = "プロデュースリタイア確認"  # 放弃培育确认
     GAMEPLAY_MENU_SUSPEND = "中断"  # 局内菜单：保存并中断
@@ -201,6 +214,7 @@ class ProduceText:
     FINAL_PRODUCE_EVALUATION = "最終プロデュース評価"  # 最终培育评价
     PASS = "合格"  # 合格
     REWARD_ITEMS = "獲得アイテム"  # 获得道具
+    ITEM_TICKET = "交換券"  # 兑换券类奖励名公共后缀
     FINAL_EXAM = "最終試験"  # 最终考试
     FINAL_REVIEW = "最終審査"  # 最终审查
     EXAM_RESULT_RETRY_CONFIRM = "再挑戦確認"  # 再挑战确认
@@ -266,7 +280,19 @@ class ProduceText:
     EXAM_CRITERIA = "審査基準"  # 审查基准
     FINAL_EXAM_CRITERIA_HEADING = "最終試験の審査基準"  # 育成信息中的审查基准标题
     PASS_CONDITION = "合格条件"  # 合格条件
+    PASS_CONDITION_OCR_VARIANTS = (
+        PASS_CONDITION,
+        "合楷辛件",
+        "合格条什",
+        "合格條件",
+    )
     TAP_TO_CONTINUE = "タップして次へ"  # 点击继续
+    TAP_TO_CONTINUE_OCR_VARIANTS = (
+        TAP_TO_CONTINUE,
+        "タツプして次へ",
+        "タップして次ヘ",
+        "タツプして次ヘ",
+    )
     REMAINING_TURNS = "残りターン"  # 剩余回合（考试轮盘上方标签）
     REMAINING_TURNS_OCR_VARIANTS = ("残りターン", "洗りターン", "残リターン")
     SKILL_CARD_DETAIL_HINT_TOKENS = (
@@ -290,9 +316,20 @@ class ProduceText:
         "チェンジしました",  # 卡片更换通知（例：「…にチェンジしました」）
     )  # 单卡展示页常见结算动词
     RANKING_POINT_UNIT = "pt"  # 排行榜分数单位
+    RANKING_POINT_OCR_VARIANTS = (
+        RANKING_POINT_UNIT,
+        "p",
+        "p+",
+        "円",
+    )
     PASS_POSITION_SUFFIX = "位以上"  # 合格线常见后缀
     PRAISE_EXCELLENT = "すばらしい"  # 结果展示夸奖文案
-    PRAISE_EXCELLENT_OCR_VARIANTS = (PRAISE_EXCELLENT, "すばら")
+    PRAISE_EXCELLENT_OCR_VARIANTS = (
+        PRAISE_EXCELLENT,
+        "すばら",
+        "すばらレい",
+        "ばらしい",
+    )
     RANKING_ORDINAL_MARKERS = ("1st", "2nd", "3rd", "4th", "5th", "6th")
 
     # ── 技能卡奖励 再抽選 ──

@@ -25,35 +25,39 @@ import {getWsUrl} from "@/scripts/utils/wsURL.js";
 import {WS_ACTION} from "@/scripts/constants.ts";
 import message from "@/scripts/utils/message.js";
 import dialogs from "@/scripts/utils/dialogs.js";
+import { translateKey, translateAny } from "@/scripts/i18n/translate";
+import { ensureSystemLocaleListener, syncLocaleWithPreference } from "@/scripts/i18n/localePreference";
 
 const app = createApp(App)
 
 registerPlugins(app)
+syncLocaleWithPreference()
+ensureSystemLocaleListener()
 
 const theme = getRandomTheme()
 const appStore = useAppStore()
 appStore.init()
 wsService.connect(getWsUrl("/ws"))
 wsService.on(WS_ACTION.ShowMessage_Info, data => {
-  message.showInfo(data.message, data?.close_delay ? data.close_delay * 1000 : 3000)
+  message.showInfo(translateAny(data.message), data?.close_delay ? data.close_delay * 1000 : 3000)
 })
 wsService.on(WS_ACTION.ShowMessage_Warning, data => {
-  message.showWarning(data.message, data?.close_delay ? data.close_delay * 1000 : 3000)
+  message.showWarning(translateAny(data.message), data?.close_delay ? data.close_delay * 1000 : 3000)
 })
 wsService.on(WS_ACTION.ShowMessage_Error, data => {
-  message.showError(data.message, data?.close_delay ? data.close_delay * 1000 : 3000)
+  message.showError(translateAny(data.message), data?.close_delay ? data.close_delay * 1000 : 3000)
 })
 wsService.on(WS_ACTION.ShowMessage_Success, data => {
-  message.showSuccess(data.message, data?.close_delay ? data.close_delay * 1000 : 3000)
+  message.showSuccess(translateAny(data.message), data?.close_delay ? data.close_delay * 1000 : 3000)
 })
 wsService.on(WS_ACTION.TaskExecutionError, data => {
   dialogs.showTaskErrorReportDialog(data).catch(() => ({ reason: "dismissed" }))
 })
 wsService.onEvent("disconnect", () => {
-  message.showWarning("连接已断开")
+  message.showWarning(translateKey('websocket.disconnected'))
 })
 wsService.onEvent("reconnect", () => {
-  message.showSuccess("服务器重连成功")
+  message.showSuccess(translateKey('websocket.reconnected'))
 })
 app.config.globalProperties.$theme = theme
 app.directive("auto-save", autoSave)

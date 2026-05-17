@@ -151,6 +151,162 @@ def _select_phase_probe(probes):
     return stable_probes[-1] if stable_probes else probes[-1]
 
 
+def _looks_like_only_loop_blocked_producer_page(results) -> bool:
+    """判断当前快照是否像 only-loop 不该进入的 producer 局外页面。"""
+    if results is None:
+        return False
+
+    from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
+
+    producer_entry_labels = (
+        BaseUILabels.PRODUCER_REGULAR,
+        BaseUILabels.PRODUCER_PRO,
+        BaseUILabels.PRODUCER_MASTER,
+        BaseUILabels.PRODUCER_NIA,
+        BaseUILabels.PRODUCE_CARD_VOCAL,
+        BaseUILabels.PRODUCE_CARD_DANCE,
+        BaseUILabels.PRODUCE_CARD_VISUAL,
+    )
+    return any(results.exists_label(label) for label in producer_entry_labels)
+
+
+def _ocr_contains_any(text: str, variants) -> bool:
+    """判断 OCR 文本是否包含任一候选短语。"""
+    normalized = "".join(str(text or "").split())
+    return any("".join(str(variant).split()) in normalized for variant in variants if variant)
+
+
+def _looks_like_only_loop_blocked_producer_page_by_ocr(app) -> bool:
+    """用 OCR 兜底识别 producer 入口页，处理 PRODUCER 模型只剩少量误检的情况。"""
+    frame = getattr(app, "latest_frame", None)
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return False
+
+    from src.constants.game.text.produce_text import ProduceText
+    from src.utils.debug_tools import DebugTools
+
+    height, width = frame.shape[:2]
+    title_roi = frame[0:int(height * 0.14), 0:int(width * 0.42)]
+    difficulty_roi = frame[int(height * 0.74):int(height * 0.95), 0:width]
+
+    ocr_service = app.ocr_service if hasattr(app, "ocr_service") else None
+    if ocr_service is None:
+        from src.core.inference.ocr_engine import OCRService
+        ocr_service = OCRService()
+
+    title_text = "".join(item.text for item in (ocr_service.ocr(title_roi) or []))
+    difficulty_text = "".join(item.text for item in (ocr_service.ocr(difficulty_roi) or []))
+
+    DebugTools().add_box(
+        0,
+        0,
+        int(width * 0.42),
+        int(height * 0.14),
+        color=(0, 255, 255),
+        label=f"only-loop title roi: {title_text[:20]}",
+        duration=120,
+    )
+    DebugTools().add_box(
+        0,
+        int(height * 0.74),
+        width,
+        int(height * 0.95),
+        color=(255, 200, 0),
+        label=f"only-loop difficulty roi: {difficulty_text[:28]}",
+        duration=120,
+    )
+
+    has_produce_title = _ocr_contains_any(
+        title_text,
+        (ProduceText.PRODUCE, ProduceText.LEGEND),
+    )
+    has_difficulty = _ocr_contains_any(
+        difficulty_text,
+        (
+            ProduceText.DIFFICULTY_REGULAR,
+            ProduceText.DIFFICULTY_PRO,
+            ProduceText.DIFFICULTY_MASTER,
+            ProduceText.LEGEND,
+        ),
+    )
+    return has_produce_title and has_difficulty
+
+
+def _is_only_loop_blocked_location(current_location: str | None) -> bool:
+    """判断当前位置是否属于 only-loop 不该进入的 producer 局外页面。"""
+    from src.entity.Game.Page.Types.index import GamePageTypes
+
+    blocked_locations = {
+        GamePageTypes.HOME_TAB.PRODUCER,
+        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__IDOL_SELECTION,
+        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_SELECTION,
+        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_SELECTION,
+        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__START_CONFIRMATION,
+        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FORMATION_DETAIL,
+        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_FORMATION_LIST,
+        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_FORMATION_LIST,
+    }
+    return current_location in blocked_locations
+
+
+def _assert_only_loop_starts_in_gameplay(
+    app,
+    ctx,
+    *,
+    probe_count: int = 5,
+    probe_interval: float = 0.35,
+    required_hits: int = 2,
+):
+    """短轮询确认 only-loop 起点不是 producer 局外页，避免误把入口页当成局内恢复。"""
+    from src.constants.game.producer_gameplay import GameplayPhase
+
+    blocked_hits = 0
+    last_location = None
+    last_blocked_reason = None
+
+    for probe_index in range(probe_count):
+        current_location = app.game_utils.update_current_location()
+        results = getattr(app, "latest_results", None)
+        location_blocked = _is_only_loop_blocked_location(current_location)
+        results_blocked = _looks_like_only_loop_blocked_producer_page(results)
+        ocr_blocked = _looks_like_only_loop_blocked_producer_page_by_ocr(app)
+
+        if (location_blocked and results_blocked) or ocr_blocked:
+            blocked_hits += 1
+            last_blocked_reason = (
+                f"location={current_location}, boxes={len(results) if results is not None else 0}, "
+                f"ocr_blocked={ocr_blocked}"
+            )
+            logger.info(
+                f"only-loop 起点探测[{probe_index + 1}/{probe_count}]: 命中 producer 局外页 ({last_blocked_reason})"
+            )
+            if blocked_hits >= required_hits:
+                raise RuntimeError(
+                    "当前已处于 producer 入口页或选卡页，不是 gameplay 局内；"
+                    "请改用完整流程或先恢复到局内再执行 --only-loop"
+                )
+        else:
+            blocked_hits = 0
+            logger.info(
+                f"only-loop 起点探测[{probe_index + 1}/{probe_count}]: "
+                f"location={current_location}, producer_entry_like={results_blocked}, ocr_blocked={ocr_blocked}"
+            )
+
+        last_location = current_location
+        if probe_index + 1 < probe_count:
+            time.sleep(probe_interval)
+
+    logger.info(f"only-loop 起点探测通过：last_location={last_location}, last_blocked_reason={last_blocked_reason}")
+
+    phase, position, _results = _probe_gameplay_state(app, ctx, model_type="PRODUCER")
+    if phase == GameplayPhase.UNKNOWN:
+        raise RuntimeError(
+            "当前画面未识别为 gameplay 局内，phase=UNKNOWN；"
+            "请改用完整流程或先恢复到局内再执行 --only-loop"
+        )
+    logger.info(f"only-loop 局内确认通过：phase={phase}, position={position}")
+
+
 def _probe_gameplay_state(
     app,
     ctx,
@@ -158,24 +314,43 @@ def _probe_gameplay_state(
     model_type: str,
 ):
     """基于多份同模型快照探测当前 gameplay state。"""
+    from src.constants.game.producer_gameplay import GameplayPhase
     from src.core.tasks.producer_challenge.ui import classify_gameplay_state
 
     sample_count = max(1, int(ctx.handler_state.get("unknown_retry_limit", 2) or 0) + 1)
+    sample_count = min(sample_count, max(1, int(ctx.handler_state.get("phase_probe_sample_limit", 2) or 2)))
     sample_interval = max(0.15, float(ctx.handler_state.get("unknown_retry_sleep", 0.4) or 0.0))
-    samples = _collect_results_snapshots(
-        app,
-        model_type=model_type,
-        sample_count=sample_count,
-        sample_interval=sample_interval,
-    )
 
     probes = []
-    for index, results in enumerate(samples, start=1):
+    results = _ensure_debug_model(app, model_type=model_type)
+    previous_results = results
+
+    for index in range(1, sample_count + 1):
         phase, position = classify_gameplay_state(results, ctx=ctx)
         logger.info(
-            f"phase probe[{index}/{len(samples)}]: boxes={len(results)}, phase={phase}, position={position}"
+            f"phase probe[{index}/{sample_count}]: boxes={len(results)}, phase={phase}, position={position}"
         )
         probes.append((phase, position, results))
+
+        if len(probes) >= 2:
+            prev_phase, prev_position, _ = probes[-2]
+            if (
+                phase != GameplayPhase.UNKNOWN
+                and phase == prev_phase
+                and position == prev_position
+            ):
+                logger.info(f"phase probe 提前收敛：{phase} / {position}")
+                break
+
+        if index >= sample_count:
+            break
+
+        time.sleep(sample_interval)
+        next_results = _wait_for_fresh_results(app, previous_results, timeout=2.0)
+        if next_results is None:
+            break
+        results = next_results
+        previous_results = next_results
 
     return _select_phase_probe(probes)
 
@@ -197,7 +372,7 @@ def _log_yolo_results(results):
     logger.info(f"共 {len(all_items)} 个检测框")
 
 
-def build_context(app, difficulty_override=None, use_llm=False):
+def build_context(app, difficulty_override=None, *, decision_backend="llm"):
     """根据当前配置构建 ProduceContext。"""
     from src.core.tasks.producer_challenge.context import ProduceContext
     from src.utils.game_database_tools import GakumasDatabase_IdolCardDataUtils
@@ -226,6 +401,7 @@ def build_context(app, difficulty_override=None, use_llm=False):
     # 真机偶发单帧漏检时，先被动复检几帧；只有连续 unknown 才真正暂停。
     ctx.handler_state["unknown_retry_limit"] = 2
     ctx.handler_state["unknown_retry_sleep"] = 0.4
+    ctx.handler_state["phase_probe_sample_limit"] = 2
     # 周行动确认后的剧情切换通常比普通空帧更长，单独给更大的重试预算。
     # 新增 lesson/exam 入场演出后，这段过场实机可能持续 7s 以上，
     # 需要更长窗口才能等到手牌页稳定下来。
@@ -242,12 +418,14 @@ def build_context(app, difficulty_override=None, use_llm=False):
     ctx.handler_state["loading_unknown_retry_limit"] = 15
     ctx.handler_state["loading_unknown_retry_sleep"] = 1.0
 
-    # 注入 LLM 决策策略
-    if use_llm:
+    if decision_backend == "llm":
         llm_url = getattr(app, '_debug_llm_url', None) or "http://192.168.100.10:11434/v1/"
         llm_model = getattr(app, '_debug_llm_model', None) or "gpt-oss:20b"
-        from src.core.tasks.producer_challenge.gameplay.llm_strategy import inject_llm_strategy
+        from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import inject_llm_strategy
         inject_llm_strategy(ctx, base_url=llm_url, model=llm_model)
+    elif decision_backend == "algo":
+        from src.core.tasks.producer_challenge.gameplay.strategy.algo_strategy import inject_algo_strategy
+        inject_algo_strategy(ctx)
 
     return ctx
 
@@ -305,11 +483,11 @@ def cmd_phase(app, *, model_type=None):
             logger.info(f"  [{btn.text}] pos=({btn.cx},{btn.cy})")
 
 
-def cmd_run_full(app, start_step=1, use_llm=False):
+def cmd_run_full(app, start_step=1, decision_backend="llm"):
     """运行完整 pipeline（可从指定步骤开始）。"""
     from src.core.tasks.producer_challenge import build_produce_pipeline
-    
-    ctx = build_context(app, use_llm=use_llm)
+
+    ctx = build_context(app, decision_backend=decision_backend)
     pipeline = build_produce_pipeline()
 
     if start_step > 1:
@@ -339,7 +517,7 @@ def cmd_run_full(app, start_step=1, use_llm=False):
         raise
 
 
-def cmd_run_loop(app, use_llm=False):
+def cmd_run_loop(app, decision_backend="llm"):
     """仅运行 gameplay loop 步骤（假设已在 gameplay 中）。"""
     from src.constants.yolo.model_type import YoloModelType
     from src.core.tasks.producer_challenge.steps.runtime.produce_gameplay_loop import (
@@ -351,8 +529,10 @@ def cmd_run_loop(app, use_llm=False):
     import time as _time
     _time.sleep(1.5)
 
-    ctx = build_context(app, use_llm=use_llm)
+    ctx = build_context(app, decision_backend=decision_backend)
     step = ProduceGameplayLoopStep()
+
+    _assert_only_loop_starts_in_gameplay(app, ctx)
 
     logger.info("直接运行 ProduceGameplayLoopStep ...")
     try:
@@ -389,8 +569,9 @@ def main():
                         help="禁用 LLM 决策策略，回退到纯规则逻辑")
     parser.add_argument("--llm-url", type=str, default="http://192.168.100.10:11434/v1/",
                         help="LLM API 地址 (默认: http://192.168.100.10:11434/v1/)")
-    parser.add_argument("--llm-model", type=str, default="gpt-oss:20b",
-                        help="LLM 模型名 (默认: gpt-oss:20b)")
+    parser.add_argument("--backend", type=str, default="llm",
+                        choices=["llm", "algo", "none"],
+                        help="决策后端：llm / algo / none（仅走默认配置）")
     args = parser.parse_args()
 
     app = init_app()
@@ -403,11 +584,11 @@ def main():
     # 保存恢复模式标记
     app._debug_resume = getattr(args, 'resume', False)
 
-    use_llm = True
-    if args.no_llm:
-        use_llm = False
+    decision_backend = getattr(args, 'backend', 'llm')
+    if args.no_llm and decision_backend == "llm":
+        decision_backend = "none"
     elif args.llm:
-        use_llm = True
+        decision_backend = "llm"
 
     try:
         from src.constants.yolo.model_type import YoloModelType
@@ -417,17 +598,16 @@ def main():
         elif args.phase:
             cmd_phase(app, model_type=YoloModelType.PRODUCER)
         elif args.only_loop:
-            cmd_run_loop(app, use_llm=use_llm)
+            cmd_run_loop(app, decision_backend=decision_backend)
         else:
-            cmd_run_full(app, start_step=args.step, use_llm=use_llm)
+            cmd_run_full(app, start_step=args.step, decision_backend=decision_backend)
     except KeyboardInterrupt:
         logger.warning("用户中断")
     finally:
         # 打印 LLM 统计
-        if use_llm:
+        if decision_backend == "llm":
             try:
-                from src.core.tasks.producer_challenge.gameplay.llm_strategy import LLMStrategy
-                # 尝试获取策略实例的统计
+                from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import LLMStrategy
                 logger.info("[LLM] 决策统计已记录在日志中")
             except Exception:
                 pass

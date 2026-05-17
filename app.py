@@ -9,14 +9,21 @@ from contextlib import asynccontextmanager
 import io
 from time import sleep
 
-import uvicorn
-from fastapi import FastAPI
-
 from src.utils.runtime_paths import embedded_webview_enabled, get_runtime_root, resolve_runtime_str
 
 # Normalize the process working directory early so legacy relative paths
 # resolve against the packaged runtime root instead of the caller's shell cwd.
 os.chdir(str(get_runtime_root()))
+
+CLI_FLAG = "--cli"
+if CLI_FLAG in sys.argv[1:]:
+    from src.cli.main import main as cli_main
+
+    cli_argv = [arg for arg in sys.argv[1:] if arg != CLI_FLAG]
+    raise SystemExit(cli_main(cli_argv))
+
+import uvicorn
+from fastapi import FastAPI
 
 if platform.system() == "Linux":
     os.environ.setdefault("QT_API", "pyside6")

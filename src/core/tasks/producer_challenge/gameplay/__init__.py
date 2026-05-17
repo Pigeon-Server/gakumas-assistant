@@ -51,7 +51,26 @@ from src.core.tasks.producer_challenge.gameplay.modal import ModalHandler
 from src.core.tasks.producer_challenge.gameplay.effect_chain import EffectChainHandler
 from src.core.tasks.producer_challenge.gameplay.live_performance import LivePerformanceHandler
 from src.core.tasks.producer_challenge.gameplay.item_select import ItemSelectHandler
-from src.core.tasks.producer_challenge.gameplay.rl_strategy import RLStrategy, inject_rl_strategy
+from src.core.tasks.producer_challenge.gameplay.strategy.rl_strategy import (
+    RLStrategy,
+    ScheduleRLStrategy,
+    BattleRLStrategy,
+    OtherRLStrategy,
+    inject_rl_strategy,
+)
+from src.core.tasks.producer_challenge.gameplay.strategy.algo_strategy import (
+    AlgoStrategy,
+    BattleAlgoStrategy,
+    ScheduleAlgoStrategy,
+    OtherAlgoStrategy,
+    inject_algo_strategy,
+)
+from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import (
+    LLMStrategy,
+    ScheduleLLMStrategy,
+    BattleLLMStrategy,
+    OtherLLMStrategy,
+)
 
 
 def build_default_dispatcher() -> GameplayDispatcher:
@@ -145,7 +164,22 @@ __all__ = [
     "LivePerformanceHandler",
     # 道具选择
     "ItemSelectHandler",
+    # LLM策略
+    "LLMStrategy",
+    "ScheduleLLMStrategy",
+    "BattleLLMStrategy",
+    "OtherLLMStrategy",
     # RL策略
     "RLStrategy",
+    "ScheduleRLStrategy",
+    "BattleRLStrategy",
+    "OtherRLStrategy",
+    # 算法决策策略
+    "AlgoStrategy",
+    "BattleAlgoStrategy",
+    "ScheduleAlgoStrategy",
+    "OtherAlgoStrategy",
+    # 注入工厂
     "inject_rl_strategy",
+    "inject_algo_strategy",
 ]

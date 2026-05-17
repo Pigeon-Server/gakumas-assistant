@@ -26,6 +26,7 @@ from src.core.tasks.producer_challenge.ui import (
     wait_frame_stable,
 )
 from src.core.tasks.producer_challenge.shared.common import ocr_text
+from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -148,6 +149,7 @@ class SelectDifficultyStep(ProduceStep):
         Raises:
             TimeoutError: 多次滑动后仍未找到 Legend 页面时抛出。
         """
+        app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.PRODUCER)
         h, w = app.latest_frame.shape[:2]
         cy = h // 2
 
@@ -166,8 +168,7 @@ class SelectDifficultyStep(ProduceStep):
         raise TimeoutError(f"滑动 {MAX_SWIPE_ATTEMPTS} 次后仍未找到 Legend 页面")
 
     def _is_legend_page_visible(self, app: "AppProcessor") -> bool:
-        """检测 Legend 页面——不存在 HAJIME 普通难度标签，
-        且存在包含「レジェンド」文本的按钮。"""
+        """检测 Legend 页面——不存在 HAJIME 普通难度标签，且存在包含「レジェンド」文本的按钮。"""
         # 如果存在普通难度标签则不在 Legend 页
         hajime_labels = (
             BaseUILabels.PRODUCER_REGULAR,

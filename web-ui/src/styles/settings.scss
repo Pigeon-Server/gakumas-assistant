@@ -33,6 +33,18 @@ body {
   --app-scrollbar-track: rgba(255, 255, 255, 0.04);
 }
 
+.v-theme--light {
+  --app-scrollbar-thumb: rgba(95, 104, 112, 0.26);
+  --app-scrollbar-thumb-hover: rgba(95, 104, 112, 0.38);
+  --app-scrollbar-track: rgba(95, 104, 112, 0.08);
+}
+
+.v-theme--dark {
+  --app-scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+  --app-scrollbar-track: rgba(255, 255, 255, 0.04);
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--app-scrollbar-thumb) var(--app-scrollbar-track);
@@ -64,7 +76,7 @@ body {
 }
 
 #app {
-  background: #1e1e1e;
+  background: rgb(var(--v-theme-background));
 }
 
 #app > .v-application,

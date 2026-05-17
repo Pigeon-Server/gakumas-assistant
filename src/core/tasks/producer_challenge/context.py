@@ -60,7 +60,8 @@ class ProduceContext:
     allow_destroy_production_data: bool = True  # 是否允许确认跨设备旧局销毁提示
 
     # ── 执行期间填充 ──
-    resumed_from_interrupt: bool = False  # 实际恢复了中断培育（跳过编成步骤）
+    resumed_from_interrupt: bool = False  # 实际恢复了中断培育
+    resume_pipeline_step: str = ""  # 恢复后从哪一个步骤开始继续执行
     resume_info: Dict[str, Any] = field(default_factory=dict)  # 恢复弹窗中提取的信息
     selected_idol_card: Optional[Any] = None
     support_cards: List[Any] = field(default_factory=list)
@@ -111,6 +112,9 @@ class ProduceContext:
     recognized_hand_cards: List[Dict[str, Any]] = field(default_factory=list)
     recognized_p_drinks: List[Dict[str, Any]] = field(default_factory=list)
     recognized_produce_items: List[Dict[str, Any]] = field(default_factory=list)
+    exam_criteria: Dict[str, Any] = field(default_factory=dict)
+    training_tasks: List[Dict[str, Any]] = field(default_factory=list)
+    recommended_effects: List[str] = field(default_factory=list)
     unresolved_clip_entities: List[Dict[str, Any]] = field(default_factory=list)
     state_revision: int = 0
     last_sync_reason: str = ""
@@ -315,6 +319,7 @@ class ProduceContext:
         self.pending_schedule_index = None
         self.pending_schedule_label = ""
         self.handler_state.pop("pending_schedule_action_id", None)
+        self.handler_state.pop("pending_schedule_click_count", None)
 
     def clear_dialogue_pending(self) -> None:
         """清空对话阶段遗留的候选选项索引。"""

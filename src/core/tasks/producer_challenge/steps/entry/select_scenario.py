@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.ui import inertial_swipe
+from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -54,6 +55,9 @@ class SelectScenarioStep(ProduceStep):
             HAJIME 通过向右滑动回到第一页，NIA 通过向左滑动切到对应剧本页；
             函数只负责切换剧本，不点击具体难度按钮。
         """
+
+        app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.PRODUCER)
+
         target = ctx.scenario.lower()
         h, w = app.latest_frame.shape[:2]
         cy = h // 2

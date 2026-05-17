@@ -1,11 +1,12 @@
 <script>
+import { translateAny as resolveLocalizedText, translateKey as resolveTranslationKey } from '@/scripts/i18n/translate'
 export default {
   name: "TaskErrorReportDialog",
   props: {
     title: {
-      type: String,
+      type: [String, Object],
       required: false,
-      default: "糟糕，任务执行失败了",
+      default: "",
     },
     task_id: {
       type: String,
@@ -13,7 +14,7 @@ export default {
       default: "",
     },
     task_name: {
-      type: String,
+      type: [String, Object],
       required: false,
       default: "",
     },
@@ -23,7 +24,7 @@ export default {
       default: "",
     },
     error_message: {
-      type: String,
+      type: [String, Object],
       required: false,
       default: "",
     },
@@ -66,8 +67,35 @@ export default {
     }
   },
   computed: {
+    dialogTitleText() {
+      return resolveLocalizedText(this.title) || resolveTranslationKey('dialogs.taskError.title')
+    },
     taskLabel() {
-      return this.task_name || this.task_id || "未知任务"
+      return resolveLocalizedText(this.task_name) || this.task_id || resolveTranslationKey('dialogs.taskError.unknownTask')
+    },
+    taskDescriptionText() {
+      return resolveTranslationKey('dialogs.taskError.description', { task: this.taskLabel })
+    },
+    exceptionText() {
+      if (!this.error_type && !this.error_message) {
+        return ""
+      }
+      return resolveTranslationKey('dialogs.taskError.exception', {
+        errorType: this.error_type || 'UnknownError',
+        errorMessage: resolveLocalizedText(this.error_message),
+      })
+    },
+    downloadLogLabel() {
+      return resolveTranslationKey('dialogs.taskError.downloadLog')
+    },
+    copyQqGroupLabel() {
+      return resolveTranslationKey('dialogs.taskError.copyQqGroup')
+    },
+    openGithubLabel() {
+      return resolveTranslationKey('dialogs.taskError.openGithub')
+    },
+    acknowledgeLabel() {
+      return resolveTranslationKey('dialogs.taskError.acknowledge')
     },
     githubIssuesURL() {
       return this.feedback?.github_issues || "https://github.com/Pigeon-Server/gakumas-assistant/issues"
@@ -89,6 +117,9 @@ export default {
     },
   },
   methods: {
+    translateAny(value) {
+      return resolveLocalizedText(value)
+    },
     async copyText(value) {
       if (!value || this.copying) {
         return
@@ -146,13 +177,13 @@ export default {
     @close="closeDialog"
   >
     <v-card>
-      <v-card-title class="text-error">{{ title }}</v-card-title>
+      <v-card-title class="text-error">{{ dialogTitleText }}</v-card-title>
       <v-card-text class="task-error-dialog__content">
         <p class="task-error-dialog__line">
-          因为某些原因，任务 <strong>{{ taskLabel }}</strong> 执行失败了，可以前往Github Issues或QQ群将任务错误日志反馈给开发者，便于快速定位问题。
+          {{ taskDescriptionText }}
         </p>
-        <p class="task-error-dialog__line" v-if="error_type || error_message">
-          异常：<code>{{ error_type || "UnknownError" }}</code> {{ error_message }}
+        <p class="task-error-dialog__line" v-if="exceptionText">
+          {{ exceptionText }}
         </p>
       </v-card-text>
       <v-card-actions class="task-error-dialog__actions">
@@ -161,21 +192,21 @@ export default {
           :disabled="!canDownloadPackage"
           @click="downloadPackage"
         >
-          下载日志压缩包
+          {{ downloadLogLabel }}
         </v-btn>
         <v-btn
-          color="secondary"
+          color="primary"
           @click="copyText(qqGroupNumber)"
         >
-          复制QQ群号
+          {{ copyQqGroupLabel }}
         </v-btn>
         <v-btn
           color="info"
           @click="openGithubIssues"
         >
-          打开 GitHub 反馈
+          {{ openGithubLabel }}
         </v-btn>
-        <v-btn color="error" @click="closeDialog">我知道了</v-btn>
+        <v-btn color="error" @click="closeDialog">{{ acknowledgeLabel }}</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

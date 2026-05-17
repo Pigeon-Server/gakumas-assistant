@@ -28,6 +28,7 @@
  *   </CardSelectorDialog>
  */
 import { computed, ref, watch, onBeforeUnmount, nextTick } from 'vue'
+import { translateKey } from '@/scripts/i18n/translate'
 
 const props = defineProps({
   /** 对话框是否可见（v-model） */
@@ -39,7 +40,7 @@ const props = defineProps({
   /** 选择模式：'single' 单选 | 'multi' 多选 */
   mode: { type: String, default: 'multi' },
   /** 对话框标题 */
-  title: { type: String, default: '选择卡牌' },
+  title: { type: String, default: '' },
   /** 数据加载中 */
   loading: { type: Boolean, default: false },
   /**
@@ -58,7 +59,7 @@ const props = defineProps({
   /** 获取卡牌稀有度标签 */
   rarityLabel: { type: Function, default: () => '' },
   /** 搜索框占位符 */
-  searchPlaceholder: { type: String, default: '搜索卡牌名称（支持中文/日文/ID）' },
+  searchPlaceholder: { type: String, default: '' },
   /** 确认按钮文本（单选模式） */
   confirmText: { type: String, default: null },
   /** 每批加载数量 */
@@ -211,6 +212,10 @@ function clearAll() {
   localSelection.value = []
 }
 
+const resolvedTitle = computed(() => props.title || translateKey('dialogs.selector.chooseCard'))
+const resolvedSearchPlaceholder = computed(() => props.searchPlaceholder || translateKey('dialogs.selector.searchPlaceholder'))
+const resolvedConfirmText = computed(() => props.confirmText || translateKey('dialogs.selector.confirmSingle'))
+
 // Watch dialog visibility for init
 watch(
   () => props.modelValue,
@@ -223,14 +228,12 @@ onBeforeUnmount(() => {
   if (observer) observer.disconnect()
 })
 
-// Computed confirm button label
-const confirmLabel = computed(() => {
+const resolvedConfirmLabel = computed(() => {
   if (props.confirmText) return props.confirmText
   if (props.mode === 'single') {
-    const sel = localSelection.value.length
-    return sel > 0 ? '确认' : '确认'
+    return translateKey('dialogs.selector.confirmSingle')
   }
-  return `确认 (${localSelection.value.length})`
+  return translateKey('dialogs.selector.confirmMulti', { count: localSelection.value.length })
 })
 
 // Expose detail card for parent
@@ -247,12 +250,12 @@ defineExpose({ detailCard })
   >
     <v-card class="card-dialog">
       <v-card-title class="dialog-title">
-        <span>{{ title }}</span>
+        <span>{{ resolvedTitle }}</span>
         <v-chip size="small" color="primary" variant="tonal" class="ml-2">
-          已选 {{ localSelection.length }}
+          {{ translateKey('dialogs.selector.selectedCount', { count: localSelection.length }) }}
         </v-chip>
         <v-chip size="small" variant="tonal" class="ml-2">
-          {{ filteredCards.length }} 张
+          {{ translateKey('dialogs.selector.totalCards', { count: filteredCards.length }) }}
         </v-chip>
       </v-card-title>
 
@@ -261,7 +264,7 @@ defineExpose({ detailCard })
         <v-text-field
           v-model="search"
           prepend-inner-icon="md:search"
-          :label="searchPlaceholder"
+          :label="resolvedSearchPlaceholder"
           density="compact"
           variant="outlined"
           clearable
@@ -360,7 +363,7 @@ defineExpose({ detailCard })
 
             <!-- Empty state -->
             <div v-if="filteredCards.length === 0 && !loading" class="empty-state">
-              没有匹配的卡牌
+              {{ translateKey('dialogs.selector.noMatchedCards') }}
             </div>
 
             <!-- Infinite scroll sentinel -->
@@ -383,13 +386,13 @@ defineExpose({ detailCard })
       </v-card-text>
 
       <v-card-actions class="dialog-actions">
-        <v-btn v-if="mode === 'multi'" variant="text" size="small" @click="clearAll">
-          清空选择
+          <v-btn v-if="mode === 'multi'" variant="text" size="small" @click="clearAll">
+          {{ translateKey('dialogs.selector.clearSelection') }}
         </v-btn>
         <v-spacer />
-        <v-btn color="error" variant="text" @click="cancelDialog">取消</v-btn>
+        <v-btn color="error" variant="text" @click="cancelDialog">{{ translateKey('common.cancel') }}</v-btn>
         <v-btn color="primary" variant="flat" @click="confirmSelection">
-          {{ confirmLabel }}
+          {{ resolvedConfirmLabel }}
         </v-btn>
       </v-card-actions>
     </v-card>
@@ -425,7 +428,7 @@ defineExpose({ detailCard })
 
 .filter-label {
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   white-space: nowrap;
   min-width: 42px;
 }
@@ -467,7 +470,7 @@ defineExpose({ detailCard })
 }
 
 .card-item:hover {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .card-item--selected {
@@ -476,7 +479,7 @@ defineExpose({ detailCard })
 }
 
 .card-item--active {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-on-surface), 0.3);
 }
 
 .card-image-wrapper {
@@ -485,7 +488,7 @@ defineExpose({ detailCard })
   aspect-ratio: 1;
   border-radius: 6px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .card-image {
@@ -499,7 +502,7 @@ defineExpose({ detailCard })
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(var(--v-theme-on-surface), 0.03);
 }
 
 .placeholder-rarity {
@@ -552,14 +555,14 @@ defineExpose({ detailCard })
 
 .card-type {
   font-size: 0.65rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.5);
   line-height: 1.3;
 }
 
 .empty-state {
   text-align: center;
   padding: 32px 0;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(var(--v-theme-on-surface), 0.4);
 }
 
 .scroll-sentinel {
@@ -595,7 +598,7 @@ defineExpose({ detailCard })
     overflow-y: auto;
     overscroll-behavior: contain;
     background: rgb(var(--v-theme-surface));
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
     border-radius: 12px 12px 0 0;
     padding: 8px;

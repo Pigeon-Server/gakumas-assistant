@@ -2,8 +2,11 @@ import cv2
 import numpy as np
 
 import config
+from src.constants.game.text.button_text import ButtonText
+from src.constants.game.text.produce_text import ProduceText
 from src.constants.location import Location
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
+from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Components.Modal import Modal
 from src.entity.Game.Components.SupportCard import SupportCard, SupportCardList
 from src.entity.Yolo import Yolo_Box, Yolo_Results
@@ -18,6 +21,43 @@ from src.utils.performance_tools import timeit
 from src.utils.string_tools import string_match, MatchConfig
 
 ocr_service = OCRService()
+
+
+def _has_button_text(buttons: ButtonList, text: str, fuzz_threshold: int = 75) -> bool:
+    return buttons.get_button_by_text(
+        text,
+        MatchConfig(use_fuzz=True, use_contains=True, fuzz_threshold=fuzz_threshold),
+    ) is not None
+
+
+def _looks_like_producer_support_selection(boxes: Yolo_Results) -> bool:
+    """通过页面结构识别支援卡选择页，作为标题 OCR 失败时的兜底。"""
+    if not boxes.exists_label(BaseUILabels.SUPPORT_CARD):
+        return False
+    buttons = ButtonList(boxes)
+    if not buttons:
+        return False
+    return (
+        _has_button_text(buttons, ButtonText.RESET)
+        and _has_button_text(buttons, ButtonText.AUTO_SELECT)
+        and _has_button_text(buttons, ButtonText.NEXT)
+    )
+
+
+def _looks_like_producer_memory_selection(boxes: Yolo_Results) -> bool:
+    """通过页面结构识别记忆选择页，作为标题 OCR 失败时的兜底。"""
+    if not boxes.exists_label(BaseUILabels.MEMORY_CARD):
+        return False
+    buttons = ButtonList(boxes)
+    if not buttons:
+        return False
+    return (
+        _has_button_text(buttons, ButtonText.RESET)
+        and _has_button_text(buttons, ButtonText.AUTO_SELECT)
+        and _has_button_text(buttons, ButtonText.NEXT)
+        and _has_button_text(buttons, ProduceText.FORMATION_DETAILS, fuzz_threshold=68)
+    )
+
 
 @timeit
 def get_current_location(boxes: Yolo_Results) -> str | None:
@@ -56,6 +96,14 @@ def get_current_location(boxes: Yolo_Results) -> str | None:
         Location.MAIN_UI.Page.PRODUCE_CARD_LIST: GamePageTypes.Communicate_TAB.SUPPORT_CARD_ARCHIVE,
         Location.MAIN_UI.Page.EVENT_PLOT: GamePageTypes.Communicate_TAB.PAST_EVENTS,
         Location.MAIN_UI.Page.PRODUCER_ILLUSTRATED: GamePageTypes.SUB_MENU.PRODUCER_ILLUSTRATED,
+        Location.MAIN_UI.Page.PRODUCER: GamePageTypes.HOME_TAB.PRODUCER,
+        Location.MAIN_UI.Page.PRODUCER_IDOL_SELECTION: GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__IDOL_SELECTION,
+        Location.MAIN_UI.Page.PRODUCER_SUPPORT_SELECTION: GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_SELECTION,
+        Location.MAIN_UI.Page.PRODUCER_MEMORY_SELECTION: GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_SELECTION,
+        Location.MAIN_UI.Page.PRODUCER_START_CONFIRMATION: GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__START_CONFIRMATION,
+        Location.MAIN_UI.Page.PRODUCER_FORMATION_DETAIL: GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FORMATION_DETAIL,
+        Location.MAIN_UI.Page.PRODUCER_MEMORY_FORMATION_LIST: GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_FORMATION_LIST,
+        Location.MAIN_UI.Page.PRODUCER_SUPPORT_FORMATION_LIST: GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_FORMATION_LIST,
     }
     MAIN_UI_TABS = list(TAB_LABEL_TO_PAGE.keys())[:5]
     
@@ -91,6 +139,13 @@ def get_current_location(boxes: Yolo_Results) -> str | None:
                 logger.debug("OCR returned no text from Current Location frame")
         else:
             logger.debug("Current Location frame is None or empty")
+
+    if _looks_like_producer_support_selection(boxes):
+        logger.debug("通过支援卡槽位与底部按钮特征识别为支援卡选择页")
+        return GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_SELECTION
+    if _looks_like_producer_memory_selection(boxes):
+        logger.debug("通过记忆卡槽位与底部按钮特征识别为记忆选择页")
+        return GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_SELECTION
     
     # Priority 4: Check for loading indicators (lowest priority)
     # Only return LOADING if no other location could be determined

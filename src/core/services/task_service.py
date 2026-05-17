@@ -25,6 +25,7 @@ from src.core.web.websocket import WebSocketManager
 from src.entity.Task import Task
 from src.entity.WebSocketData import WebSocketData
 from src.utils.debug_tools import DebugTools
+from src.utils.i18n_tools import i18n_text, serialize_i18n_value
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_runtime_str
 from src.utils.task_debug_tools import (
@@ -625,10 +626,13 @@ class TaskService:
             WebsocketActions.TaskService.TaskExecutionError,
             WebSocketData(message={
                 "task_id": task.id,
-                "task_name": task.task_name,
+                "task_name": i18n_text(
+                    f"backend.task.names.{task.id}",
+                    fallback=task.task_name,
+                ),
                 "status": task.status,
                 "error_type": type(exception).__name__,
-                "error_message": str(exception),
+                "error_message": getattr(exception, "message", None) or str(exception),
                 "dump_dir": dump_dir or "",
                 "package_path": package_path or "",
                 "package_id": package_download.get("package_id", ""),
@@ -716,7 +720,7 @@ class TaskService:
                 error_type=type(e).__name__,
                 error=str(e),
             )
-            logger.error(f"Task '{task.task_name}({task.id})' timed out")
+            logger.exception(f"Task '{task.task_name}({task.id})' timed out")
             if not self._handle_task_failure_with_cancel_guard(task, e):
                 task.update_status(TaskStatus.CANCELED)
                 record_task_step(self._app, "task.run.canceled", task_id=task.id)
@@ -732,7 +736,7 @@ class TaskService:
                 error=str(e),
             )
             tb_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
-            logger.error(f"Task '{task.task_name}({task.id})' failed:\n{tb_str}")
+            logger.exception(f"Task '{task.task_name}({task.id})' failed:\n{tb_str}")
             if not self._handle_task_failure_with_cancel_guard(task, e):
                 task.update_status(TaskStatus.CANCELED)
                 record_task_step(self._app, "task.run.canceled", task_id=task.id)
@@ -769,7 +773,10 @@ class TaskService:
     def get_task_list(self):
         return {
             task.id: {
-                "description": task.task_name,
+                "description": i18n_text(
+                    f"backend.task.names.{task.id}",
+                    fallback=task.task_name,
+                ),
                 "enable": task.enable,
                 "last_run_time": task.last_run_time,
                 "start_time": task.get_start_time(),

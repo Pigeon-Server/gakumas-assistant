@@ -54,16 +54,16 @@ from src.core.tasks.producer_challenge.gameplay.handler_base import (
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str
 from src.utils.string_tools import fullwidth_to_halfwidth, normalize_ocr_jp
+from src.core.tasks.producer_challenge.gameplay.llm.decision_dumper import DecisionDumper
 
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
     from src.main import AppProcessor
 
-_REWARD_CARD_LABELS = (
+_REWARD_CARD_CLICK_LABELS = (
     BaseUILabels.SKILL_CARD_ACTIVE,
     BaseUILabels.SKILL_CARD_MENTAL,
     BaseUILabels.SKILL_CARD_TRAP,
-    ProducerLabels.SKILL_CARD_INFO,
 )
 
 # 再抽選剩余次数 OCR 匹配正则
@@ -97,6 +97,10 @@ _SKILL_REWARD_SETTLE_POLL_SLEEP = 0.12
 _SKILL_REWARD_SETTLE_MAX_POLLS = 6
 _SKILL_REWARD_SETTLE_STABLE_COUNT_STREAK = 2
 _SKILL_REWARD_SETTLE_STABLE_BASELINE_STREAK = 2
+_SKILL_REWARD_CONFIRM_MAX_POLLS = 10
+_SKILL_REWARD_CONFIRM_POLL_SLEEP = 0.15
+_SKILL_REWARD_CONFIRM_RETRY_LIMIT = 3
+_SKILL_REWARD_CONFIRM_CONSUMED_POLLS = 8
 _SKILL_REWARD_BASELINE_TOLERANCE_RATIO = 0.016
 _SKILL_REWARD_BASELINE_TOLERANCE_MIN = 14
 _SKILL_REWARD_BASELINE_TOLERANCE_MAX = 52
@@ -387,6 +391,38 @@ def _dedup_skill_reward_boxes(
     return deduped
 
 
+def _drop_non_clickable_skill_reward_boxes(
+    app: "AppProcessor",
+    boxes: list[tuple[str, Any]],
+) -> list[tuple[str, Any]]:
+    """丢弃不可点击的奖励识别框，仅保留真实卡面框。
+
+    `Skill Card: Info` 仅用于 OCR 识别卡名和数据库匹配，任何时候都不能作为点击目标。
+    因此奖励页候选点击集合只允许保留真实卡面框。
+    """
+    clickable_boxes = [
+        (label, box)
+        for label, box in boxes
+        if label in _REWARD_CARD_CLICK_LABELS
+    ]
+    debug_tools = getattr(app, "debug_tools", None)
+    if debug_tools is not None:
+        for label, box in boxes:
+            if label not in _REWARD_CARD_CLICK_LABELS:
+                debug_tools.add_box(
+                    int(getattr(box, "x", 0)),
+                    int(getattr(box, "y", 0)),
+                    int(getattr(box, "w", 0)),
+                    int(getattr(box, "h", 0)),
+                    label="skill_reward_non_clickable_box_ignored",
+                    color=(255, 150, 90),
+                    alpha=0.08,
+                    duration=2.0,
+                    font_size=12,
+                )
+    return clickable_boxes
+
+
 # ────────────────────────────────────────────────────────────
 # 数据类型
 # ────────────────────────────────────────────────────────────
@@ -427,7 +463,7 @@ class SkillRewardStepResult:
         status: 步骤执行状态（如 selected/confirmed/skipped）。
         candidate: 本步骤最终选中的候选项对象。
     """
-    status: str  # 状态值："selected" | "confirmed" | "redrawn"
+    status: str  # 状态值："confirmed" | "redrawn"
     candidate: SkillRewardCandidate | None = None
 
 
@@ -807,12 +843,11 @@ def _probe_unresolved_cards(
             CandidateResolution,
         )
         metadata = _enrich_card_metadata(card_id, upgrade_count=upgrade_count)
-        display_name = metadata.get("display_name") or card_name
         resolution = CandidateResolution(
             action_id=f"produce_card:{card_id}:{upgrade_count}",
             candidate_type="produce_card",
             db_id=card_id,
-            display_name=str(display_name),
+            display_name=str(metadata.get("raw_name") or card_name),
             source="info_panel_ocr",
             confidence=0.85,
             metadata=metadata,
@@ -986,11 +1021,12 @@ def collect_skill_reward_candidates(
 ) -> List[SkillRewardCandidate]:
     """采集屏幕上的技能卡奖励选项，按左到右排序。"""
     boxes: list[tuple[str, Any]] = []
-    for label in _REWARD_CARD_LABELS:
+    for label in (*_REWARD_CARD_CLICK_LABELS, ProducerLabels.SKILL_CARD_INFO):
         for box in app.latest_results.filter_by_label(label):
             boxes.append((label, box))
     boxes = _dedup_skill_reward_boxes(app, boxes)
     boxes = _filter_skill_reward_boxes_by_row(app, boxes)
+    boxes = _drop_non_clickable_skill_reward_boxes(app, boxes)
     boxes.sort(key=lambda pair: pair[1].cx)
 
     pending = ctx.pending_skill_reward_index if position == "skill_reward_selected" else None
@@ -1090,8 +1126,24 @@ def decide_skill_reward(
         ctx.pending_skill_reward_index is not None
         and 0 <= ctx.pending_skill_reward_index < len(candidates)
     ):
-        return ctx.pending_skill_reward_index
+        fallback_index = ctx.pending_skill_reward_index
+        fallback_candidate = candidates[fallback_index]
+        DecisionDumper.get_instance().update_last_resolved(
+            resolved_index=fallback_index,
+            resolved_name=str(fallback_candidate.title or ""),
+            resolved_action_id=str(fallback_candidate.action_id or ""),
+            fallback_used=True,
+            fallback_reason="沿用已缓存的技能卡奖励候选",
+        )
+        return fallback_index
 
+    DecisionDumper.get_instance().update_last_resolved(
+        resolved_index=0,
+        resolved_name=str(candidates[0].title or "") if candidates else "",
+        resolved_action_id=str(candidates[0].action_id or "") if candidates else "",
+        fallback_used=True,
+        fallback_reason="默认首选（无 pending 索引）",
+    )
     return 0
 
 
@@ -1112,8 +1164,33 @@ def _infer_selected_skill_reward_index(candidates: Sequence[SkillRewardCandidate
     return None
 
 
-def _click_confirm_button(app: "AppProcessor") -> bool:
-    """点击confirm、按钮并返回结果。
+def _find_confirm_button(results: Any | None) -> Any | None:
+    """查找技能奖励页的领取确认按钮。"""
+    if results is None:
+        return None
+
+    confirm_boxes = results.filter_by_label(ProducerLabels.CONFIRM_BUTTON)
+    if confirm_boxes:
+        return max(confirm_boxes, key=lambda b: int(getattr(b, "cy", 0)))
+
+    # 回退：Confirm 漏检时，仅点击文本明确为“受け取る”的按钮，避免误点“再抽選”。
+    buttons = results.filter_by_label(BaseUILabels.BUTTON)
+    receive_candidates: list[Any] = []
+    for button in buttons:
+        text = normalize_text(ocr_text(getattr(button, "frame", None)))
+        if not text:
+            continue
+        is_redraw = normalize_text(ProduceText.REDRAW) in text or normalize_text(ProduceText.REDRAW_SHORT) in text
+        is_receive = normalize_text(ProduceText.RECEIVE) in text
+        if is_receive and not is_redraw:
+            receive_candidates.append(button)
+    if receive_candidates:
+        return max(receive_candidates, key=lambda b: int(getattr(b, "cy", 0)))
+    return None
+
+
+def _click_confirm_button(app: "AppProcessor", results: Any | None = None) -> bool:
+    """点击 confirm 按钮并返回是否发出点击。
 
     Args:
         app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
@@ -1121,26 +1198,125 @@ def _click_confirm_button(app: "AppProcessor") -> bool:
     Returns:
         bool: 条件判断结果，True 表示满足。
     """
-    confirm_boxes = app.latest_results.filter_by_label(ProducerLabels.CONFIRM_BUTTON)
-    if confirm_boxes:
-        app.device.click_element(confirm_boxes.first())
-        return True
-    # 回退：Confirm 漏检时，仅点击文本明确为“受け取る”的按钮，避免误点“再抽選”。
-    buttons = app.latest_results.filter_by_label(BaseUILabels.BUTTON)
-    if buttons:
-        receive_candidates: list[Any] = []
-        for button in buttons:
-            text = normalize_text(ocr_text(getattr(button, "frame", None)))
-            if not text:
-                continue
-            is_redraw = normalize_text(ProduceText.REDRAW) in text or normalize_text(ProduceText.REDRAW_SHORT) in text
-            is_receive = normalize_text(ProduceText.RECEIVE) in text
-            if is_receive and not is_redraw:
-                receive_candidates.append(button)
-        if receive_candidates:
-            app.device.click_element(max(receive_candidates, key=lambda b: int(getattr(b, "cy", 0))))
+    results = results if results is not None else getattr(app, "latest_results", None)
+    confirm_box = _find_confirm_button(results)
+    if confirm_box is None:
+        return False
+    app.device.click_element(confirm_box)
+    return True
+
+
+def _wait_skill_reward_confirm_consumed(
+    app: "AppProcessor",
+    clicked_results: Any | None,
+) -> bool:
+    """等待领取按钮消失，确认点击确实推进了页面。"""
+    latest_seen = clicked_results
+    for _ in range(_SKILL_REWARD_CONFIRM_CONSUMED_POLLS):
+        sleep(_SKILL_REWARD_CONFIRM_POLL_SLEEP)
+        results = getattr(app, "latest_results", None)
+        if results is None:
+            continue
+        if results is latest_seen:
+            continue
+        latest_seen = results
+        if _find_confirm_button(results) is None:
             return True
     return False
+
+
+def _wait_and_click_skill_reward_confirm(
+    app: "AppProcessor",
+    previous_results: Any | None,
+) -> bool:
+    """等待选卡后的领取按钮刷新，并点击“受け取る”。
+
+    选中技能卡后，YOLO 结果通常会在下一帧把确认按钮更新为可用。
+    这里不使用固定坐标，只等待新的检测结果或短暂轮询同一结果对象。
+    """
+    latest_seen = previous_results
+    for poll_idx in range(_SKILL_REWARD_CONFIRM_MAX_POLLS):
+        if poll_idx > 0:
+            sleep(_SKILL_REWARD_CONFIRM_POLL_SLEEP)
+        results = getattr(app, "latest_results", None)
+        if results is None:
+            continue
+        if results is not latest_seen:
+            latest_seen = results
+        for attempt_idx in range(_SKILL_REWARD_CONFIRM_RETRY_LIMIT):
+            if not _click_confirm_button(app, results=results):
+                break
+            if _wait_skill_reward_confirm_consumed(app, results):
+                return True
+            logger.warning(
+                "skill_reward: 点击受け取る后按钮仍存在，准备重试确认 ({}/{})",
+                attempt_idx + 1,
+                _SKILL_REWARD_CONFIRM_RETRY_LIMIT,
+            )
+            results = getattr(app, "latest_results", None)
+            if results is None:
+                break
+            latest_seen = results
+    return False
+
+
+def _try_confirm_pending_skill_reward(
+    app: "AppProcessor",
+    ctx: "ProduceContext",
+) -> bool:
+    """有 pending 技能卡时，直接尝试领取，不依赖 selected 位置判定。"""
+    if ctx.pending_skill_reward_index is None:
+        return False
+
+    if _confirm_pending_skill_reward(app, ctx):
+        return True
+
+    previous_results = getattr(app, "latest_results", None)
+    if _wait_and_click_skill_reward_confirm(app, previous_results):
+        _commit_pending_skill_reward(ctx)
+        return True
+    return False
+
+
+
+def _commit_pending_skill_reward(ctx: "ProduceContext") -> None:
+    """提交当前 pending 技能卡奖励到上下文。"""
+    logger.debug(f"skill_reward: 确认选择 index={ctx.pending_skill_reward_index}")
+    acquired_db_id = str(ctx.handler_state.get("pending_skill_reward_db_id") or "")
+    ctx.record_operation(
+        "confirm_skill_reward",
+        target=ctx.pending_skill_reward_label or "skill_reward",
+        details={"index": ctx.pending_skill_reward_index, "db_id": acquired_db_id},
+    )
+    if acquired_db_id:
+        ctx.mutate_deck_acquire(
+            acquired_db_id,
+            kind="produce_card",
+            name=ctx.pending_skill_reward_label or "",
+            source="skill_reward",
+        )
+    ctx.clear_skill_reward_pending()
+    # 确认领取后会有展示/过渡动画，设置重试容忍。
+    ctx.handler_state["unknown_retry_override"] = {
+        "reason": "skill_reward_confirmed_transition",
+        "retry_limit": 15,
+        "retry_sleep": 1.0,
+    }
+
+
+def _confirm_pending_skill_reward(
+    app: "AppProcessor",
+    ctx: "ProduceContext",
+) -> bool:
+    """点击领取按钮并提交当前 pending 的技能卡奖励。"""
+    results = getattr(app, "latest_results", None)
+    if not _click_confirm_button(app, results=results):
+        return False
+    if not _wait_skill_reward_confirm_consumed(app, results):
+        logger.warning("skill_reward: 点击受け取る后未观察到领取按钮消失")
+        return False
+    _commit_pending_skill_reward(ctx)
+    return True
 
 
 def execute_skill_reward_step(
@@ -1151,10 +1327,14 @@ def execute_skill_reward_step(
 ) -> SkillRewardStepResult | None:
     """执行一步技能卡奖励交互。
 
-    - skill_reward_selected: 点击确认按钮（第 2 步）
-    - skill_reward_idle: 选择一张卡（第 1 步），可选再抽選
+    - 有 pending 奖励时优先直接点击“受け取る”，不依赖 selected 判定。
+    - skill_reward_selected: 兜底确认当前已选中的卡片
+    - skill_reward_idle: 探查、决策、可选再抽選；选卡后立即尝试确认
     """
     _wait_skill_reward_cards_settle(app, position=position)
+
+    if _try_confirm_pending_skill_reward(app, ctx):
+        return SkillRewardStepResult(status="confirmed")
 
     if position == "skill_reward_selected":
         # selected 语义是“已选中待确认”，此阶段不应再次触发 LLM 选卡。
@@ -1162,11 +1342,26 @@ def execute_skill_reward_step(
             logger.debug("skill_reward: 无待确认卡片，尝试从当前画面推断已选中目标")
             candidates = collect_skill_reward_candidates(app, ctx, position=position)
             if candidates:
+                has_unresolved = any(
+                    not c.db_id and not c.metadata.get("is_redraw")
+                    for c in candidates
+                )
+                if has_unresolved:
+                    _probe_unresolved_cards(app, candidates)
+                    sleep(0.3)
+
                 target: SkillRewardCandidate | None = None
                 reward_candidates = [c for c in candidates if not c.metadata.get("is_redraw")]
-                if len(reward_candidates) == 1:
-                    target = reward_candidates[0]
-                    logger.debug("skill_reward: selected 场景单卡已高亮，直接确认")
+                reliable_reward_candidates = [c for c in reward_candidates if c.db_id or c.title]
+                if len(reliable_reward_candidates) == 1:
+                    # 只有在单卡信息已经完成识别时，才能把 selected 解释为“已选中待确认”。
+                    # 否则可能只是采集不完整，不能跳过逐卡探查与显式选卡。
+                    target = reliable_reward_candidates[0]
+                    logger.debug("skill_reward: selected 场景仅剩1张已识别卡，视为当前选中目标")
+                elif len(reward_candidates) == 1:
+                    logger.warning(
+                        "skill_reward: selected 场景仅采到1张卡，但卡牌信息未识别完成，拒绝直接确认"
+                    )
                 else:
                     inferred_index = _infer_selected_skill_reward_index(candidates)
                     if inferred_index is not None:
@@ -1175,36 +1370,16 @@ def execute_skill_reward_step(
 
                 if target is None:
                     logger.warning(
-                        "skill_reward: selected 场景无法可靠推断已选中卡片，直接确认当前选中态"
+                        "skill_reward: selected 场景无法可靠推断已选中卡片，等待下一轮重新采集/决策"
                     )
-                else:
-                    ctx.pending_skill_reward_index = target.index
-                    ctx.pending_skill_reward_label = target.title or target.label or target.action_id
-                    ctx.handler_state["pending_skill_reward_db_id"] = target.db_id or ""
+                    return None
 
-        if not _click_confirm_button(app):
+                ctx.pending_skill_reward_index = target.index
+                ctx.pending_skill_reward_label = target.title or target.label or target.action_id
+                ctx.handler_state["pending_skill_reward_db_id"] = target.db_id or ""
+
+        if not _try_confirm_pending_skill_reward(app, ctx):
             return None
-        logger.debug(f"skill_reward: 确认选择 index={ctx.pending_skill_reward_index}")
-        acquired_db_id = str(ctx.handler_state.get("pending_skill_reward_db_id") or "")
-        ctx.record_operation(
-            "confirm_skill_reward",
-            target=ctx.pending_skill_reward_label or "skill_reward",
-            details={"index": ctx.pending_skill_reward_index, "db_id": acquired_db_id},
-        )
-        if acquired_db_id:
-            ctx.mutate_deck_acquire(
-                acquired_db_id,
-                kind="produce_card",
-                name=ctx.pending_skill_reward_label or "",
-                source="skill_reward",
-            )
-        ctx.clear_skill_reward_pending()
-        # 确认领取后会有展示/过渡动画，设置重试容忍
-        ctx.handler_state["unknown_retry_override"] = {
-            "reason": "skill_reward_confirmed_transition",
-            "retry_limit": 15,
-            "retry_sleep": 1.0,
-        }
         return SkillRewardStepResult(status="confirmed")
 
     # ── skill_reward_idle: 选卡 / 再抽選 ──
@@ -1243,6 +1418,7 @@ def execute_skill_reward_step(
         return SkillRewardStepResult(status="redrawn", candidate=target)
 
     # ── 普通选卡: 点击卡片高亮选中 ──
+    previous_results = getattr(app, "latest_results", None)
     app.device.click_element(target.box)
     ctx.pending_skill_reward_index = target.index
     ctx.pending_skill_reward_label = target.title or target.label or target.action_id
@@ -1258,7 +1434,15 @@ def execute_skill_reward_step(
         },
     )
     logger.debug(f"skill_reward: selected {target.index} {target.title!r}")
-    return SkillRewardStepResult(status="selected", candidate=target)
+    if _wait_and_click_skill_reward_confirm(app, previous_results):
+        _commit_pending_skill_reward(ctx)
+        return SkillRewardStepResult(status="confirmed", candidate=target)
+    logger.warning(
+        "skill_reward: 已选中 index={} '{}'，但未检测到可点击的受け取る按钮",
+        target.index,
+        target.title,
+    )
+    return None
 
 
 # ────────────────────────────────────────────────────────────
@@ -1311,16 +1495,20 @@ class SkillRewardHandler(GameplayHandler):
             return HandlerResult.ok("skill_reward showcase advance", sleep_after=1.0)
         # 连续 idle 状态选择卡片但无法进入 selected → 可能是展示画面，点击空白推进
         if position == "skill_reward_idle":
-            streak = ctx.handler_state.get("skill_reward_idle_streak", 0) + 1
-            ctx.handler_state["skill_reward_idle_streak"] = streak
-            ctx.handler_state["skill_reward_selected_streak"] = 0
-            if streak >= 4:
-                logger.info(f"skill_reward: 连续{streak}次 idle，判定为展示画面，点击空白推进")
+            if ctx.pending_skill_reward_index is not None:
                 ctx.handler_state["skill_reward_idle_streak"] = 0
-                from src.core.tasks.producer_challenge.shared.common import click_relative_point
-                # 点击对话框区域（卡片下方），避免点击卡片本身触发详情
-                click_relative_point(app, x_ratio=0.5, y_ratio=0.88, label="skill_reward_advance")
-                return HandlerResult.ok("skill_reward advance (display)", sleep_after=1.0)
+                ctx.handler_state["skill_reward_selected_streak"] = 0
+            else:
+                streak = ctx.handler_state.get("skill_reward_idle_streak", 0) + 1
+                ctx.handler_state["skill_reward_idle_streak"] = streak
+                ctx.handler_state["skill_reward_selected_streak"] = 0
+                if streak >= 4:
+                    logger.info(f"skill_reward: 连续{streak}次 idle，判定为展示画面，点击空白推进")
+                    ctx.handler_state["skill_reward_idle_streak"] = 0
+                    from src.core.tasks.producer_challenge.shared.common import click_relative_point
+                    # 点击对话框区域（卡片下方），避免点击卡片本身触发详情
+                    click_relative_point(app, x_ratio=0.5, y_ratio=0.88, label="skill_reward_advance")
+                    return HandlerResult.ok("skill_reward advance (display)", sleep_after=1.0)
         elif position == "skill_reward_selected":
             streak = ctx.handler_state.get("skill_reward_selected_streak", 0) + 1
             ctx.handler_state["skill_reward_selected_streak"] = streak

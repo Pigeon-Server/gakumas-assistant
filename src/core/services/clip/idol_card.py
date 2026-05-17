@@ -84,7 +84,7 @@ class IdolCardCLIP(CLIPTools):
             augment=augment,
         )
 
-    def retrieve(self, image: np.ndarray, similarity_threshold: float = 0.96) -> Optional[IdolCard]:
+    def retrieve(self, image: np.ndarray, similarity_threshold: float = 0.95) -> Optional[IdolCard]:
         """从 CLIP 记忆库检索最匹配的偶像卡。
 
         Args:

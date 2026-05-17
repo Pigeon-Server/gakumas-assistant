@@ -16,11 +16,49 @@
             rounded="0"
             :size="appBarAvatarSize"
           />
-          <h1>Gakumas Assistant</h1>
+          <h1>{{ translateKey('app.name') }}</h1>
         </div>
         <div class="app_bar__fill" />
       </div>
       <div class="app_bar__actions" @dblclick.stop>
+        <div class="app_bar__preferences">
+          <v-menu location="bottom end" :offset="8" :close-on-content-click="true">
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="menuProps"
+                class="app_bar__icon_button"
+                icon="md:translate"
+                variant="text"
+                size="small"
+                :title="translateKey('app.preferences.languageMenu')"
+              />
+            </template>
+            <v-list class="app_bar__menu" density="compact">
+              <v-list-item
+                v-for="option in localeOptions"
+                :key="option.value"
+                :active="localeSelectValue === option.value"
+                :title="option.label"
+                @click="setCurrentLocale(option.value)"
+              >
+                <template #append>
+                  <v-icon
+                    v-if="localeSelectValue === option.value"
+                    icon="md:check"
+                  />
+                </template>
+              </v-list-item>
+            </v-list>
+          </v-menu>
+          <v-btn
+            class="app_bar__icon_button"
+            :icon="themePreferenceIcon"
+            variant="text"
+            size="small"
+            :title="translateKey('app.preferences.themeMenu')"
+            @click="cycleThemePreference"
+          />
+        </div>
         <div v-if="isMobileShell" class="app_bar__mobile_actions">
           <v-btn
             icon="md:format_list_bulleted"
@@ -46,23 +84,23 @@
     </v-app-bar>
 
     <v-navigation-drawer v-if="!isMobileShell" permanent rail>
-      <v-list density="compact" :selected="tabbar_model" nav :color="app.config.globalProperties.$theme.color">
+        <v-list density="compact" :selected="tabbar_model" nav :color="app.config.globalProperties.$theme.color">
         <v-list-item
           prepend-icon="md:format_list_bulleted"
-          title="任务列表"
+          :title="translateKey('app.sections.tasks')"
           value="tasks"
           @click="openSection('tasks')"
         />
         <v-divider/>
         <v-list-item
           prepend-icon="md:settings"
-          title="脚本配置"
+          :title="translateKey('app.sections.settings')"
           value="settings"
           @click="openSection('settings')"
         />
         <v-list-item
           prepend-icon="md:info"
-          title="关于项目"
+          :title="translateKey('app.sections.about')"
           value="about_project"
           @click="openSection('about_project')"
         />
@@ -110,7 +148,7 @@
           <div class="resource-progress-dialog__meta">{{ resourceProgressMeta }}</div>
         </template>
         <template v-else>
-          <div class="resource-progress-dialog__title">首次启动需要下载运行资源</div>
+          <div class="resource-progress-dialog__title">{{ translateKey('settings.resourceUpdate.pendingDialogTitle') }}</div>
           <div class="resource-progress-dialog__description">{{ bootstrapPromptDescription }}</div>
           <div class="resource-progress-dialog__meta">{{ bootstrapPromptMeta }}</div>
           <div class="resource-progress-dialog__actions">
@@ -119,14 +157,14 @@
               prepend-icon="md:download"
               @click="appStore.start_required_resource_download()"
             >
-              同意并开始下载
+              {{ translateKey('settings.resourceUpdate.dialogAgree') }}
             </v-btn>
             <v-btn
               variant="text"
               color="warning"
               @click="appStore.dismiss_required_resource_download_prompt()"
             >
-              稍后处理
+              {{ translateKey('settings.resourceUpdate.dialogLater') }}
             </v-btn>
           </div>
         </template>
@@ -147,6 +185,7 @@
 <script setup>
   import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
   import { useDisplay } from "vuetify";
+  import { useTheme } from "vuetify";
   import PyWebviewWindowControls from "@/components/PyWebviewWindowControls.vue";
   import TaskList from "@/components/lists/task_list.vue";
   import WebSocketView from "@/components/WebSocketView.vue";
@@ -160,10 +199,19 @@
     isWindowHostAvailable,
     syncWindowHostShellClass,
   } from "@/scripts/utils/windowHost.js";
+  import {
+    getCurrentLocale,
+    getCurrentLocalePreference,
+    setCurrentLocale,
+    translateAny,
+    translateKey,
+  } from "@/scripts/i18n/translate";
+  import { useThemePreference } from "@/scripts/theme/themePreference";
   import app from "@/main.js";
   import About from "@/components/about.vue";
 
   const display = useDisplay();
+  const vuetifyTheme = useTheme();
   const appStore = useAppStore();
   const DEFAULT_SECTION = "tasks";
   const WINDOW_DRAG_THRESHOLD = 6;
@@ -172,6 +220,7 @@
   const sidePanelInstantSwap = ref(false);
   const isNativeShell = ref(false);
   const isPywebviewShell = ref(false);
+  const { themePreference, setThemePreference } = useThemePreference(vuetifyTheme);
   const pendingWindowDrag = {
     active: false,
     startX: 0,
@@ -180,10 +229,28 @@
   let removeWindowHostReadyListener = null;
 
   const activeSection = computed(() => tabbar_model.value[0] || DEFAULT_SECTION);
+  const currentLocalePreference = computed(() => getCurrentLocalePreference());
   const isMobileShell = computed(() => display.smAndDown.value);
   const showOverlayPanel = computed(() => isMobileShell.value || display.width.value < 1400);
   const appBarHeight = computed(() => (isMobileShell.value ? 72 : 80));
   const appBarAvatarSize = computed(() => (isMobileShell.value ? 56 : 80));
+  const localeOptions = computed(() => [
+    { value: "zhHans", label: translateKey("settings.language.option.zhHans") },
+    { value: "zhHant", label: translateKey("settings.language.option.zhHant") },
+    { value: "en", label: translateKey("settings.language.option.en") },
+    { value: "ja", label: translateKey("settings.language.option.ja") },
+  ]);
+  const localeSelectValue = computed({
+    get: () => (currentLocalePreference.value === "system" ? getCurrentLocale() : currentLocalePreference.value),
+    set: value => setCurrentLocale(value),
+  });
+  const themePreferenceCycle = ["system", "light", "dark"];
+  const themePreferenceIcon = computed(() => {
+    if (themePreference.value === "system") {
+      return "md:brightness_auto";
+    }
+    return themePreference.value === "light" ? "md:light_mode" : "md:dark_mode";
+  });
   const sidePanelWidth = computed(() => {
     const width = display.width.value;
 
@@ -231,19 +298,23 @@
     return !progress.bytes_total && !(progress.percent > 0 || progress.step_percent > 0);
   });
   const bootstrapPromptDescription = computed(() => (
-    "当前安装包不再内置游戏数据库和本地化资源。确认后将自动下载，完成后程序会继续初始化。"
+    translateKey("settings.resourceUpdate.pendingDialogDescription")
   ));
   const bootstrapPromptMeta = computed(() => {
     const status = appStore.resource_update_status;
     if (!status?.missing_required_resources?.length) {
-      return "首次启动需要下载游戏数据库和本地化资源。";
+      return translateKey("settings.resourceUpdate.pendingDialogMeta");
     }
     return status.missing_required_resources
-      .map(item => `${item.name}（缺少 ${item.missing_count}/${item.required_count} 个文件）`)
+      .map(item => translateKey("settings.resourceUpdate.pendingDialogMetaItem", {
+        name: translateAny(item.name),
+        missing: item.missing_count,
+        required: item.required_count,
+      }))
       .join(" / ");
   });
-  const resourceProgressTitle = computed(() => appStore.resource_update_status?.progress?.title || "正在下载资源");
-  const resourceProgressDescription = computed(() => appStore.resource_update_status?.progress?.message || "正在同步资源，请稍候。");
+  const resourceProgressTitle = computed(() => translateAny(appStore.resource_update_status?.progress?.title) || translateKey("settings.resourceUpdate.downloadProgressTitle"));
+  const resourceProgressDescription = computed(() => translateAny(appStore.resource_update_status?.progress?.message) || translateKey("settings.resourceUpdate.progressFallbackMessage"));
   const resourceProgressMeta = computed(() => appStore.build_resource_update_status_text(appStore.resource_update_status));
 
   watch(showOverlayPanel, value => {
@@ -331,6 +402,12 @@
     getWindowHostApi()?.toggle_maximize_window?.();
   }
 
+  function cycleThemePreference() {
+    const currentIndex = themePreferenceCycle.indexOf(themePreference.value);
+    const nextIndex = (currentIndex + 1) % themePreferenceCycle.length;
+    setThemePreference(themePreferenceCycle[nextIndex]);
+  }
+
   onMounted(() => {
     syncNativeShellState();
     removeWindowHostReadyListener = addWindowHostReadyListener(syncNativeShellState);
@@ -368,7 +445,7 @@
   gap: 12px;
 
   h1 {
-    color: white;
+    color: rgb(var(--v-theme-on-primary));
     font-size: clamp(1.25rem, 2vw, 2rem);
     white-space: nowrap;
     overflow: hidden;
@@ -398,6 +475,31 @@
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  min-height: 100%;
+}
+
+.app_bar__preferences {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app_bar__icon_button {
+  flex: 0 0 auto;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.app_bar__icon_button :deep(.v-btn__overlay) {
+  background: transparent !important;
+}
+
+.app_bar__menu {
+  min-width: 156px;
+  padding: 6px;
 }
 
 .app_bar__mobile_actions {
@@ -411,6 +513,9 @@
   gap: 14px;
   padding: 24px;
   border-radius: 24px;
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  box-shadow: 0 18px 42px rgba(31, 37, 43, 0.08);
 }
 
 .resource-progress-dialog__title {
@@ -419,12 +524,12 @@
 }
 
 .resource-progress-dialog__description {
-  color: rgba(255, 255, 255, 0.82);
+  color: rgba(var(--v-theme-on-surface), 0.82);
   line-height: 1.6;
 }
 
 .resource-progress-dialog__meta {
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(var(--v-theme-on-surface), 0.72);
   line-height: 1.6;
 }
 
@@ -443,7 +548,7 @@
   flex-direction: column;
   overflow: hidden;
   border-radius: 20px;
-  //background: rgb(var(--v-theme-background));
+  background: rgb(var(--v-theme-background));
 
   .page_main {
     flex: 1 1 auto;
@@ -452,6 +557,7 @@
     overflow: hidden;
     align-items: stretch !important;
     justify-content: flex-start !important;
+    background: rgb(var(--v-theme-background));
 
     .page_container {
       flex: 1 1 0;
@@ -507,6 +613,10 @@
   }
 
   .app_bar__actions {
+    gap: 6px;
+  }
+
+  .app_bar__preferences {
     gap: 6px;
   }
 }

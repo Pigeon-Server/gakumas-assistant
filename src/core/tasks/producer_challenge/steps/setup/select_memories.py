@@ -23,6 +23,7 @@ from src.core.tasks.producer_challenge.ui import (
     wait_for_memory_selection_page,
     wait_frame_stable,
 )
+from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Components.CheckBox import CheckBox
 from src.utils.logger import logger
 from src.utils.string_tools import MatchConfig, string_match
@@ -53,13 +54,20 @@ class SelectMemoriesStep(ProduceStep):
             ValueError: 配置了未知的记忆编成模式时抛出。
         """
         mode = ctx.memory_mode.lower()
+        self._select_mode(app, ctx, mode)
+        self._wait_for_confirm_page(app)
+        return True
 
+    def _select_mode(self, app: "AppProcessor", ctx: "ProduceContext", mode) -> bool:
         if mode == "auto":
-            return self._auto_select(app, ctx)
+            self._auto_select(app, ctx)
+            return True
         elif mode == "preset":
-            return self._preset_select(app, ctx)
+            self._preset_select(app, ctx)
+            return True
         else:
-            raise ValueError(f"未知记忆编成模式: {mode!r}")
+            raise ValueError(f"未知支援卡编成模式: {mode!r}")
+
 
     def _auto_select(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """おまかせ 自动编成——先同步レンタル复选框，再执行自动编成。"""
@@ -109,13 +117,13 @@ class SelectMemoriesStep(ProduceStep):
         # 处理「租借可能」弹窗
         self._handle_rental_modal(app, ctx)
 
-        return self._wait_for_confirm_page(app)
+        return True
 
     def _preset_select(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
-        """切换到指定记忆预设编组，并确认仍停留在记忆编成页。
+        """切换到指定记忆预设编组，点击次へ，并处理租借弹窗。
 
         Returns:
-            bool: 成功切换到目标预设且页面仍可识别为记忆编成页时返回 True。
+            bool: 成功切换到目标预设并推进流程时返回 True。
         """
         logger.info(f"使用预设记忆编号: {ctx.memory_preset_index}")
         select_preset_by_horizontal_swipe(
@@ -124,7 +132,20 @@ class SelectMemoriesStep(ProduceStep):
             card_labels=(BaseUILabels.MEMORY_CARD,),
             description="记忆编成",
         )
-        return wait_for_memory_selection_page(app, timeout=6.0)
+        if not wait_for_memory_selection_page(app, timeout=6.0):
+            raise TimeoutError("切换记忆预设后未能停留在记忆编成页")
+
+        # 点击"次へ"推进到确认页
+        app.game_utils.click_button(
+            ButtonText.NEXT,
+            match_config=MatchConfig(fuzz_threshold=80),
+        )
+        app.game_utils.wait_loading()
+
+        # 处理「租借可能」弹窗
+        self._handle_rental_modal(app, ctx)
+
+        return True
 
     @staticmethod
     def _sync_rental_checkbox(app: "AppProcessor", ctx: "ProduceContext"):

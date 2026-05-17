@@ -1,14 +1,16 @@
+import type { I18nText } from '@/scripts/i18n/types'
+
 export interface ConfigItemUI {
-  label?: string
-  hint?: string
+  label?: I18nText
+  hint?: I18nText
   component?: string
   component_props?: Record<string, any>
   options?: Array<Record<string, any> & {
-    title?: string
+    title?: I18nText
     value?: any
     disabled?: boolean
-    disabled_reason?: string
-    description?: string
+    disabled_reason?: I18nText
+    description?: I18nText
   }>
   visible_if?: Record<string, any>
   readonly?: boolean

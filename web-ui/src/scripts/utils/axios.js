@@ -5,6 +5,7 @@
 import axios from 'axios'
 
 import message from '@/scripts/utils/message.js'
+import { translateAny, translateKey } from '@/scripts/i18n/translate'
 
 /* 远程地址前缀 */
 const axiosplus = axios.create()
@@ -18,7 +19,7 @@ const responseSuccess = result => {
   const res = result.data
   let reject = null
   if (res.status === false) {
-    message.showApiErrorMsg(res.msg ?? res.message ?? '操作错误').then(r => {})
+    message.showApiErrorMsg(res.msg ?? res.message ?? translateKey('backend.api.genericError')).then(() => {})
     reject = Promise.reject(result)
     return reject
   }
@@ -38,16 +39,16 @@ const responseError = err => {
     return Promise.reject(err)
   }
   if (err.response.status === 403) {
-    message.showApiErrorMsg(err.response.data.msg ?? '权限不足')
+    message.showApiErrorMsg(err.response.data.msg ?? err.response.data.message ?? translateKey('backend.api.genericError'))
     setTimeout(() => {
       // window.location.href = '/login'
     }, 1000)
   }
   if (err.response.status === 405) {
-    message.showApiErrorMsg(err.response.data.msg ?? '请求错误')
+    message.showApiErrorMsg(err.response.data.msg ?? err.response.data.message ?? translateKey('backend.api.genericError'))
   }
   if (err.response.status === 500) {
-    message.showApiErrorMsg(err.response.data.msg ? err.response.data.msg : '服务器错误')
+    message.showApiErrorMsg(err.response.data.msg ?? err.response.data.message ?? translateKey('backend.api.genericError'))
   }
   return Promise.reject(err)
 }

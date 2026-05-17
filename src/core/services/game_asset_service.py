@@ -16,6 +16,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import TYPE_CHECKING, Callable, Optional
 
+from src.utils.i18n_tools import i18n_text, serialize_i18n_value
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_path
 
@@ -199,8 +200,8 @@ class GameAssetDownloadStatus:
                 "downloading": self.downloading,
                 "progress": self.progress,
                 "total": self.total,
-                "message": self.message,
-                "error": self.error,
+                "message": serialize_i18n_value(self.message),
+                "error": serialize_i18n_value(self.error),
             }
 
     def set(self, **kwargs) -> None:
@@ -276,7 +277,14 @@ def _download_assets_parallel(
         (新下载数量, 已跳过数量) 的二元组。
     """
     total = len(objects)
-    _status.set(total=total, message=f"正在下载 {status_label}...")
+    _status.set(
+        total=total,
+        message=i18n_text(
+            "backend.gameAsset.downloading",
+            fallback=f"正在下载 {status_label}...",
+            label=status_label,
+        ),
+    )
 
     downloaded = 0
     skipped = 0
@@ -347,7 +355,7 @@ def _download_typed_assets(
     """
     if not _is_gom_available():
         msg = "GkmasObjectManager 未就绪（请确认 vendor/GkmasObjectManager 子模块已初始化）"
-        _status.set(error=msg)
+        _status.set(error=i18n_text("backend.api.objectManagerUnavailable", fallback=msg))
         logger.warning(msg)
         return False
 
@@ -358,7 +366,12 @@ def _download_typed_assets(
     try:
         _status.set(
             downloading=True, progress=0, total=0,
-            message=f"正在获取资源清单（{label}）...", error=None,
+            message=i18n_text(
+                "backend.gameAsset.fetchingManifestWithLabel",
+                fallback=f"正在获取资源清单（{label}）...",
+                label=label,
+            ),
+            error=None,
         )
 
         import GkmasObjectManager as gom
@@ -366,14 +379,24 @@ def _download_typed_assets(
         logger.info(f"Fetching game manifest for {label}...")
         manifest = gom.fetch()
 
-        _status.set(message=f"正在检索 {label} 资源...")
+        _status.set(
+            message=i18n_text(
+                "backend.gameAsset.searchingWithLabel",
+                fallback=f"正在检索 {label} 资源...",
+                label=label,
+            ),
+        )
         objects = manifest.search(pattern)
 
         if not objects:
             _status.set(
                 downloading=False,
-                message=f"未找到 {label} 资源",
-                error="no matching objects",
+                message=i18n_text(
+                    "backend.gameAsset.noMatchingResources",
+                    fallback=f"未找到 {label} 资源",
+                    label=label,
+                ),
+                error=i18n_text("backend.gameAsset.noMatchingObjects", fallback="no matching objects"),
             )
             logger.warning(f"No {label} objects found in manifest")
             return False
@@ -396,9 +419,16 @@ def _download_typed_assets(
         total_cached = len(list(asset_dir.glob("*.png")))
         _status.set(
             downloading=False,
-            message=(
-                f"{label}下载完成：{downloaded} 张新图片，"
-                f"{skipped} 张已跳过（共缓存 {total_cached} 张）"
+            message=i18n_text(
+                "backend.gameAsset.downloadCompleted",
+                fallback=(
+                    f"{label}下载完成：{downloaded} 张新图片，"
+                    f"{skipped} 张已跳过（共缓存 {total_cached} 张）"
+                ),
+                label=label,
+                downloaded=downloaded,
+                skipped=skipped,
+                total=total_cached,
             ),
             error=None,
         )
@@ -409,7 +439,15 @@ def _download_typed_assets(
         return True
 
     except Exception as exc:
-        _status.set(downloading=False, error=str(exc), message=f"{label}下载失败")
+        _status.set(
+            downloading=False,
+            error=i18n_text("backend.gameAsset.downloadFailedError", fallback=str(exc), error=str(exc)),
+            message=i18n_text(
+                "backend.gameAsset.downloadFailed",
+                fallback=f"{label}下载失败",
+                label=label,
+            ),
+        )
         logger.error(f"Failed to download {label}: {exc}")
         return False
     finally:
@@ -647,7 +685,15 @@ def _run_download_phase(
     Returns:
         操作是否成功完成（未找到资源时返回 False 但不中断调用方）。
     """
-    _status.set(message=f"正在检索 {label} 资源...", progress=0, total=0)
+    _status.set(
+        message=i18n_text(
+            "backend.gameAsset.searchingWithLabel",
+            fallback=f"正在检索 {label} 资源...",
+            label=label,
+        ),
+        progress=0,
+        total=0,
+    )
     objects = manifest.search(pattern)
     if not objects:
         logger.warning(f"No {label} objects found in manifest")
@@ -668,10 +714,17 @@ def _run_download_phase(
     )
     total_cached = len(list(asset_dir.glob("*.png")))
     _status.set(
-        message=(
-            f"{label}：{downloaded} 张新图片，{skipped} 张已跳过"
-            f"（共缓存 {total_cached} 张）"
-        )
+        message=i18n_text(
+            "backend.gameAsset.phaseCompleted",
+            fallback=(
+                f"{label}：{downloaded} 张新图片，{skipped} 张已跳过"
+                f"（共缓存 {total_cached} 张）"
+            ),
+            label=label,
+            downloaded=downloaded,
+            skipped=skipped,
+            total=total_cached,
+        ),
     )
     logger.success(
         f"{label} done: {downloaded} new, {skipped} skipped, {total_cached} cached"
@@ -700,7 +753,7 @@ def download_all_for_dialog(
     """
     if not _is_gom_available():
         msg = "GkmasObjectManager 未就绪（请确认 vendor/GkmasObjectManager 子模块已初始化）"
-        _status.set(error=msg)
+        _status.set(error=i18n_text("backend.api.objectManagerUnavailable", fallback=msg))
         logger.warning(msg)
         return False
 
@@ -711,7 +764,8 @@ def download_all_for_dialog(
     try:
         _status.set(
             downloading=True, progress=0, total=0,
-            message="正在获取资源清单...", error=None,
+            message=i18n_text("backend.gameAsset.fetchingManifest", fallback="正在获取资源清单..."),
+            error=None,
         )
         import GkmasObjectManager as gom
 
@@ -773,14 +827,18 @@ def download_all_for_dialog(
 
         _status.set(
             downloading=False,
-            message="支援卡相关资源全部下载完成",
+            message=i18n_text("backend.gameAsset.dialogAssetsCompleted", fallback="支援卡相关资源全部下载完成"),
             error=None,
         )
         logger.success("download_all_for_dialog: all phases complete")
         return True
 
     except Exception as exc:
-        _status.set(downloading=False, error=str(exc), message="资源下载失败")
+        _status.set(
+            downloading=False,
+            error=i18n_text("backend.gameAsset.downloadFailedError", fallback=str(exc), error=str(exc)),
+            message=i18n_text("backend.gameAsset.bulkDownloadFailed", fallback="资源下载失败"),
+        )
         logger.error(f"download_all_for_dialog failed: {exc}")
         return False
     finally:

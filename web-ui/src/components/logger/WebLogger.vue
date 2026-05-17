@@ -10,11 +10,11 @@
       class="logger_scrim"
       :class="{ 'logger_scrim--visible': open }"
       type="button"
-      aria-label="关闭日志"
+      :aria-label="translateKey('logger.close')"
       @click="open = false"
     />
 
-    <button class="open_web_logger" @click="open = !open" :title="open ? '关闭日志' : '打开日志'">
+    <button class="open_web_logger" @click="open = !open" :title="open ? translateKey('logger.close') : translateKey('logger.open')">
       <v-icon>{{ open ? 'md:arrow_right' : 'md:arrow_left' }}</v-icon>
     </button>
 
@@ -30,7 +30,7 @@
     >
       <div class="logger_header">
         <div class="left">
-          <span class="title">执行日志</span>
+          <span class="title">{{ translateKey('logger.title') }}</span>
         </div>
       </div>
       <div ref="termContainer" class="term-container"/>
@@ -47,6 +47,7 @@ import 'xterm/css/xterm.css';
 
 import {wsService} from '@/scripts/utils/websocket.js';
 import {WS_ACTION} from '@/scripts/constants.ts';
+import { translateKey } from '@/scripts/i18n/translate';
 
 const TOGGLE_WIDTH = 40;
 const DEFAULT_PANEL_WIDTH = 420;
@@ -372,13 +373,13 @@ onBeforeUnmount(() => {
   flex: 0 0 var(--logger-panel-width);
   width: var(--logger-panel-width);
   height: 100%;
-  background: #1e1e1e;
-  color: #e0e0e0;
+  background: rgb(var(--v-theme-surface));
+  color: rgba(var(--v-theme-on-surface), 0.92);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   pointer-events: auto;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.08);
   box-shadow: -8px 0 20px rgba(0, 0, 0, 0.16);
   z-index: 2;
   transform: translateX(calc(100% + 8px));
@@ -391,7 +392,7 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     align-items: center;
     padding: 8px 12px;
-    border-bottom: 1px solid #444;
+    border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
 
     .left {
       display: flex;
@@ -426,7 +427,7 @@ onBeforeUnmount(() => {
   left: 0;
   bottom: 0;
   width: 8px;
-  background: linear-gradient(to right, rgba(255, 255, 255, 0.08), transparent);
+  background: linear-gradient(to right, rgba(var(--v-theme-on-surface), 0.08), transparent);
   opacity: 0;
   transition: opacity 0.2s ease;
 }
@@ -442,14 +443,14 @@ onBeforeUnmount(() => {
 .term-container {
   flex: 1 1 auto;
   padding: 8px;
-  background: #1b1b1b;
+  background: rgba(var(--v-theme-on-surface), 0.04);
   border-radius: 6px;
   margin: 10px;
   overflow: hidden;
 }
 
 .open_web_logger {
-  background: rgba(30, 30, 30, 0.88);
+  background: rgba(var(--v-theme-surface), 0.92);
   border: none;
   cursor: pointer;
   font-size: 18px;
@@ -457,7 +458,7 @@ onBeforeUnmount(() => {
   height: 56px;
   padding: 0;
   border-radius: 8px 0 0 8px;
-  color: #e0e0e0;
+  color: rgba(var(--v-theme-on-surface), 0.92);
   transition: background 0.2s ease, box-shadow 0.2s ease;
   position: absolute;
   left: calc(var(--logger-toggle-width) * -1);
@@ -477,7 +478,7 @@ onBeforeUnmount(() => {
 }
 
 .open_web_logger:hover {
-  background: rgba(44, 44, 44, 0.96);
+  background: rgba(var(--v-theme-on-surface), 0.12);
 }
 
 @media (max-width: 960px) {

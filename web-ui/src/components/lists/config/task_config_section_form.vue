@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import TaskConfigField from '@/components/lists/config/task_config_field.vue'
+import { translateKey } from '@/scripts/i18n/translate'
 
 const props = defineProps({
   config: {
@@ -49,6 +50,12 @@ function isVisible(visibleIf: Record<string, any> | undefined) {
   if (!visibleIf) {
     return true
   }
+  if (Array.isArray((visibleIf as Record<string, any>)?.__or__)) {
+    return (visibleIf as Record<string, any>).__or__.some(rule => isVisible(rule))
+  }
+  if (Array.isArray((visibleIf as Record<string, any>)?.__and__)) {
+    return (visibleIf as Record<string, any>).__and__.every(rule => isVisible(rule))
+  }
   return Object.entries(visibleIf).every(([path, expected]) => {
     const currentValue = getConfigValue(path)
     if (Array.isArray(expected)) {
@@ -82,7 +89,7 @@ function isVisible(visibleIf: Record<string, any> | undefined) {
     </v-row>
   </v-form>
   <div v-else class="pa-4 text-body-2 text-medium-emphasis">
-    配置加载中…如长时间未显示请重启后端服务以应用配置更新。
+    {{ translateKey('common.loading') }}…{{ translateKey('config.loadingHint') }}
   </div>
 </template>
 

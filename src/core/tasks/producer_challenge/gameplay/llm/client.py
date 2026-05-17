@@ -74,14 +74,36 @@ class LLMClient:
             try:
                 client = self._ensure_client(cfg)
                 t0 = time()
-                resp = client.chat.completions.create(
-                    model=cfg["model"],
-                    messages=messages,
-                    max_tokens=cfg["max_tokens"],
-                    temperature=cfg["temperature"],
-                    top_p=TOP_P,
-                    extra_body={"options": {"num_ctx": cfg["num_ctx"]}},
-                )
+                kwargs = {
+                    "model": cfg["model"],
+                    "messages": messages,
+                    "max_tokens": cfg["max_tokens"],
+                    "temperature": cfg["temperature"],
+                    "top_p": TOP_P,
+                    "reasoning_effort": str(cfg.get("reasoning_effort") or "medium"),
+                }
+                num_ctx = int(cfg.get("num_ctx") or 0)
+                if num_ctx > 0:
+                    kwargs["extra_body"] = {
+                        "options": {"num_ctx": num_ctx},
+                        "think": str(cfg.get("reasoning_effort") or "medium"),
+                    }
+                try:
+                    resp = client.chat.completions.create(**kwargs)
+                except Exception as e:
+                    message = str(e).lower()
+                    if (
+                        "reasoning_effort" in message
+                        or "think" in message
+                        or "unsupported" in message
+                        or "extra_body" in message
+                    ):
+                        kwargs.pop("reasoning_effort", None)
+                        kwargs.pop("extra_body", None)
+                        resp = client.chat.completions.create(**kwargs)
+                    else:
+                        raise
+
                 elapsed = time() - t0
 
                 content = self._extract_content(resp)

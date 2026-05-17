@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
 
+from src.utils.i18n_tools import I18nText, serialize_i18n_value
+
 if TYPE_CHECKING:
     pass
 
@@ -36,9 +38,11 @@ class TaskUserMessage(BaseException):
     而是由 TaskService 直接广播 message 后结束任务。
     """
 
-    def __init__(self, message: str, task: "Task" = None):
+    def __init__(self, message: I18nText | str | dict, task: "Task" = None):
         self.task = task
-        self.message = str(message)
+        self.message = serialize_i18n_value(message)
 
     def __str__(self):
-        return self.message
+        if isinstance(self.message, dict):
+            return self.message.get("fallback") or self.message.get("key", "")
+        return str(self.message)

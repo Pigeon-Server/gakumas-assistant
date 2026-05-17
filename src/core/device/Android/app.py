@@ -15,6 +15,7 @@ from src.core.services.config_service import ConfigService
 from src.entity.BaseDevice import BaseDevice
 from src.utils.adb_runtime import describe_adb_error
 from src.utils.adb_tools import start_DroidCast, ADBShell
+from src.utils.i18n_tools import I18nText, i18n_text
 from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
 from src.utils.performance_tools import timeit
@@ -82,13 +83,13 @@ class Android_App(BaseDevice):
     def __bool__(self) -> bool:
         return bool(self.__adb_device)
 
-    def get_unavailable_reason(self) -> str:
+    def get_unavailable_reason(self) -> I18nText | str:
         return self.__unavailable_reason
 
     def get_unavailable_code(self) -> str:
         return self.__unavailable_code
 
-    def _set_unavailable(self, code: str, reason: str) -> bool:
+    def _set_unavailable(self, code: str, reason: I18nText | str) -> bool:
         self.__unavailable_code = code
         self.__unavailable_reason = reason
         logger.warning(reason)
@@ -134,16 +135,27 @@ class Android_App(BaseDevice):
         self.__droidcast_service_status = False
         self.__u2_device = None
 
-    def _handle_runtime_adb_error(self, exc: Exception, action: str):
+    def _handle_runtime_adb_error(self, exc: Exception, action: str) -> None:
+        """处理运行时 ADB 异常并保留可翻译的嵌套错误信息。"""
         code, reason = describe_adb_error(exc, **self._get_adb_error_context())
         self._reset_runtime_services()
         self.__adb_device = None
-        self._set_unavailable(code, f"{action}失败：{reason}")
-        raise RuntimeError(self.__unavailable_reason) from exc
+        self._set_unavailable(
+            code,
+            i18n_text(
+                "backend.adb.initFailed",
+                fallback=f"{action}失败：{reason}",
+                message=reason,
+            ),
+        )
+        raise RuntimeError(str(self.__unavailable_reason)) from exc
 
     def _verify_adb_transport(self) -> bool:
         if self.__adb_device is None:
-            return self._set_unavailable("adb_not_connected", "当前未连接到 ADB 设备。")
+            return self._set_unavailable(
+                "adb_not_connected",
+                i18n_text("backend.adb.notConnected", fallback="当前未连接到 ADB 设备。"),
+            )
         try:
             self.__adb_device.shell("echo connected")
         except Exception as exc:
@@ -151,7 +163,7 @@ class Android_App(BaseDevice):
             self.__adb_device = None
             return self._set_unavailable(code, reason)
         self.__unavailable_code = ""
-        self.__unavailable_reason = ""
+        self.__unavailable_reason = i18n_text("backend.adb.noError", fallback="")
         return True
 
     def __connect_ADB(self) -> bool:
@@ -195,7 +207,14 @@ class Android_App(BaseDevice):
                 return self._set_unavailable(code, reason)
             return self._verify_adb_transport()
         else:
-            return self._set_unavailable("invalid_connect_mode", f"无效的 ADB 连接模式：{self.__connect_mode}")
+            return self._set_unavailable(
+                "invalid_connect_mode",
+                i18n_text(
+                    "backend.adb.invalidConnectMode",
+                    fallback=f"无效的 ADB 连接模式：{self.__connect_mode}",
+                    mode=self.__connect_mode,
+                ),
+            )
 
     def __connect_uiautomator2(self):
         logger.debug("Try connect to UIAutomator2...")

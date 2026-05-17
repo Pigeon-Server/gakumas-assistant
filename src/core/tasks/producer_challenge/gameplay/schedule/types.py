@@ -12,7 +12,7 @@ class ScheduleActionCandidate:
         index: 候选项在当前列表中的序号（通常从上到下或从左到右）。
         title: 候选项主标题文本，通常来自 OCR 或预设文案。
         kind: 候选项类型标签，用于规则筛选与优先级判断。
-        recommended: 是否为系统推荐项（True 表示推荐）。
+        recommended: 是否与周行动预览提示的属性类型一致（True 表示一致）。
         selected: 是否为当前已选中项（True 表示已选中）。
         box: 候选项对应的检测框，用于点击、裁剪和可视化调试。
         action_id: 标准化动作标识，用于在决策层与执行层之间关联同一操作。

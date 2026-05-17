@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import inputDialog from '@/components/dialogs/inputDialogV2.vue'
 import taskErrorReportDialog from '@/components/dialogs/taskErrorReportDialog.vue'
 import vuetify from '@/plugins/vuetify'
+import i18n from '@/plugins/i18n'
 import confirmDialog from "@/components/dialogs/confirmDialog.vue";
 
 async function init_Dialog (component, other_data = {}) {
@@ -23,6 +24,7 @@ async function init_Dialog (component, other_data = {}) {
         dialogApp = undefined
       },
       ...other_data }).use(vuetify)
+      .use(i18n)
     document.body.append(mountNode)
     dialogApp.mount(mountNode)
   })
@@ -54,8 +56,8 @@ async function showInput_Dialog (title = '', label = '', hint = '', type = 'text
 async function confirm (
   title,
   text,
-  confirm_text="确认",
-  close_text="取消",
+  confirm_text=null,
+  close_text=null,
   persistent=false
 ) {
   return init_Dialog(confirmDialog, {

@@ -1,4 +1,6 @@
 <script>
+import { translateKey } from '@/scripts/i18n/translate'
+
 export default {
   name: 'InputDialog',
   props: {
@@ -22,7 +24,7 @@ export default {
     confirm_text: {
       type: String,
       required: false,
-      default: '确认',
+      default: null,
     },
     close: {
       type: Function,
@@ -31,13 +33,21 @@ export default {
     close_text: {
       type: String,
       required: false,
-      default: '取消',
+      default: null,
     }
   },
   data () {
     return {
       flag: true,
     }
+  },
+  computed: {
+    resolvedConfirmText () {
+      return this.confirm_text || translateKey('common.confirm')
+    },
+    resolvedCloseText () {
+      return this.close_text || translateKey('common.cancel')
+    },
   }
 }
 </script>
@@ -57,8 +67,8 @@ export default {
         {{ description }}
       </v-card-text>
       <v-card-actions>
-        <v-btn color="success" @click="confirm()">{{confirm_text}}</v-btn>
-        <v-btn color="error" @click="close()">{{close_text}}</v-btn>
+        <v-btn color="success" @click="confirm()">{{ resolvedConfirmText }}</v-btn>
+        <v-btn color="error" @click="close()">{{ resolvedCloseText }}</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

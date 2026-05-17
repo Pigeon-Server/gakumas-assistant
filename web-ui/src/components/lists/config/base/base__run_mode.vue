@@ -1,26 +1,34 @@
 <script setup>
 import app from "@/main.js";
+import { translateAny, translateOptionTitle } from '@/scripts/i18n/translate'
 const props = defineProps({
   data: Object
 })
-const runMode = ref([
-  {id: "PC", title: "电脑端（DMM）"},
-  {id: "Phone", title: "手机端"}
-])
 </script>
 
 <template>
   <v-list-item>
     <v-select
-      label="运行模式"
-      hint="脚本的执行模式（需重启生效）"
-      :items="runMode"
-      item-title="title"
-      item-value="id"
+      :label="translateAny(props.data.base.run_mode.ui.label)"
+      :hint="translateAny(props.data.base.run_mode.ui.hint)"
+      :items="props.data.base.run_mode.ui.options"
+      :item-title="translateOptionTitle"
+      item-value="value"
       :item-color="app.config.globalProperties.$theme.color"
       v-model="props.data.base.run_mode.value"
       persistent-hint
-    />
+    >
+      <template #item="{ props: optionProps, item: optionItem }">
+        <v-list-item
+          v-bind="optionProps"
+          :title="translateAny(optionItem.raw?.title)"
+          :subtitle="translateAny(optionItem.raw?.disabled_reason)"
+        />
+      </template>
+      <template #selection="{ item: optionItem }">
+        <span>{{ translateAny(optionItem.raw?.title) }}</span>
+      </template>
+    </v-select>
   </v-list-item>
 </template>
 

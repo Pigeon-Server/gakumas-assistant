@@ -5,6 +5,7 @@ import ConfigAutoField from "@/components/lists/config/config_auto_field.vue";
 import dialogs from "@/scripts/utils/dialogs.js";
 import message from "@/scripts/utils/message.js";
 import {useAppStore} from "@/stores/app.ts";
+import { translateAny, translateKey } from '@/scripts/i18n/translate'
 
 const props = defineProps({
   modelValue: {
@@ -81,32 +82,38 @@ const resourceUpdateProgressIndeterminate = computed(() => {
   return !progress.bytes_total && !(progress.percent > 0 || progress.step_percent > 0)
 })
 const resourceUpdateActionLabel = computed(() => (
-  appStore.resource_update_status?.bootstrap_required ? "下载所需资源" : "立即更新"
+  appStore.resource_update_status?.bootstrap_required
+    ? translateKey('settings.resourceUpdate.bootstrapAction')
+    : translateKey('settings.resourceUpdate.applyAction')
 ))
 const resourceUpdateCheckLabel = computed(() => (
-  resourceUpdateChecking.value ? "检查中" : "检查更新"
+  resourceUpdateChecking.value
+    ? translateKey('settings.resourceUpdate.checkActionBusy')
+    : translateKey('settings.resourceUpdate.checkActionIdle')
 ))
 const resourceUpdateStateLabel = computed(() => {
   const status = appStore.resource_update_status
   if (status?.bootstrap_required && !status?.required_resources_ready) {
-    return status?.updating ? "下载中" : "待下载"
+    return status?.updating
+      ? translateKey('settings.resourceUpdate.state.downloading')
+      : translateKey('settings.resourceUpdate.state.bootstrapPending')
   }
   if (status?.updating) {
-    return "更新中"
+    return translateKey('settings.resourceUpdate.state.updating')
   }
   if (status?.checking) {
-    return "检查中"
+    return translateKey('settings.resourceUpdate.state.checking')
   }
   if (status?.has_update) {
-    return "发现更新"
+    return translateKey('settings.resourceUpdate.state.updateAvailable')
   }
   if (status?.last_error) {
-    return "检查异常"
+    return translateKey('settings.resourceUpdate.state.error')
   }
   if (status?.last_checked_at) {
-    return "已检查"
+    return translateKey('settings.resourceUpdate.state.checked')
   }
-  return "待检查"
+  return translateKey('settings.resourceUpdate.state.pending')
 })
 const resourceUpdateStateColor = computed(() => {
   const status = appStore.resource_update_status
@@ -128,25 +135,25 @@ const resourceUpdateHeadline = computed(() => {
   const status = appStore.resource_update_status
   if (status?.bootstrap_required && !status?.required_resources_ready) {
     return status?.updating
-      ? "正在下载首次启动所需的游戏数据库和本地化资源"
-      : "当前安装包不再内置游戏数据库和本地化资源，首次启动需要先下载"
+      ? translateKey('settings.resourceUpdate.headline.bootstrapRunning')
+      : translateKey('settings.resourceUpdate.headline.bootstrapIdle')
   }
   if (status?.updating) {
-    return "正在同步资源仓库并重新加载游戏数据库"
+    return translateKey('settings.resourceUpdate.headline.updating')
   }
   if (status?.checking) {
-    return "正在检查 GakumasTranslationData 和 gakumasu-diff 的上游更新"
+    return translateKey('settings.resourceUpdate.headline.checking')
   }
   if (status?.has_update) {
-    return "发现资源仓库新版本，可以立即更新"
+    return translateKey('settings.resourceUpdate.headline.hasUpdate')
   }
   if (status?.last_error) {
-    return "最近一次检查存在异常"
+    return translateKey('settings.resourceUpdate.headline.lastError')
   }
   if (status?.last_checked_at) {
-    return "当前资源仓库状态已同步"
+    return translateKey('settings.resourceUpdate.headline.checked')
   }
-  return "可手动检查，也可等待启动或定时检查"
+  return translateKey('settings.resourceUpdate.headline.idle')
 })
 const resourceUpdateNoticeClass = computed(() => {
   switch (appStore.resource_update_latest_event_type) {
@@ -168,6 +175,12 @@ function isVisible(visibleIf) {
   if (!visibleIf) {
     return true
   }
+  if (Array.isArray(visibleIf.__or__)) {
+    return visibleIf.__or__.some(rule => isVisible(rule))
+  }
+  if (Array.isArray(visibleIf.__and__)) {
+    return visibleIf.__and__.every(rule => isVisible(rule))
+  }
   return Object.entries(visibleIf).every(([path, expected]) => {
     const currentValue = getConfigValue(path)
     if (Array.isArray(expected)) {
@@ -184,7 +197,7 @@ function shouldShowDivider(entryKey) {
 async function refreshDmmPlayerToken() {
   await apis.refresh_ddm_player_token()
   await appStore.load_config()
-  await message.showSuccess("启动参数刷新成功")
+  await message.showSuccess(translateKey('settings.refreshLaunchArgsSuccess'))
 }
 
 async function checkResourceUpdates() {
@@ -204,10 +217,13 @@ async function triggerResourceAction() {
 }
 
 function reset() {
-  dialogs.confirm("是否要重置所有设置项", "请谨慎操作，该操作回导致所有设置项恢复默认（包括任务设置）").then(() => {
+  dialogs.confirm(
+    translateKey('dialogs.resetSettingsTitle'),
+    translateKey('dialogs.resetSettingsText'),
+  ).then(() => {
     appStore.reset_config();
   }).catch(() => {
-    console.log("用户取消")
+    console.debug("reset settings dialog dismissed")
   })
 }
 
@@ -227,20 +243,20 @@ const drawerValue = computed({
     :class="['settings_drawer', { 'settings_drawer--instant': disableTransition }]"
   >
     <v-card class="settings_drawer__title_card">
-      <div class="settings_drawer__title">脚本设置</div>
+      <div class="settings_drawer__title">{{ translateKey('settings.title') }}</div>
     </v-card>
     <v-divider/>
     <v-list nav>
-      <v-list-item subtitle="基础设置"/>
+      <v-list-item :subtitle="translateKey('settings.basicSection')"/>
       <template v-for="entry in settingEntries" :key="entry.key">
         <v-divider v-if="shouldShowDivider(entry.key)" />
         <ConfigAutoField :config="appStore.config" :item="entry.item" />
       </template>
       <v-list-item v-if="showResourceUpdateTools" class="resource-update-list-item">
         <div class="resource-update-panel">
-          <div class="resource-update-panel__header">
-            <div class="resource-update-panel__header-main">
-              <div class="resource-update-panel__title">资源更新</div>
+            <div class="resource-update-panel__header">
+              <div class="resource-update-panel__header-main">
+              <div class="resource-update-panel__title">{{ translateKey('settings.resourceUpdate.title') }}</div>
               <div class="resource-update-panel__headline">{{ resourceUpdateHeadline }}</div>
             </div>
             <v-chip
@@ -257,11 +273,11 @@ const drawerValue = computed({
             v-if="appStore.resource_update_status?.bootstrap_required && !appStore.resource_update_status?.required_resources_ready"
             class="resource-update-panel__notice resource-update-panel__notice--info"
           >
-            首次启动前需要先下载游戏数据库和本地化资源。下载失败会自动重试，完成后程序会自动继续初始化。
+            {{ translateKey('settings.resourceUpdate.bootstrapNotice') }}
           </div>
           <div v-if="resourceUpdateProgressActive" class="resource-update-panel__progress">
             <div class="resource-update-panel__progress-head">
-              <span>{{ resourceUpdateProgress?.title || "正在处理资源" }}</span>
+              <span>{{ translateAny(resourceUpdateProgress?.title) || translateKey('settings.resourceUpdate.progressFallbackTitle') }}</span>
               <span>{{ resourceUpdateProgressValue.toFixed(1) }}%</span>
             </div>
             <v-progress-linear
@@ -272,14 +288,14 @@ const drawerValue = computed({
               height="10"
             />
             <div class="resource-update-panel__progress-meta">
-              {{ resourceUpdateProgress?.message || resourceUpdateStatusText }}
+              {{ translateAny(resourceUpdateProgress?.message) || resourceUpdateStatusText }}
             </div>
           </div>
           <div
             v-if="resourceUpdateLastError"
             class="resource-update-panel__notice resource-update-panel__notice--warning"
           >
-            最近错误：{{ resourceUpdateLastError }}
+            {{ translateKey('settings.resourceUpdate.recentError', { error: translateAny(resourceUpdateLastError) }) }}
           </div>
           <div v-if="appStore.resource_update_latest_event" :class="resourceUpdateNoticeClass">
             {{ appStore.resource_update_latest_event }}
@@ -316,7 +332,7 @@ const drawerValue = computed({
           append-icon="md:refresh"
           @click="refreshDmmPlayerToken"
         >
-          刷新启动参数
+          {{ translateKey('settings.refreshLaunchArgs') }}
         </v-btn>
       </v-list-item>
     </v-list>
@@ -325,18 +341,20 @@ const drawerValue = computed({
         <v-btn
           class="settings_actions__button"
           @click="appStore.save_config()"
-          color="green"
+          color="success"
+          variant="tonal"
           append-icon="md:save"
         >
-          保存设置
+          {{ translateKey('common.save') }}
         </v-btn>
         <v-btn
           class="settings_actions__button"
           @click="reset()"
           color="warning"
+          variant="tonal"
           append-icon="md:restart_alt"
         >
-          恢复默认
+          {{ translateKey('common.reset') }}
         </v-btn>
       </div>
     </template>
@@ -370,14 +388,18 @@ const drawerValue = computed({
 
 .settings_drawer__title_card {
   flex: 0 0 auto;
-  min-height: 60px;
+  min-height: 64px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 0 18px;
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+  box-shadow: 0 1px 0 rgba(var(--v-theme-on-surface), 0.02);
 }
 
 .settings_drawer__title {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   font-weight: 700;
   line-height: 1.2;
   text-align: left;
@@ -408,8 +430,9 @@ const drawerValue = computed({
   gap: 12px;
   padding: 16px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.025);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.06);
+  box-shadow: 0 8px 20px rgba(31, 37, 43, 0.04);
 }
 
 .resource-update-panel__header {
@@ -437,13 +460,13 @@ const drawerValue = computed({
 
 .resource-update-panel__headline {
   margin-top: 6px;
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(var(--v-theme-on-surface), 0.72);
   font-size: 13px;
   line-height: 1.45;
 }
 
 .resource-update-panel__meta {
-  color: rgba(255, 255, 255, 0.86);
+  color: rgba(var(--v-theme-on-surface), 0.86);
   font-size: 13px;
   line-height: 1.5;
   white-space: normal;
@@ -462,18 +485,18 @@ const drawerValue = computed({
 }
 
 .resource-update-panel__notice--success {
-  background: rgba(76, 175, 80, 0.14);
-  color: #b9f6ca;
+  background: rgba(var(--v-theme-success), 0.10);
+  color: rgb(var(--v-theme-success));
 }
 
 .resource-update-panel__notice--warning {
-  background: rgba(255, 179, 0, 0.14);
-  color: #ffe082;
+  background: rgba(var(--v-theme-warning), 0.10);
+  color: rgb(var(--v-theme-warning));
 }
 
 .resource-update-panel__notice--info {
-  background: rgba(66, 165, 245, 0.14);
-  color: #bbdefb;
+  background: rgba(var(--v-theme-info), 0.10);
+  color: rgb(var(--v-theme-info));
 }
 
 .resource-update-panel__progress {
@@ -486,11 +509,11 @@ const drawerValue = computed({
   justify-content: space-between;
   gap: 12px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.92);
+  color: rgba(var(--v-theme-on-surface), 0.92);
 }
 
 .resource-update-panel__progress-meta {
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(var(--v-theme-on-surface), 0.72);
   font-size: 12px;
   line-height: 1.5;
 }

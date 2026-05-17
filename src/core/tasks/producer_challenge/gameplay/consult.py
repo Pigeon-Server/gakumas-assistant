@@ -909,7 +909,7 @@ def _resolve_selection_targets_via_probe(
             action_id=f"{consult_action}:{resolution.db_id or best_candidate.index}",
             candidate_type="consult_action",
             db_id=resolution.db_id,
-            display_name=resolution.display_name or name,
+            display_name=str(resolution.metadata.get("raw_name") or name),
             source=resolution.source,
             confidence=resolution.confidence,
             metadata={
@@ -1025,7 +1025,7 @@ def _resolve_unchanged_exchange_retry(
     if not last_action_id and not last_db_id:
         return None
 
-    current_signature = _consult_exchange_signature(candidates)
+    current_signature = tuple(str(value or "") for value in _consult_exchange_signature(candidates))
     previous_signature = tuple(
         str(value or "")
         for value in (ctx.handler_state.get("consult_last_exchange_signature") or [])

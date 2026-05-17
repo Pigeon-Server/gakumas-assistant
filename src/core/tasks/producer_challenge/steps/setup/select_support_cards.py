@@ -15,6 +15,8 @@ from src.core.tasks.producer_challenge.ui import (
     click_modal_action_with_retry,
     select_preset_by_horizontal_swipe,
 )
+from src.entity.Game.Components.Button import ButtonList
+from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.logger import logger
 from src.utils.string_tools import MatchConfig
 
@@ -43,12 +45,38 @@ class SelectSupportCardsStep(ProduceStep):
         Raises:
             ValueError: 配置了未知的支援卡编成模式时抛出。
         """
+        app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_SELECTION)
         mode = ctx.support_card_mode.lower()
 
+        self._select_mode(app, ctx, mode)
+        buttons = ButtonList(app.latest_results)
+        flag = False
+        for _ in range(5):
+            next_button = buttons.get_button_by_text(ButtonText.NEXT)
+            if not next_button:
+                logger.warning(f"find {ButtonText.NEXT} button not found, try again.....")
+                sleep(0.5)
+                continue
+            if next_button.is_disabled():
+                logger.warning(f"find {ButtonText.NEXT} button is disabled, switch to automatic grouping")
+                self._auto_select(app, ctx)
+                sleep(0.5)
+                continue
+            flag = True
+        if not flag:
+            raise RuntimeError("未能完成支援卡选择")
+        self._advance_to_memory_selection(app)
+        return True
+
+
+
+    def _select_mode(self, app: "AppProcessor", ctx: "ProduceContext", mode) -> bool:
         if mode == "auto":
-            return self._auto_select(app, ctx)
+            self._auto_select(app, ctx)
+            return True
         elif mode == "preset":
-            return self._preset_select(app, ctx)
+            self._preset_select(app, ctx)
+            return True
         else:
             raise ValueError(f"未知支援卡编成模式: {mode!r}")
 
@@ -96,7 +124,7 @@ class SelectSupportCardsStep(ProduceStep):
                     raise TimeoutError("支援卡自动编成确认弹窗未能关闭")
         sleep(1)
 
-        return self._advance_to_memory_selection(app)
+        return True
 
     def _advance_to_memory_selection(self, app: "AppProcessor") -> bool:
         """点击“次へ”并等待页面稳定进入记忆编成页。
@@ -116,11 +144,8 @@ class SelectSupportCardsStep(ProduceStep):
         # 等待记忆编成页（等待支援卡标签消失 + 记忆卡标签出现，或空白槽位）
         # 有时页面切换有延迟，等待久一点
         for _ in range(20):
-            if app.latest_results.exists_label(BaseUILabels.MEMORY_CARD):
+            if app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_SELECTION):
                 logger.debug("成功进入记忆编成页")
-                return True
-            if app.latest_results.exists_label(BaseUILabels.BLANK_SLOT):
-                logger.debug("进入记忆编成页（存在空白槽位）")
                 return True
             # 如果仍在支援卡页面（仍有“おまかせ”“リセット”按钮）则继续等待。
             sleep(1)
@@ -144,4 +169,4 @@ class SelectSupportCardsStep(ProduceStep):
             card_labels=(BaseUILabels.SUPPORT_CARD,),
             description="支援卡编成",
         )
-        return self._advance_to_memory_selection(app)
+        return True

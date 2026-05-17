@@ -5,7 +5,7 @@ import threading
 from typing import TYPE_CHECKING
 
 import cv2
-from time import sleep
+from time import monotonic, sleep
 
 from src.constants.path.debug_path import DebugPath
 from src.constants.device.device_type import DeviceType
@@ -31,6 +31,7 @@ from src.entity.BaseDevice import BaseDevice
 from src.entity.Game.Game_Info import GameStatusManager
 from src.entity.WebSocketData import WebSocketData
 from src.utils.debug_tools import DebugTools
+from src.utils.i18n_tools import I18nText, i18n_text, serialize_i18n_value
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str
 
@@ -70,7 +71,10 @@ class AppProcessor:
         self._device_status = {
             "available": False,
             "code": "initializing",
-            "message": "正在初始化设备...",
+            "message": i18n_text(
+                "backend.app.deviceInitializing",
+                fallback="正在初始化设备...",
+            ),
         }
         self._device_polling_thread = threading.Thread(target=self._poll_device_state_loop, daemon=True)
         self._init_environment()
@@ -238,11 +242,15 @@ class AppProcessor:
             return {
                 "available": True,
                 "code": "ready",
-                "message": "",
+                "message": i18n_text("backend.app.status.ready", fallback=""),
             }
         reason_getter = getattr(device, "get_unavailable_reason", None)
         code_getter = getattr(device, "get_unavailable_code", None)
-        message = reason_getter() if callable(reason_getter) else "当前设备不可用。"
+        message = (
+            reason_getter()
+            if callable(reason_getter)
+            else i18n_text("backend.app.deviceUnavailable", fallback="当前设备不可用。")
+        )
         code = code_getter() if callable(code_getter) else "device_unavailable"
         return {
             "available": False,
@@ -329,7 +337,7 @@ class AppProcessor:
 
     def get_device_status(self) -> dict:
         with self._device_state_lock:
-            return dict(self._device_status)
+            return serialize_i18n_value(dict(self._device_status))
 
     def _handle_device_capture_failure(self, exc: Exception):
         self._update_device_state(getattr(self, "device", None))
@@ -410,6 +418,55 @@ class AppProcessor:
     @property
     def latest_results(self):
         return self.yolo_engine.latest_results
+
+    def switch_yolo_model(
+        self,
+        model_type: str,
+        *,
+        wait_for_first_result: bool = False,
+        wait_timeout: float = 4.0,
+        settle_seconds: float = 0.0,
+    ) -> bool:
+        """同步切换 YOLO 模型，并可等待切换后的首个新推理结果。
+
+        Args:
+            model_type: 目标模型类型。
+            wait_for_first_result: 是否等待切换后的首个新推理结果。
+            wait_timeout: 等待首帧的最长时长。
+            settle_seconds: 切换后额外等待的稳定时间。
+
+        Returns:
+            bool: 是否在超时前等到新的推理结果。
+        """
+        previous_results = getattr(self, "latest_results", None)
+        logger.debug(f"Switch YOLO model to {model_type}")
+        self.yolo_engine.load_model(model_type)
+        if settle_seconds > 0:
+            sleep(settle_seconds)
+        if not wait_for_first_result:
+            return True
+        return self._wait_for_fresh_yolo_results(
+            previous_results,
+            model_type=model_type,
+            timeout=wait_timeout,
+        )
+
+    def _wait_for_fresh_yolo_results(
+        self,
+        previous_results,
+        *,
+        model_type: str,
+        timeout: float = 4.0,
+    ) -> bool:
+        """等待模型切换后出现新的非空检测结果。"""
+        started_at = monotonic()
+        while monotonic() - started_at < timeout:
+            current_results = self.latest_results
+            if current_results is not None and current_results is not previous_results:
+                return True
+            sleep(0.1)
+        logger.warning(f"切换 YOLO 模型到 {model_type} 后等待新推理结果超时")
+        return False
 
     def create_device_instance(self) -> BaseDevice:
         """

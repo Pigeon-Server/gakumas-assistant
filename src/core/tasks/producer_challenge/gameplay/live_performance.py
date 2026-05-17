@@ -12,6 +12,7 @@ YOLO モデルは縦画面用にトレーニングされているため、
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from time import sleep, time
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,24 @@ if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
     from src.main import AppProcessor
 
+_LIVE_TAP_PROBE_INTERVAL = 5
+_LIVE_TAP_EARLY_PROBE_LIMIT = 3
+_LIVE_TAP_ROI_X1_RATIO = 0.18
+_LIVE_TAP_ROI_X2_RATIO = 0.82
+_LIVE_TAP_ROI_Y1_RATIO = 0.68
+_LIVE_TAP_ROI_Y2_RATIO = 0.88
+_LIVE_TAP_CONFIRMED_KEY = "live_tap_to_start_confirmed"
+
+
+@dataclass(frozen=True)
+class _TapStartProbeWindow:
+    """定义 LIVE 开始提示 OCR 探测窗口。"""
+
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
 
 def _is_landscape(frame) -> bool:
     """フレームが横画面かどうかを判定（width > height × 1.3）。"""
@@ -39,22 +58,69 @@ def _is_landscape(frame) -> bool:
     return frame.shape[1] > frame.shape[0] * 1.3
 
 
-def _detect_tap_to_start(frame) -> bool:
-    """OCR で "TAP TO START" テキストを検出。"""
+def _build_tap_to_start_probe_window(frame) -> _TapStartProbeWindow | None:
+    """构建 LIVE 开始提示的 OCR 探测区域。"""
     if frame is None:
+        return None
+    height, width = frame.shape[:2]
+    x1 = max(0, int(width * _LIVE_TAP_ROI_X1_RATIO))
+    x2 = min(width, int(width * _LIVE_TAP_ROI_X2_RATIO))
+    y1 = max(0, int(height * _LIVE_TAP_ROI_Y1_RATIO))
+    y2 = min(height, int(height * _LIVE_TAP_ROI_Y2_RATIO))
+    if x2 <= x1 + 10 or y2 <= y1 + 10:
+        return None
+    return _TapStartProbeWindow(x1=x1, y1=y1, x2=x2, y2=y2)
+
+
+def _detect_tap_to_start(frame, *, debugger=None) -> bool:
+    """OCR 检测「TAP TO START」提示，仅扫描横屏下方中心区域。"""
+    probe_window = _build_tap_to_start_probe_window(frame)
+    if probe_window is None:
         return False
-    text = ocr_text(frame)
+    if debugger is not None:
+        debugger.add_box(
+            probe_window.x1,
+            probe_window.y1,
+            probe_window.x2,
+            probe_window.y2,
+            label="live_tap_to_start_roi",
+            color=(120, 220, 255),
+            alpha=0.1,
+            duration=2.5,
+            font_size=16,
+        )
+    crop = frame[probe_window.y1:probe_window.y2, probe_window.x1:probe_window.x2]
+    text = ocr_text(crop)
     if not text:
         return False
     upper = text.upper()
     for variant in ProduceText.TAP_TO_START_OCR_VARIANTS:
         if variant.upper() in upper:
+            if debugger is not None:
+                debugger.add_box(
+                    probe_window.x1,
+                    probe_window.y1,
+                    probe_window.x2,
+                    probe_window.y2,
+                    label=f"live_tap_to_start:{variant}",
+                    color=(120, 255, 160),
+                    alpha=0.14,
+                    duration=2.5,
+                    font_size=16,
+                )
             return True
     return False
 
 
-def classify_live_position(frame) -> str:
-    """ライブ演出の二級ポジションを判定。
+def _should_probe_tap_to_start(wait_count: int) -> bool:
+    """判断当前轮是否需要再次 OCR 探测开始提示。"""
+    if wait_count < _LIVE_TAP_EARLY_PROBE_LIMIT:
+        return True
+    return wait_count % _LIVE_TAP_PROBE_INTERVAL == 0
+
+
+def classify_live_position(frame, *, should_probe_tap: bool = True, debugger=None) -> str:
+    """ライブ演出の二级位置判定。
 
     Returns:
         GameplayPosition の live 系ポジション文字列。
@@ -64,7 +130,7 @@ def classify_live_position(frame) -> str:
     if not _is_landscape(frame):
         # 恢复竖屏，说明 Live 已结束。
         return GameplayPosition.LIVE_FINISHED
-    if _detect_tap_to_start(frame):
+    if should_probe_tap and _detect_tap_to_start(frame, debugger=debugger):
         return GameplayPosition.LIVE_TAP_TO_START
     return GameplayPosition.LIVE_PERFORMING
 
@@ -109,7 +175,14 @@ class LivePerformanceHandler(GameplayHandler):
         if frame is None:
             return HandlerResult.waiting("ライブ: フレーム取得待ち")
 
-        live_pos = classify_live_position(frame)
+        wait_count = int(ctx.handler_state.get("live_wait_count", 0) or 0)
+        tap_confirmed = bool(ctx.handler_state.get(_LIVE_TAP_CONFIRMED_KEY, False))
+        should_probe_tap = (not tap_confirmed) and _should_probe_tap_to_start(wait_count)
+        live_pos = classify_live_position(
+            frame,
+            should_probe_tap=should_probe_tap,
+            debugger=getattr(app, "debug_tools", None),
+        )
         logger.info(f"[ライブ演出] position={live_pos}")
 
         if live_pos == GameplayPosition.LIVE_TAP_TO_START:
@@ -124,6 +197,7 @@ class LivePerformanceHandler(GameplayHandler):
     def _tap_to_start(self, app, ctx, frame):
         """「TAP TO START」画面 → 中央タップで開始。"""
         logger.info("[ライブ演出] TAP TO START 検出 → タップして開始")
+        ctx.handler_state[_LIVE_TAP_CONFIRMED_KEY] = True
         # 横屏时坐标系旋转，点击屏幕中央。
         h, w = frame.shape[:2]
         cx, cy = w // 2, h // 2
@@ -137,6 +211,9 @@ class LivePerformanceHandler(GameplayHandler):
         ctx.consecutive_unknowns = 0
         elapsed = ctx.handler_state.get("live_wait_count", 0) + 1
         ctx.handler_state["live_wait_count"] = elapsed
+        # 连续进入演出态后，可视为已经越过开始提示，不再做高频 OCR 探测。
+        if elapsed >= _LIVE_TAP_EARLY_PROBE_LIMIT:
+            ctx.handler_state[_LIVE_TAP_CONFIRMED_KEY] = True
         if elapsed % 10 == 0:
             logger.info(f"[ライブ演出] 演出中... ({elapsed} 回待機)")
         return HandlerResult.ok("ライブ演出待ち", sleep_after=3.0)
@@ -153,5 +230,6 @@ class LivePerformanceHandler(GameplayHandler):
         """
         logger.success("[ライブ演出] 終了検出（縦画面に復帰）")
         ctx.handler_state["live_wait_count"] = 0
+        ctx.handler_state[_LIVE_TAP_CONFIRMED_KEY] = False
         # 等待切换到结果画面。
         return HandlerResult.ok("ライブ終了", sleep_after=2.0)

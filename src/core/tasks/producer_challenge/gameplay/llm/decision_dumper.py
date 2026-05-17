@@ -48,6 +48,7 @@ class DecisionRecord:
     # ── 局面快照 ──
     llm_snapshot: dict[str, Any] = field(default_factory=dict)
     stage_context: dict[str, Any] = field(default_factory=dict)
+    decision_explanation: dict[str, Any] = field(default_factory=dict)
 
     # ── 候选动作 ──
     candidates: list[dict[str, Any]] = field(default_factory=list)
@@ -85,6 +86,7 @@ class DecisionRecord:
             "revision": self.revision,
             "llm_snapshot": self.llm_snapshot,
             "stage_context": self.stage_context,
+            "decision_explanation": self.decision_explanation,
             "candidates": self.candidates,
             "llm_actions": self.llm_actions,
             "legal_actions": self.legal_actions,
@@ -97,6 +99,7 @@ class DecisionRecord:
                 "model": self.llm_model,
                 "elapsed_sec": round(self.llm_elapsed_sec, 3),
             },
+            "summary_id": None,
             "decision": {
                 "chosen_index": self.chosen_index,
                 "resolved_index": self.resolved_index,
@@ -214,6 +217,7 @@ class DecisionDumper:
             revision=int(decision_state.get("revision", 0)),
             llm_snapshot=_safe_serialize(decision_state.get("llm_snapshot", {})),
             stage_context=_safe_serialize(decision_state.get("stage_context", {})),
+            decision_explanation=_safe_serialize(decision_state.get("decision_explanation", {})),
             candidates=_safe_serialize(decision_state.get("candidates", [])),
             llm_actions=_safe_serialize(decision_state.get("llm_actions", [])),
             legal_actions=list(decision_state.get("legal_actions", [])),

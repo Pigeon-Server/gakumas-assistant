@@ -108,9 +108,9 @@ def action__wait_enter_home(app: "AppProcessor"):
     while True:
         current_location = app.game_utils.update_current_location()
         if current_location in {
-            GamePageTypes.PRODUCER__MEMORY_DETAIL,
-            GamePageTypes.PRODUCER__MEMORY_CANDIDATE_LIST,
-            GamePageTypes.PRODUCER__FORMATION_DETAILS,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_DETAIL,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_CANDIDATE_LIST,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FORMATION_DETAIL,
         }:
             logger.debug(f"Closing special page before returning home: {current_location}")
             try:
@@ -120,8 +120,8 @@ def action__wait_enter_home(app: "AppProcessor"):
             sleep(1)
             continue
         if current_location in {
-            GamePageTypes.PRODUCER__MEMORY_SELECTION,
-            GamePageTypes.PRODUCER__FINAL_CONFIRM,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_SELECTION,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FINAL_CONFIRM,
         }:
             logger.debug(f"Leaving producer page before returning home: {current_location}")
             try:

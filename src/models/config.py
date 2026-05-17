@@ -5,7 +5,11 @@ from peewee import AutoField, CharField, BooleanField, DateTimeField
 
 from src.utils.logger import logger
 from src.models.base import BaseModel
-from src.entity.Config import Config as ConfigEntity, ConfigItem
+from src.entity.Config import (
+    Config as ConfigEntity,
+    ConfigItem,
+    apply_legacy_producer_decision_backend,
+)
 
 
 class ConfigModel(BaseModel):
@@ -33,6 +37,10 @@ class ConfigModel(BaseModel):
                 continue
 
             section_name, item_name = keys
+
+            if section_name == "base" and item_name == "producer_decision_backend":
+                apply_legacy_producer_decision_backend(config, row.value)
+                continue
 
             section = getattr(config, section_name, None)
             if section is None:

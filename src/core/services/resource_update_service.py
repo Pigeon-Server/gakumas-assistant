@@ -24,6 +24,7 @@ from src.constants.websocket_actions import WebsocketActions
 from src.core.services.config_service import ConfigService
 from src.core.web.websocket import WebSocketManager
 from src.entity.WebSocketData import WebSocketData
+from src.utils.i18n_tools import i18n_text, serialize_i18n_value
 from src.utils.logger import logger
 from src.utils.runtime_paths import (
     get_runtime_root,
@@ -283,10 +284,10 @@ class ResourceUpdateService:
 
     def apply_updates(self):
         if not self._operation_lock.acquire(blocking=False):
-            return False, "当前正在检查或更新资源仓库", self.get_status()
+            return False, i18n_text("resource.progress.operationLocked", fallback="当前正在检查或更新资源仓库"), self.get_status()
         try:
             if self._app.task_queue.queue_status() != TaskStatus.PENDING:
-                return False, "任务执行中，无法更新资源仓库", self.get_status()
+                return False, i18n_text("resource.progress.taskRunning", fallback="任务执行中，无法更新资源仓库"), self.get_status()
             self._publish_status(
                 {
                     **self.get_status(),
@@ -318,7 +319,7 @@ class ResourceUpdateService:
                 current_status["updating"] = False
                 current_status["progress"] = self._build_empty_progress()
                 self._publish_status(current_status)
-                return True, "资源仓库已经是最新版本", current_status
+                return True, i18n_text("resource.progress.upToDate", fallback="资源仓库已经是最新版本"), current_status
 
             update_errors = []
             total_steps = len(repositories_to_update)
@@ -344,14 +345,22 @@ class ResourceUpdateService:
                 current_status = self._check_updates_locked(updating=True)
                 current_status["updating"] = False
                 current_status["progress"] = self._build_empty_progress()
-                current_status["last_error"] = "；".join(update_errors)
+                current_status["last_error"] = i18n_text(
+                    "resource.progress.updateFailed",
+                    fallback="；".join(update_errors),
+                    error="；".join(update_errors),
+                )
                 self._publish_status(current_status)
-                return False, f"资源仓库更新失败：{current_status['last_error']}", current_status
+                return False, i18n_text(
+                    "resource.progress.updateFailed",
+                    fallback=f"资源仓库更新失败：{current_status['last_error']}",
+                    error=serialize_i18n_value(current_status["last_error"]),
+                ), current_status
 
             self._publish_progress(
                 phase="reload_database",
-                title="正在重载游戏数据库",
-                message="资源下载完成，正在重载游戏数据库和相关服务。",
+                title=i18n_text("resource.progress.reloadingDatabase", fallback="正在重载游戏数据库"),
+                message=i18n_text("resource.progress.reloadingDatabaseMessage", fallback="资源下载完成，正在重载游戏数据库和相关服务。"),
                 current_step=total_steps,
                 total_steps=total_steps,
                 step_percent=100,
@@ -371,7 +380,11 @@ class ResourceUpdateService:
                         ],
                         checking=False,
                         updating=False,
-                        last_error=f"资源已更新，但重载游戏数据库失败：{exc}",
+                        last_error=i18n_text(
+                            "resource.progress.reloadFailed",
+                            fallback=f"资源已更新，但重载游戏数据库失败：{exc}",
+                            error=str(exc),
+                        ),
                         last_checked_at=datetime.now().isoformat(timespec="seconds"),
                     )
                     failed_status["progress"] = self._build_empty_progress()
@@ -399,20 +412,24 @@ class ResourceUpdateService:
             if final_status["required_resources_ready"]:
                 # 资源更新后触发 CLIP 预训练（后台异步）
                 self._trigger_clip_training_after_update()
-                return True, "资源仓库更新完成，游戏数据库已重新加载", final_status
-            return False, "资源下载未完成，仍缺少运行所需资源", final_status
+                return True, i18n_text("resource.progress.updateCompleted", fallback="资源仓库更新完成，游戏数据库已重新加载"), final_status
+            return False, i18n_text("resource.progress.resourcesMissing", fallback="资源下载未完成，仍缺少运行所需资源"), final_status
         except Exception as exc:
             logger.error(f"Apply resource updates failed: {exc}")
             current_status = self._build_status_from_repositories(
                 repositories=self.get_status().get("repositories", []),
                 checking=False,
                 updating=False,
-                last_error=str(exc),
+                last_error=i18n_text(
+                    "resource.progress.updateFailed",
+                    fallback=str(exc),
+                    error=str(exc),
+                ),
                 last_checked_at=self.get_status().get("last_checked_at"),
             )
             current_status["progress"] = self._build_empty_progress()
             self._publish_status(current_status)
-            return False, f"资源仓库更新失败：{exc}", current_status
+            return False, i18n_text("resource.progress.updateFailed", fallback=f"资源仓库更新失败：{exc}", error=str(exc)), current_status
         finally:
             self._operation_lock.release()
 
@@ -461,16 +478,16 @@ class ResourceUpdateService:
             if self._is_periodic_check_enabled() and not status["last_error"]:
                 self._refresh_event.set()
             if status["last_error"]:
-                return True, f"资源仓库检查完成，但部分仓库检查失败：{status['last_error']}", status
+                return True, i18n_text("resource.progress.checkCompletedWithErrors", fallback=f"资源仓库检查完成，但部分仓库检查失败：{status['last_error']}", error=serialize_i18n_value(status["last_error"])), status
             if status["has_update"]:
-                return True, "资源仓库检查完成，发现可用更新", status
-            return True, "资源仓库已经是最新版本", status
+                return True, i18n_text("resource.progress.checkHasUpdate", fallback="资源仓库检查完成，发现可用更新"), status
+            return True, i18n_text("resource.progress.checkUpToDate", fallback="资源仓库已经是最新版本"), status
         except Exception as exc:
             logger.error(f"Manual resource update check failed: {exc}")
             current_status = self._merge_status_metadata(self.get_status())
-            current_status["last_error"] = str(exc)
+            current_status["last_error"] = i18n_text("resource.progress.checkFailed", fallback=str(exc), error=str(exc))
             self._publish_status(current_status)
-            return False, f"资源仓库检查失败：{exc}", current_status
+            return False, i18n_text("resource.progress.checkFailed", fallback=f"资源仓库检查失败：{exc}", error=str(exc)), current_status
         finally:
             self._operation_lock.release()
 
@@ -489,10 +506,10 @@ class ResourceUpdateService:
                 status = self._publish_status(
                     {
                         **self.get_status(),
-                        "checking": False,
-                        "updating": False,
-                        "last_error": "",
-                    }
+                    "checking": False,
+                    "updating": False,
+                    "last_error": "",
+                }
                 )
                 return status
             return self._check_updates_locked(
@@ -526,11 +543,18 @@ class ResourceUpdateService:
         checked_at = datetime.now()
         if reset_timer_always or (reset_timer_on_success and not errors):
             self._schedule_next_check(checked_at)
+        last_error = ""
+        if errors:
+            last_error = i18n_text(
+                "resource.progress.checkFailed",
+                fallback="；".join(errors),
+                error="；".join(errors),
+            )
         status = self._build_status_from_repositories(
             repositories=repositories,
             checking=False,
             updating=updating,
-            last_error="；".join(errors),
+            last_error=last_error,
             last_checked_at=checked_at.isoformat(timespec="seconds"),
         )
         self._publish_status(status)
@@ -685,8 +709,8 @@ class ResourceUpdateService:
         repository: Optional[ResourceRepository] = None,
         *,
         phase: str,
-        title: str,
-        message: str,
+        title,
+        message,
         current_step: int = 0,
         total_steps: int = 0,
         step_percent: float = 0.0,
@@ -710,7 +734,7 @@ class ResourceUpdateService:
             "phase": phase,
             "title": title,
             "message": message,
-            "repository": "" if repository is None else repository.name,
+            "repository": "" if repository is None else i18n_text(f"resource.repository.{repository.path.replace('/', '.')}", fallback=repository.name),
             "repository_path": "" if repository is None else repository.path,
             "current_step": current_step,
             "total_steps": total_steps,
@@ -786,7 +810,7 @@ class ResourceUpdateService:
         active_path = self._get_repository_active_path(repository)
         mutable_path = self._get_repository_mutable_path(repository)
         status = {
-            "name": repository.name,
+            "name": i18n_text(f"resource.repository.{repository.path.replace('/', '.')}", fallback=repository.name),
             "path": repository.path,
             "exists": active_path.exists(),
             "dirty": False,
@@ -828,7 +852,7 @@ class ResourceUpdateService:
                 }
             )
         except Exception as exc:
-            status["error"] = str(exc)
+            status["error"] = i18n_text("resource.progress.repositoryError", fallback=str(exc), error=str(exc))
         return status
 
     def _build_local_repository_status(
@@ -856,7 +880,7 @@ class ResourceUpdateService:
             or local_version.get("branch", "")
         )
         return {
-            "name": repository.name,
+            "name": i18n_text(f"resource.repository.{repository.path.replace('/', '.')}", fallback=repository.name),
             "path": repository.path,
             "exists": active_path.exists(),
             "dirty": dirty,
@@ -869,7 +893,7 @@ class ResourceUpdateService:
             "remote_branch": remote_branch,
             "version_source": local_version.get("source", ""),
             "update_method": update_method,
-            "error": "",
+            "error": i18n_text("resource.progress.noError", fallback=""),
         }
 
     def _update_repository_with_retry(
@@ -904,8 +928,8 @@ class ResourceUpdateService:
                 self._publish_progress(
                     repository,
                     phase="retry_waiting",
-                    title=f"正在重试下载 {repository.name}",
-                    message=f"{repository.name} 下载失败，将在 {retry_wait_seconds} 秒后自动重试。",
+                    title=i18n_text("resource.progress.retrying", fallback=f"正在重试下载 {repository.name}", repository=repository.name),
+                    message=i18n_text("resource.progress.retryingMessage", fallback=f"{repository.name} 下载失败，将在 {retry_wait_seconds} 秒后自动重试。", repository=repository.name, seconds=retry_wait_seconds),
                     current_step=current_step,
                     total_steps=total_steps,
                     step_percent=0,
@@ -914,7 +938,7 @@ class ResourceUpdateService:
                     retry_wait_seconds=retry_wait_seconds,
                 )
                 sleep(retry_wait_seconds)
-        raise RuntimeError(f"已自动重试 {self.DOWNLOAD_RETRY_LIMIT} 次，最后一次错误：{last_error}")
+        raise RuntimeError(str(i18n_text("resource.progress.retryExceeded", fallback=f"已自动重试 {self.DOWNLOAD_RETRY_LIMIT} 次，最后一次错误：{last_error}", error=str(last_error))))
 
     def _update_repository(
         self,
@@ -932,8 +956,16 @@ class ResourceUpdateService:
             self._publish_progress(
                 repository,
                 phase="git_fetch",
-                title=f"正在更新 {repository.name}",
-                message=f"正在通过 Git 更新 {repository.name}。",
+                title=i18n_text(
+                    "resource.progress.updatingRepository",
+                    fallback=f"正在更新 {repository.name}",
+                    repository=repository.name,
+                ),
+                message=i18n_text(
+                    "resource.progress.updatingRepositoryWithGit",
+                    fallback=f"正在通过 Git 更新 {repository.name}。",
+                    repository=repository.name,
+                ),
                 current_step=current_step,
                 total_steps=total_steps,
                 step_percent=10,
@@ -951,8 +983,16 @@ class ResourceUpdateService:
             self._publish_progress(
                 repository,
                 phase="completed",
-                title=f"{repository.name} 已更新",
-                message=f"{repository.name} 已同步到最新版本。",
+                title=i18n_text(
+                    "resource.progress.repositoryUpdated",
+                    fallback=f"{repository.name} 已更新",
+                    repository=repository.name,
+                ),
+                message=i18n_text(
+                    "resource.progress.repositorySynced",
+                    fallback=f"{repository.name} 已同步到最新版本。",
+                    repository=repository.name,
+                ),
                 current_step=current_step,
                 total_steps=total_steps,
                 step_percent=100,
@@ -981,8 +1021,16 @@ class ResourceUpdateService:
             self._publish_progress(
                 repository,
                 phase="replace",
-                title=f"正在安装 {repository.name}",
-                message=f"正在写入 {repository.name} 到本地资源目录。",
+                title=i18n_text(
+                    "resource.progress.installingRepository",
+                    fallback=f"正在安装 {repository.name}",
+                    repository=repository.name,
+                ),
+                message=i18n_text(
+                    "resource.progress.writingRepository",
+                    fallback=f"正在写入 {repository.name} 到本地资源目录。",
+                    repository=repository.name,
+                ),
                 current_step=current_step,
                 total_steps=total_steps,
                 step_percent=92,
@@ -994,8 +1042,16 @@ class ResourceUpdateService:
         self._publish_progress(
             repository,
             phase="completed",
-            title=f"{repository.name} 已更新",
-            message=f"{repository.name} 已更新到最新版本。",
+            title=i18n_text(
+                "resource.progress.repositoryUpdated",
+                fallback=f"{repository.name} 已更新",
+                repository=repository.name,
+            ),
+            message=i18n_text(
+                "resource.progress.repositoryUpdatedToLatest",
+                fallback=f"{repository.name} 已更新到最新版本。",
+                repository=repository.name,
+            ),
             current_step=current_step,
             total_steps=total_steps,
             step_percent=100,
@@ -1018,8 +1074,17 @@ class ResourceUpdateService:
         self._publish_progress(
             repository,
             phase="download_prepare",
-            title=f"正在准备下载 {repository.name}",
-            message=f"正在准备从 {remote.url} 下载 {repository.name}。",
+            title=i18n_text(
+                "resource.progress.preparingRepositoryDownload",
+                fallback=f"正在准备下载 {repository.name}",
+                repository=repository.name,
+            ),
+            message=i18n_text(
+                "resource.progress.preparingRepositoryDownloadMessage",
+                fallback=f"正在准备从 {remote.url} 下载 {repository.name}。",
+                repository=repository.name,
+                url=remote.url,
+            ),
             current_step=current_step,
             total_steps=total_steps,
             step_percent=5,
@@ -1113,8 +1178,16 @@ class ResourceUpdateService:
                     self._publish_progress(
                         repository,
                         phase="downloading",
-                        title=f"正在下载 {repository.name}",
-                        message=f"正在从 GitHub 下载 {repository.name} 资源包。",
+                        title=i18n_text(
+                            "resource.progress.downloadingRepository",
+                            fallback=f"正在下载 {repository.name}",
+                            repository=repository.name,
+                        ),
+                        message=i18n_text(
+                            "resource.progress.downloadingRepositoryFromGithub",
+                            fallback=f"正在从 GitHub 下载 {repository.name} 资源包。",
+                            repository=repository.name,
+                        ),
                         current_step=current_step,
                         total_steps=total_steps,
                         step_percent=step_percent,
@@ -1128,8 +1201,16 @@ class ResourceUpdateService:
         self._publish_progress(
             repository,
             phase="extracting",
-            title=f"正在解压 {repository.name}",
-            message=f"正在解压 {repository.name} 资源包。",
+            title=i18n_text(
+                "resource.progress.extractingRepository",
+                fallback=f"正在解压 {repository.name}",
+                repository=repository.name,
+            ),
+            message=i18n_text(
+                "resource.progress.extractingRepositoryMessage",
+                fallback=f"正在解压 {repository.name} 资源包。",
+                repository=repository.name,
+            ),
             current_step=current_step,
             total_steps=total_steps,
             step_percent=85,
@@ -1166,8 +1247,16 @@ class ResourceUpdateService:
         self._publish_progress(
             repository,
             phase="downloading",
-            title=f"正在下载 {repository.name}",
-            message=f"正在通过 Git 下载 {repository.name} 资源包。",
+            title=i18n_text(
+                "resource.progress.downloadingRepository",
+                fallback=f"正在下载 {repository.name}",
+                repository=repository.name,
+            ),
+            message=i18n_text(
+                "resource.progress.downloadingRepositoryWithGit",
+                fallback=f"正在通过 Git 下载 {repository.name} 资源包。",
+                repository=repository.name,
+            ),
             current_step=current_step,
             total_steps=total_steps,
             step_percent=40,

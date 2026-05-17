@@ -1,28 +1,33 @@
 <script setup>
+import { computed } from "vue";
+
 import app from "@/main.js";
+import { translateAny, translateOptionTitle } from '@/scripts/i18n/translate'
 const props = defineProps({
   data: Object
 })
 
-// random|highest_power|lowest_power|balanced_power
-const items = [
-  {id: "4H", title: "4小时（最低）"},
-  {id: "8H", title: "8小时"},
-  {id: "12H", title: "12小时（最高）"},
-]
+const items = computed(() => props.data?.working_hours?.ui?.options || [])
 </script>
 
 <template>
   <v-select
-    label="任务派遣时间"
-    hint=""
+    :label="translateAny(data.working_hours.ui.label)"
+    :hint="translateAny(data.working_hours.ui.hint)"
     :items="items"
-    item-title="title"
-    item-value="id"
+    :item-title="translateOptionTitle"
+    item-value="value"
     :item-color="app.config.globalProperties.$theme.color"
     v-model="data.working_hours.value"
     persistent-hint
-  />
+  >
+    <template #item="{ props: optionProps, item: optionItem }">
+      <v-list-item v-bind="optionProps" :title="translateAny(optionItem.raw?.title)" />
+    </template>
+    <template #selection="{ item: optionItem }">
+      <span>{{ translateAny(optionItem.raw?.title) }}</span>
+    </template>
+  </v-select>
 </template>
 
 <style scoped>

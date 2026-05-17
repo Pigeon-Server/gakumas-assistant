@@ -74,6 +74,7 @@ class GameplayPosition:
 
     P_DRINK_SELECTED = "p_drink_selected"
     P_DRINK_IDLE = "p_drink_idle"
+    P_DRINK_SHOWCASE = "p_drink_showcase"
 
     SKILL_REWARD_SELECTED = "skill_reward_selected"
     SKILL_REWARD_IDLE = "skill_reward_idle"

@@ -4,6 +4,7 @@ import TaskConfigSectionForm from "@/components/lists/config/task_config_section
 import { useAppStore } from "@/stores/app.js";
 import { TaskStatus } from "@/scripts/constants";
 import dialogs from "@/scripts/utils/dialogs.js";
+import { getCurrentLocaleTag, translateAny, translateKey } from '@/scripts/i18n/translate'
 
 const app_store = useAppStore();
 const props = defineProps({
@@ -27,13 +28,13 @@ const props = defineProps({
 const emit = defineEmits(["update:modelValue"])
 
 const statusMap = {
-  PENDING: {color: "orange", icon: "md:schedule", label: "等待中"},
-  RUNNING: {color: "blue", icon: "md:cached", label: "运行中"},
-  SUSPENDED: {color: "blue-lighten-1", icon: "md:pause_circle", label: "挂起中"},
-  SUCCESS: {color: "green", icon: "md:task_alt", label: "已完成"},
-  FAILED: {color: "red", icon: "md:error", label: "执行错误"},
-  CANCELED: {color: "grey", icon: "md:cancel", label: "已取消"},
-  UNKNOWN: {color: "grey", icon: "md:indeterminate_question_box", label: "未知状态"},
+  PENDING: {color: "orange", icon: "md:schedule", labelKey: "tasks.status.PENDING"},
+  RUNNING: {color: "blue", icon: "md:cached", labelKey: "tasks.status.RUNNING"},
+  SUSPENDED: {color: "blue-lighten-1", icon: "md:pause_circle", labelKey: "tasks.status.SUSPENDED"},
+  SUCCESS: {color: "green", icon: "md:task_alt", labelKey: "tasks.status.SUCCESS"},
+  FAILED: {color: "red", icon: "md:error", labelKey: "tasks.status.FAILED"},
+  CANCELED: {color: "grey", icon: "md:cancel", labelKey: "tasks.status.CANCELED"},
+  UNKNOWN: {color: "grey", icon: "md:indeterminate_question_box", labelKey: "tasks.status.UNKNOWN"},
 }
 
 function normalizeTimestamp(ts) {
@@ -47,8 +48,8 @@ function normalizeTimestamp(ts) {
 
 function formatAbsoluteTime(ts) {
   const t = normalizeTimestamp(ts)
-  if (!t) return "未运行"
-  return new Intl.DateTimeFormat("zh-CN", {
+  if (!t) return translateKey('common.notRun')
+  return new Intl.DateTimeFormat(getCurrentLocaleTag(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -59,17 +60,17 @@ function formatAbsoluteTime(ts) {
 }
 
 function formatRelativeTime(ts) {
-  if (!ts || ts <= 0) return "未运行"
+  if (!ts || ts <= 0) return translateKey('common.notRun')
   ts = normalizeTimestamp(ts)
   const now = Date.now()
   const diff = Math.floor((now - ts) / 1000) // 秒差
 
-  if (diff < 5) return `刚刚`
-  if (diff < 60) return `${diff}秒前`
-  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
-  if (diff < 172800) return "昨天"
-  return `${Math.floor(diff / 86400)}天前`
+  if (diff < 5) return translateKey('tasks.relativeTime.justNow')
+  if (diff < 60) return translateKey('tasks.relativeTime.secondsAgo', { count: diff })
+  if (diff < 3600) return translateKey('tasks.relativeTime.minutesAgo', { count: Math.floor(diff / 60) })
+  if (diff < 86400) return translateKey('tasks.relativeTime.hoursAgo', { count: Math.floor(diff / 3600) })
+  if (diff < 172800) return translateKey('tasks.relativeTime.yesterday')
+  return translateKey('tasks.relativeTime.daysAgo', { count: Math.floor(diff / 86400) })
 }
 
 const taskExecutionBlocked = computed(() => (
@@ -118,8 +119,10 @@ async function runTaskFrom(taskName, taskDescription) {
     return
   }
   await dialogs.confirm(
-    "是否从这里开始执行",
-    `将从“${taskDescription}”开始，按任务列表顺序执行后续已启用自动任务。`
+    translateKey('dialogs.runFromTitle'),
+    translateKey('dialogs.runFromDescription', {
+      task: translateAny(taskDescription),
+    }),
   )
   runningFromTaskName.value = taskName
   try {
@@ -157,9 +160,9 @@ async function toggleTask(taskName, enable) {
   >
     <v-card class="task_drawer__title_card">
       <div>
-        <div class="task_drawer__title">任务列表</div>
+        <div class="task_drawer__title">{{ translateKey('tasks.title') }}</div>
         <div v-if="taskExecutionBlocked" class="task_drawer__hint">
-          资源下载完成前可先查看任务和配置，暂不可执行。
+          {{ translateKey('tasks.blockedHint') }}
         </div>
       </div>
     </v-card>
@@ -178,39 +181,42 @@ async function toggleTask(taskName, enable) {
               :icon="statusMap[task.status]?.icon || 'mdi-help-circle'"
               :class="`mr-2 task_${task.status}`"
             />
-            <span class="font-medium">{{ task.description }}</span>
+            <span class="font-medium">{{ translateAny(task.description) }}</span>
             <template v-slot:actions>
               <v-chip
                 v-if="task.manual_only"
+                variant="outlined"
+                color="secondary"
                 size="small"
                 class="ml-2">
-                仅手动
+                {{ translateKey('common.manualOnly') }}
               </v-chip>
               <v-chip
                 size="small"
                 :color="statusMap[task.status]?.color"
-                text-color="white"
+                variant="tonal"
                 class="ml-2"
               >
-                {{ statusMap[task.status]?.label }}
+                {{ translateKey(statusMap[task.status]?.labelKey || 'tasks.status.UNKNOWN') }}
               </v-chip>
               <v-chip
                 v-if="app_store.status.current_task === task_name && app_store.status.task !== TaskStatus.PENDING"
                 size="small"
                 color="primary"
+                variant="tonal"
                 class="ml-2"
               >
-                当前任务
+                {{ translateKey('common.currentTask') }}
               </v-chip>
             </template>
           </v-expansion-panel-title>
 
           <v-expansion-panel-text>
             <div class="pa-2">
-              <p class="text-body-2">任务名：<b>{{ task_name }}</b></p>
-              <p class="text-body-2">启用：{{ task.enable ? "是" : "否" }}</p>
+              <p class="text-body-2">{{ translateKey('tasks.taskName') }}<b>{{ task_name }}</b></p>
+              <p class="text-body-2">{{ translateKey('tasks.enabled') }}{{ task.enable ? translateKey('common.yes') : translateKey('common.no') }}</p>
               <p class="text-body-2">
-                上次运行时间：
+                {{ translateKey('tasks.lastRunTime') }}
                 <span :title="formatAbsoluteTime(task.last_run_time)">
                   {{ formatRelativeTime(task.last_run_time) }}
                 </span>
@@ -224,7 +230,7 @@ async function toggleTask(taskName, enable) {
                   variant="outlined"
                   @click="runTask(task_name)"
                 >
-                  执行
+                  {{ translateKey('tasks.run') }}
                 </v-btn>
                 <v-btn
                   v-if="!task.manual_only"
@@ -232,35 +238,35 @@ async function toggleTask(taskName, enable) {
                   :loading="runningFromTaskName === task_name"
                   color="primary"
                   variant="tonal"
-                  :title="taskExecutionBlocked ? '资源未准备完成，暂不可执行' : (app_store.status.task !== TaskStatus.PENDING ? '当前已有任务队列在运行' : '从当前任务开始执行后续已启用自动任务')"
+                  :title="taskExecutionBlocked ? translateKey('tasks.runBlockedTitle') : (app_store.status.task !== TaskStatus.PENDING ? translateKey('tasks.runBusyTitle') : translateKey('tasks.runFromTitle'))"
                   @click="runTaskFrom(task_name, task.description)"
                 >
-                  从这里开始执行
+                  {{ translateKey('tasks.runFrom') }}
                 </v-btn>
                 <v-btn
                   v-if="task.enable"
                   :disabled="isTaskBusy(task_name)"
                   :loading="togglingTaskName === task_name"
-                  color="red"
+                  color="error"
                   variant="tonal"
                   @click="toggleTask(task_name, false)"
                 >
-                  禁用
+                  {{ translateKey('tasks.disable') }}
                 </v-btn>
                 <v-btn
                   v-else
                   :disabled="isTaskBusy(task_name)"
                   :loading="togglingTaskName === task_name"
-                  color="green"
+                  color="success"
                   variant="tonal"
                   @click="toggleTask(task_name, true)"
                 >
-                  启用
+                  {{ translateKey('tasks.enable') }}
                 </v-btn>
               </div>
             </div>
             <div v-if="taskConfigSection(task_name)" class="mt-4">
-              <h4>任务设置</h4>
+              <h4>{{ translateKey('tasks.settings') }}</h4>
               <TaskConfigSectionForm
                 :config="app_store.config"
                 :section="taskConfigSection(task_name)"
@@ -297,14 +303,18 @@ async function toggleTask(taskName, enable) {
 
 .task_drawer__title_card {
   flex: 0 0 auto;
-  min-height: 60px;
+  min-height: 64px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 0 18px;
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.08);
+  box-shadow: 0 1px 0 rgba(var(--v-theme-on-surface), 0.02);
 }
 
 .task_drawer__title {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   font-weight: 700;
   line-height: 1.2;
   text-align: left;
@@ -312,8 +322,9 @@ async function toggleTask(taskName, enable) {
 
 .task_drawer__hint {
   margin-top: 6px;
-  font-size: 0.84rem;
+  font-size: 0.82rem;
   line-height: 1.4;
+  color: rgba(var(--v-theme-on-surface), 0.68);
 }
 
 .task_panels {

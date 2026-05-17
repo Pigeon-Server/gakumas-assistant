@@ -1,5 +1,7 @@
 <script setup>
+import { computed, ref } from "vue";
 import apis from "@/scripts/apis.js";
+import { translateAny } from '@/scripts/i18n/translate'
 
 const props = defineProps({
   data: Object,
@@ -13,8 +15,8 @@ const device = ref([])
 const load_status = ref(false)
 const load_message = ref("")
 const device_hint = computed(() => {
-  const baseHint = "请选择通过USB连接的设备，如未找到设备请尝试刷新列表"
-  return load_message.value ? `${baseHint}。${load_message.value}` : baseHint
+  const baseHint = translateAny(props.data.base.adb_serial.ui.hint)
+  return load_message.value ? `${baseHint} ${translateAny(load_message.value)}` : baseHint
 })
 
 function load_device_list() {
@@ -39,7 +41,7 @@ load_device_list()
       append-icon="md:replay"
       @click:append="load_device_list"
       clearable
-      label="通过USB连接的ADB设备"
+      :label="translateAny(props.data.base.adb_serial.ui.label)"
       :hint="device_hint"
       persistent-hint
     />

@@ -3,10 +3,11 @@ import platform
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List, Any, Tuple, Dict
+from typing import Optional, List, Any, Tuple, Dict, Callable
 
 from src.constants.device.adb import ADBOperation, ADBConnectMode
 from src.constants.ocr.backend import OCR_BACKEND_VERIFY, OCRBackendType
+from src.utils.i18n_tools import I18nText, i18n_text, normalize_i18n_key_segment, serialize_i18n_value
 from src.utils.logger import logger
 
 
@@ -27,7 +28,10 @@ def _default_run_mode() -> str:
 
 def _run_mode_options() -> List[Dict[str, Any]]:
     pc_option: Dict[str, Any] = {
-        "title": "电脑端（DMM）",
+        "title": i18n_text(
+            "backend.config.base.run_mode.option.pc",
+            fallback="电脑端（DMM）",
+        ),
         "value": "PC",
     }
     try:
@@ -42,59 +46,168 @@ def _run_mode_options() -> List[Dict[str, Any]]:
     except Exception:
         if platform.system() != "Windows":
             pc_option["disabled"] = True
-            pc_option["disabled_reason"] = "PC / DMM 模式仅支持 Windows。"
+            pc_option["disabled_reason"] = i18n_text(
+                "backend.config.base.run_mode.disabledReason.pcWindowsOnly",
+                fallback="PC / DMM 模式仅支持 Windows。",
+            )
 
     mac_option: Dict[str, Any] = {
-        "title": "macOS PlayCover",
+        "title": i18n_text(
+            "backend.config.base.run_mode.option.mac_play_tools",
+            fallback="macOS PlayCover",
+        ),
         "value": "MacPlayTools",
     }
     if platform.system() != "Darwin":
         mac_option["disabled"] = True
-        mac_option["disabled_reason"] = "MacPlayTools 模式仅支持 macOS (Apple Silicon)。"
+        mac_option["disabled_reason"] = i18n_text(
+            "backend.config.base.run_mode.disabledReason.macOnly",
+            fallback="MacPlayTools 模式仅支持 macOS (Apple Silicon)。",
+        )
 
     return [
         pc_option,
-        {"title": "手机端", "value": "Phone"},
+        {
+            "title": i18n_text(
+                "backend.config.base.run_mode.option.phone",
+                fallback="手机端",
+            ),
+            "value": "Phone",
+        },
         mac_option,
     ]
 
 
 def _ocr_backend_options() -> List[Dict[str, Any]]:
     vision_option: Dict[str, Any] = {
-        "title": "Vision（macOS 原生 OCR）",
+        "title": i18n_text(
+            "backend.config.base.ocr_backend.option.vision",
+            fallback="Vision（macOS 原生 OCR）",
+        ),
         "value": OCRBackendType.VISION,
     }
     if platform.system() != "Darwin":
         vision_option["disabled"] = True
-        vision_option["disabled_reason"] = "Vision OCR 仅在 macOS 可用。"
+        vision_option["disabled_reason"] = i18n_text(
+            "backend.config.base.ocr_backend.disabledReason.visionMacOnly",
+            fallback="Vision OCR 仅在 macOS 可用。",
+        )
     return [
-        {"title": "自动", "value": OCRBackendType.AUTO},
-        {"title": "RapidOCR", "value": OCRBackendType.RAPIDOCR},
+        {
+            "title": i18n_text(
+                "backend.config.base.ocr_backend.option.auto",
+                fallback="自动",
+            ),
+            "value": OCRBackendType.AUTO,
+        },
+        {
+            "title": i18n_text(
+                "backend.config.base.ocr_backend.option.rapidocr",
+                fallback="RapidOCR",
+            ),
+            "value": OCRBackendType.RAPIDOCR,
+        },
         vision_option,
     ]
 
 
+def _config_section_key(section_name: str) -> str:
+    """将配置分组名称转换为国际化键片段。"""
+    if section_name.startswith("task__"):
+        return section_name
+    return normalize_i18n_key_segment(section_name)
+
+
+def _config_field_prefix(section_name: str, field_name: str) -> str:
+    """构造配置项国际化键前缀。"""
+    return f"backend.config.{_config_section_key(section_name)}.{normalize_i18n_key_segment(field_name)}"
+
+
+def _config_ui_text(section_name: str, field_name: str, suffix: str, fallback: str | None) -> I18nText:
+    """构造配置项 UI 文案对象。"""
+    return i18n_text(f"{_config_field_prefix(section_name, field_name)}.{suffix}", fallback=fallback)
+
+
+def _serialize_visible_if(visible_if: Any, group: "_BaseConfigGroup") -> Any:
+    """将可见性规则统一序列化为字典。"""
+    if visible_if is None:
+        return None
+    if callable(visible_if):
+        return None
+    return visible_if
+
+
+def _serialize_option_value(
+    section_name: str,
+    field_name: str,
+    option_index: int,
+    key_name: str,
+    value: Any,
+    option_payload: Dict[str, Any],
+) -> Any:
+    """序列化选项中的国际化字段。"""
+    if value is None:
+        return None
+    if isinstance(value, I18nText):
+        return serialize_i18n_value(value)
+    if key_name not in {"title", "disabled_reason", "description"}:
+        return serialize_i18n_value(value)
+    option_identifier = option_payload.get("value")
+    if option_identifier in (None, ""):
+        option_identifier = value if key_name == "title" else option_index
+    option_value = normalize_i18n_key_segment(option_identifier)
+    key_name_mapping = {
+        "title": "title",
+        "disabled_reason": "disabledReason",
+        "description": "description",
+    }
+    key = f"{_config_field_prefix(section_name, field_name)}.option.{option_value}.{key_name_mapping[key_name]}"
+    return i18n_text(key, fallback=str(value)).to_dict()
+
+
 @dataclass
 class ConfigItemUI:
-    label: Optional[str] = None
-    hint: Optional[str] = None
+    label: Optional[str | I18nText] = None
+    hint: Optional[str | I18nText] = None
     component: Optional[str] = None
     component_props: Dict[str, Any] = field(default_factory=dict)
     options: List[Dict[str, Any]] = field(default_factory=list)
-    visible_if: Optional[Dict[str, Any]] = None
+    visible_if: Optional[Dict[str, Any] | Callable[..., Any]] = None
     readonly: bool = False
     resettable: bool = False
     auto_generate: bool = True
     order: int = 0
 
-    def to_json_dict(self) -> dict:
+    def to_json_dict(self, section_name: str, field_name: str, group: "_BaseConfigGroup") -> dict:
+        serialized_options: list[dict[str, Any]] = []
+        for index, option in enumerate(self.options):
+            serialized_option: dict[str, Any] = {}
+            for option_key, option_value in option.items():
+                serialized_option[option_key] = _serialize_option_value(
+                    section_name,
+                    field_name,
+                    index,
+                    option_key,
+                    option_value,
+                    option,
+                )
+            serialized_options.append(serialized_option)
+
         return {
-            "label": self.label,
-            "hint": self.hint,
+            "label": serialize_i18n_value(self.label)
+            if isinstance(self.label, I18nText)
+            else _config_ui_text(section_name, field_name, "label", self.label).to_dict()
+            if self.label
+            else None,
+            "hint": serialize_i18n_value(self.hint)
+            if isinstance(self.hint, I18nText)
+            else _config_ui_text(section_name, field_name, "hint", self.hint).to_dict()
+            if self.hint
+            else None,
             "component": self.component,
-            "component_props": self.component_props,
-            "options": self.options,
-            "visible_if": self.visible_if,
+            "component_props": serialize_i18n_value(self.component_props),
+            "options": serialized_options,
+            "visible_if": _serialize_visible_if(self.visible_if, group),
             "readonly": self.readonly,
             "resettable": self.resettable,
             "auto_generate": self.auto_generate,
@@ -172,6 +285,42 @@ class ConfigItem:
 
     def __float__(self):
         return float(self.value)
+
+
+def apply_legacy_producer_decision_backend(config: Any, backend: Any) -> None:
+    """将旧版自动培育决策后端配置迁移到拆分后的三个决策源。
+
+    Args:
+        config: 当前配置对象，需包含 base 配置分组。
+        backend: 旧配置 `base.producer_decision_backend` 的值。
+    """
+    backend_value = str(backend or "").strip()
+    backend_mapping = {
+        "llm": {
+            "schedule_decision_backend": "llm",
+            "battle_decision_backend": "llm",
+            "other_decision_backend": "llm",
+        },
+        "rl_battle": {
+            "schedule_decision_backend": "llm",
+            "battle_decision_backend": "rl_battle",
+            "other_decision_backend": "llm",
+        },
+    }
+    migrated_values = backend_mapping.get(backend_value)
+    if migrated_values is None:
+        return
+
+    base_group = getattr(config, "base", None)
+    if base_group is None:
+        return
+
+    for field_name, migrated_value in migrated_values.items():
+        item = getattr(base_group, field_name, None)
+        if not isinstance(item, ConfigItem):
+            continue
+        if item.value == item.default_value:
+            item.set(migrated_value, touch=False)
 
 
 @dataclass
@@ -504,21 +653,59 @@ class _Base(_BaseConfigGroup):
         )
     )
 
-    # --- 自动培育决策后端配置 ---
-    producer_decision_backend = ConfigItem(
+    # --- 自动培育决策后端配置（3个独立决策源） ---
+    # 1. 周行程决策
+    schedule_decision_backend = ConfigItem(
         default_value="llm",
         data_type=str,
-        verify=r"llm|rl_battle",
+        verify=r"llm|rl_battle|algo",
         use_verify=True,
         ui=ConfigItemUI(
-            label="自动培育决策后端",
-            hint="llm：所有阶段走大模型；rl_battle：仅 lesson / exam 走 RL 推理服务",
+            label="周行程决策后端",
+            hint="周行程（Schedule）阶段的自动决策方式",
             component="select",
             options=[
-                {"title": "LLM（默认）", "value": "llm"},
-                {"title": "RL Battle（lesson / exam）", "value": "rl_battle"},
+                {"title": "LLM（Bata）", "value": "llm"},
+                {"title": "RL（WIP）", "value": "rl_battle"},
+                {"title": "简单算法决策", "value": "algo"},
             ],
             order=290,
+        ),
+    )
+    # 2. 战斗决策（レッスン/試験）
+    battle_decision_backend = ConfigItem(
+        default_value="llm",
+        data_type=str,
+        verify=r"llm|rl_battle|algo",
+        use_verify=True,
+        ui=ConfigItemUI(
+            label="战斗决策后端",
+            hint="レッスン/試験（Lesson/Exam）阶段的出牌决策方式",
+            component="select",
+            options=[
+                {"title": "LLM（Bata）", "value": "llm"},
+                {"title": "RL（WIP）", "value": "rl_battle"},
+                {"title": "简单算法决策", "value": "algo"},
+            ],
+            order=291,
+        ),
+    )
+    # 3. 其他决策（对话/P饮料/技能奖励/咨询/道具选择）
+    other_decision_backend = ConfigItem(
+        default_value="llm",
+        data_type=str,
+        verify=r"llm|rl_battle|algo",
+        use_verify=True,
+        ui=ConfigItemUI(
+            label="其他决策后端",
+            hint="对话/P饮料/技能奖励/咨询/道具选择等阶段的决策方式",
+            component="select",
+            options=[
+                {"title": "LLM（Bata）", "value": "llm"},
+                {"title": "RL（WIP）", "value": "rl_battle"},
+                {"title": "简单算法决策", "value": "algo"},
+            ],
+            order=292,
         ),
     )
     rl_inference_base_url = ConfigItem(
@@ -526,8 +713,14 @@ class _Base(_BaseConfigGroup):
         data_type=str,
         ui=ConfigItemUI(
             label="RL 推理服务地址",
-            hint="无状态 RL 推理服务地址；模型在服务启动时固定加载",
-            visible_if={"base.producer_decision_backend": "rl_battle"},
+            hint="无状态 RL 推理服务地址",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "rl_battle"},
+                    {"base.battle_decision_backend": "rl_battle"},
+                    {"base.other_decision_backend": "rl_battle"},
+                ],
+            },
             order=295,
         ),
     )
@@ -536,8 +729,14 @@ class _Base(_BaseConfigGroup):
         data_type=float,
         ui=ConfigItemUI(
             label="RL 推理超时(秒)",
-            hint="lesson / exam 请求 RL 服务的超时时间",
-            visible_if={"base.producer_decision_backend": "rl_battle"},
+            hint="请求 RL 服务的超时时间",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "rl_battle"},
+                    {"base.battle_decision_backend": "rl_battle"},
+                    {"base.other_decision_backend": "rl_battle"},
+                ],
+            },
             order=296,
         ),
     )
@@ -548,7 +747,14 @@ class _Base(_BaseConfigGroup):
         data_type=str,
         ui=ConfigItemUI(
             label="LLM API 地址",
-            hint="OpenAI 兼容 API 端点（Ollama / vLLM / OpenAI 等）",
+            hint="OpenAI 兼容 API 端点（llama / vLLM / OpenAI 等）",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
             order=300,
         ),
     )
@@ -557,16 +763,30 @@ class _Base(_BaseConfigGroup):
         data_type=str,
         ui=ConfigItemUI(
             label="LLM 模型",
-            hint="模型名称（如 gpt-oss:20b, qwen3:4b 等）",
+            hint="模型名称（如 gpt-oss:20b、qwen3:4b、qwen3.5:9b 等）",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
             order=310,
         ),
     )
     llm_api_key = ConfigItem(
-        default_value="ollama",
+        default_value="apikey",
         data_type=str,
         ui=ConfigItemUI(
             label="LLM API Key",
-            hint="API 密钥（Ollama 默认 ollama）",
+            hint="API 密钥",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
             order=320,
         ),
     )
@@ -576,6 +796,13 @@ class _Base(_BaseConfigGroup):
         ui=ConfigItemUI(
             label="LLM 超时(秒)",
             hint="API 请求超时时间",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
             order=330,
         ),
     )
@@ -584,7 +811,14 @@ class _Base(_BaseConfigGroup):
         data_type=int,
         ui=ConfigItemUI(
             label="LLM 最大输出 Token",
-            hint="输出 token 上限（包含思考+回答）",
+            hint="输出 token 上限（包含思考+回答），设为 0 表示自动（不传给 API）",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
             order=340,
         ),
     )
@@ -593,17 +827,210 @@ class _Base(_BaseConfigGroup):
         data_type=int,
         ui=ConfigItemUI(
             label="LLM 上下文窗口",
-            hint="上下文窗口大小（Ollama 专用，影响显存占用）",
+            hint="可选兼容参数，主要供 Ollama / 本地 OpenAI 兼容后端覆盖上下文窗口；设为 0 表示自动",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
             order=350,
         ),
     )
+    llm_reasoning_effort = ConfigItem(
+        default_value="medium",
+        data_type=str,
+        verify=r"low|medium|high|xhigh",
+        use_verify=True,
+        ui=ConfigItemUI(
+            label="LLM 思考强度",
+            hint="控制推理深度；low=更快，medium=平衡，high=更充分",
+            component="select",
+            options=[
+                {"title": "low", "value": "low"},
+                {"title": "medium", "value": "medium"},
+                {"title": "high", "value": "high"},
+                {"title": "xhigh", "value": "xhigh"},
+            ],
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=360,
+        ),
+    )
     llm_temperature = ConfigItem(
-        default_value=0.3,
+        default_value=0.6,
         data_type=float,
         ui=ConfigItemUI(
             label="LLM 温度",
             hint="生成温度，越低越确定（0.0 ~ 1.0）",
-            order=360,
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=370,
+        ),
+    )
+    llm_insight_enabled = ConfigItem(
+        default_value=True,
+        data_type=bool,
+        ui=ConfigItemUI(
+            label="启用策略洞察",
+            hint="后台生成可迁移的策略洞察，供后续决策参考",
+            component="switch",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=375,
+        ),
+    )
+    llm_insight_base_url = ConfigItem(
+        default_value="",
+        data_type=str,
+        ui=ConfigItemUI(
+            label="洞察模型 API 地址",
+            hint="为空则使用主 LLM 地址；可配置独立模型（云端/小模型）",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=376,
+        ),
+    )
+    llm_insight_model = ConfigItem(
+        default_value="",
+        data_type=str,
+        ui=ConfigItemUI(
+            label="洞察模型",
+            hint="为空则使用主 LLM 模型名称",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=377,
+        ),
+    )
+    llm_insight_api_key = ConfigItem(
+        default_value="",
+        data_type=str,
+        ui=ConfigItemUI(
+            label="洞察模型 API Key",
+            hint="为空则使用主 LLM Key",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=378,
+        ),
+    )
+    llm_insight_timeout = ConfigItem(
+        default_value=120.0,
+        data_type=float,
+        ui=ConfigItemUI(
+            label="洞察模型超时(秒)",
+            hint="后台洞察生成的超时时间，可比主决策更长",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=379,
+        ),
+    )
+    llm_insight_max_tokens = ConfigItem(
+        default_value=0,
+        data_type=int,
+        ui=ConfigItemUI(
+            label="洞察模型最大输出 Token",
+            hint="0=不限制，让模型自行管理 thinking + output 的 token 分配",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=380,
+        ),
+    )
+    llm_insight_num_ctx = ConfigItem(
+        default_value=0,
+        data_type=int,
+        ui=ConfigItemUI(
+            label="洞察模型上下文窗口",
+            hint="0=不设置，由 API 自动管理",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=381,
+        ),
+    )
+    llm_insight_reasoning_effort = ConfigItem(
+        default_value="medium",
+        data_type=str,
+        verify=r"low|medium|high|xhigh",
+        use_verify=True,
+        ui=ConfigItemUI(
+            label="洞察模型思考强度",
+            hint="控制洞察生成的推理深度",
+            component="select",
+            options=[
+                {"title": "low", "value": "low"},
+                {"title": "medium", "value": "medium"},
+                {"title": "high", "value": "high"},
+                {"title": "xhigh", "value": "xhigh"},
+            ],
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=382,
+        ),
+    )
+    llm_insight_temperature = ConfigItem(
+        default_value=0.2,
+        data_type=float,
+        ui=ConfigItemUI(
+            label="洞察模型温度",
+            hint="洞察生成的温度，越低越确定（0.0 ~ 1.0）",
+            visible_if={
+                "__or__": [
+                    {"base.schedule_decision_backend": "llm"},
+                    {"base.battle_decision_backend": "llm"},
+                    {"base.other_decision_backend": "llm"},
+                ],
+            },
+            order=383,
         ),
     )
 
@@ -854,8 +1281,8 @@ class _Task:
                 hint="选择培育剧本",
                 component="select",
                 options=[
-                    {"title": "初（HAJIME）", "value": "hajime"},
-                    {"title": "NIA", "value": "nia"},
+                    {"title": "初", "value": "hajime"},
+                    {"title": "NIA（WIP）", "value": "nia"},
                 ],
                 order=10,
             ),
@@ -871,10 +1298,10 @@ class _Task:
                 hint="选择培育难度",
                 component="select",
                 options=[
-                    {"title": "Regular（produce-001）", "value": "regular"},
-                    {"title": "Pro（produce-002）", "value": "pro"},
-                    {"title": "Master（produce-003）", "value": "master"},
-                    {"title": "Legend（produce-006）", "value": "legend"},
+                    {"title": "Regular", "value": "regular"},
+                    {"title": "Pro", "value": "pro"},
+                    {"title": "Master", "value": "master"},
+                    # {"title": "Legend（produce-006）", "value": "legend"},
                 ],
                 visible_if={"task__auto_producer.scenario": "hajime"},
                 order=20,
@@ -1130,7 +1557,7 @@ class Config(_BaseConfigGroup):
     task__auto_producer: _Task.AutoProducer = field(default_factory=_Task.AutoProducer)
 
     def to_json_dict(self) -> dict:
-        def serialize_group(group):
+        def serialize_group(group, section_name: str):
             result = {}
             for name, attr in vars(group).items():  # 遍历实例属性
                 if isinstance(attr, ConfigItem):
@@ -1161,13 +1588,13 @@ class Config(_BaseConfigGroup):
                         "verify": attr.verify,
                         "use_verify": attr.use_verify,
                         "last_modified_time": attr.last_modified_time.isoformat() if attr.last_modified_time else None,
-                        "ui": attr.ui.to_json_dict(),
+                        "ui": attr.ui.to_json_dict(section_name, name, group),
                     }
                 elif isinstance(attr, _BaseConfigGroup):
-                    result[name] = serialize_group(attr)
+                    result[name] = serialize_group(attr, name)
             return result
 
-        return serialize_group(self)
+        return serialize_group(self, "config")
 
     def get_item(self, path: str) -> ConfigItem:
         current = self
@@ -1184,6 +1611,12 @@ class Config(_BaseConfigGroup):
 
         def apply_group(group, group_data, group_name=""):
             for attr_name, attr_value in group_data.items():
+                if group_name == "base" and attr_name == "producer_decision_backend":
+                    apply_legacy_producer_decision_backend(
+                        self,
+                        attr_value.get("value") if isinstance(attr_value, dict) else attr_value,
+                    )
+                    continue
                 if not hasattr(group, attr_name):
                     continue
                 item = getattr(group, attr_name)

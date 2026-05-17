@@ -117,17 +117,10 @@ def _annotate_low_stamina_recovery_preference(
     label = f"候选 {preferred_index}"
     for payload in payloads:
         if int(payload.get("index", -1)) == preferred_index:
-            payload["recommended"] = True
             label = str(payload.get("label") or payload.get("title") or label)
             break
-
-    for payload in decision_state.get("llm_actions", []) or []:
-        if int(payload.get("index", -1)) == preferred_index:
-            payload["recommended"] = True
-
-    stage_context = dict(decision_state.get("stage_context", {}) or {})
-    stage_context["system_recommendation"] = f"系统当前推荐优先考虑：{label}。{reason}"
-    decision_state["stage_context"] = stage_context
-    llm_snapshot = decision_state.get("llm_snapshot")
-    if isinstance(llm_snapshot, dict):
-        llm_snapshot["stage_context"] = stage_context
+    decision_state["local_preference"] = {
+        "index": int(preferred_index),
+        "label": label,
+        "reason": str(reason or ""),
+    }

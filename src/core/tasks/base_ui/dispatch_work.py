@@ -12,6 +12,7 @@ from src.core.inference.ocr_engine import OCRService, OCR_Result, OCR_ResultList
 from src.entity.Game.Page.Types.index import GamePageTypes
 from src.entity.Game.Components.Button import Button, ButtonList
 from src.entity.Yolo import Yolo_Box, Yolo_Results
+from src.utils.game_tools import get_modal
 from src.utils.logger import logger
 from src.utils.opencv_tools import check_color_in_region, check_color, check_frame_change
 from src.utils.string_tools import string_match, MatchConfig
@@ -26,24 +27,49 @@ _WORK_SELECT_BUTTON_TEXT = "選択する"
 _WORK_ACTION_BUTTON_MATCH = MatchConfig(fuzz_threshold=60, use_contains=True, normalize=True)
 
 def handle__work_dispatch_results(app: "AppProcessor"):
-    """处理任务派遣结果"""
+    """处理派遣入口前置的结果弹窗，并确保最终停留在派遣页。"""
     count = 0
 
     while count < MAX_WORKS + 2:
-        if app.game_utils.update_current_location() == GamePageTypes.HOME_TAB.WORK:
+        current_location = app.game_utils.update_current_location()
+        if current_location == GamePageTypes.HOME_TAB.WORK:
             return
+        if current_location == GamePageTypes.MAIN_MENU__HOME and not app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
+            return
+
         modal = app.game_utils.wait_for_modal(None, timeout=3, interval=0.5, no_body=True)
-        if modal:
-            close_button = modal.cancel_button or modal.confirm_button
-            if close_button is None:
-                logger.warning(f"Dispatch result modal '{modal.modal_title}' has no actionable button.")
-                sleep(1)
-                continue
-            app.device.click_element(close_button)
-            count += 1
-            sleep(3)
-    else:
-        raise RuntimeError("Too many attempts to claim daily dispatch task.")
+        if modal is None:
+            if app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
+                modal = get_modal(app.latest_results, True, quiet=True)
+            if modal is None:
+                return
+
+        close_button = modal.cancel_button or modal.confirm_button
+        if close_button is None:
+            logger.warning(f"Dispatch result modal '{modal.modal_title}' has no actionable button.")
+            sleep(1)
+            continue
+        app.device.click_element(close_button)
+        count += 1
+        sleep(1.5)
+
+    raise RuntimeError("Too many attempts to claim daily dispatch task.")
+
+
+def ensure__work_dispatch_page_ready(app: "AppProcessor"):
+    """若派遣结果弹窗关闭后回到主页，则重新进入派遣页。"""
+    current_location = app.game_utils.update_current_location()
+    if current_location == GamePageTypes.HOME_TAB.WORK:
+        return
+    if current_location == GamePageTypes.MAIN_MENU__HOME and app.latest_results.exists_label(BaseUILabels.HOME_DISPATCH_WORK):
+        logger.info("dispatch_work: 派遣结果弹窗关闭后回到主页，重新进入派遣页。")
+        app.game_utils.click_on_label(BaseUILabels.HOME_DISPATCH_WORK)
+        app.game_utils.wait_loading()
+        app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.WORK)
+        return
+    raise RuntimeError(f"dispatch_work: 处理派遣结果后未停留在派遣页，当前位置={current_location}")
+
+
 
 def action__dispatch_all_available_work(app: "AppProcessor"):
     """

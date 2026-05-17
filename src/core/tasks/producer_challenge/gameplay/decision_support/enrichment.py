@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 import cv2
 
+from src.constants.game.produce_enums import ProducePlanType
 from src.constants.game.producer_gameplay import GameplayPhase
 from src.constants.game.text.produce_text import ProduceText
 from src.core.tasks.producer_challenge.catalog import match_card_and_item_entries
@@ -20,7 +21,7 @@ from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str
 from src.utils.string_tools import fullwidth_to_halfwidth
 
-from .identity import _description_text, _humanize_runtime_text
+from .identity import _description_text
 
 _NUMBER_RE = re.compile(r"\d+")
 
@@ -52,7 +53,7 @@ _DRINK_RARITY_BONUS = {
     "R": 2.0,
 }
 _PLAN_TYPE_METADATA = {
-    "ProducePlanType_Plan1": {
+    ProducePlanType.PLAN1: {
         "label": ProduceText.PLAN_SENSE,
         "focus": " / ".join(ProduceText.BATTLE_SENSE_TOKENS),
         "description": (
@@ -60,7 +61,7 @@ _PLAN_TYPE_METADATA = {
             f"与{ProduceText.EXCELLENT_CONDITION}，偏向放大单次参数/得分收益。"
         ),
     },
-    "ProducePlanType_Plan2": {
+    ProducePlanType.PLAN2: {
         "label": ProduceText.PLAN_LOGIC,
         "focus": " / ".join(ProduceText.BATTLE_LOGIC_TOKENS),
         "description": (
@@ -68,7 +69,7 @@ _PLAN_TYPE_METADATA = {
             "偏向回合结算收益与续航。"
         ),
     },
-    "ProducePlanType_Plan3": {
+    ProducePlanType.PLAN3: {
         "label": ProduceText.PLAN_ANOMALY,
         "focus": " / ".join(ProduceText.BATTLE_ANOMALY_TOKENS),
         "description": (
@@ -154,39 +155,18 @@ def _plan_type_payload(plan_type: Any) -> dict[str, str]:
         dict: 结构化结果字典。
     """
     raw_value = str(plan_type or "").strip()
-    metadata = _PLAN_TYPE_METADATA.get(raw_value, {})
+    # 尝试转换为枚举
+    try:
+        plan_enum = ProducePlanType(raw_value)
+        metadata = _PLAN_TYPE_METADATA.get(plan_enum, {})
+    except ValueError:
+        metadata = {}
     return {
         "type": raw_value,
         "label": str(metadata.get("label") or ""),
         "focus": str(metadata.get("focus") or ""),
         "description": str(metadata.get("description") or ""),
     }
-
-
-def _localized_humanized_description(
-    table_name: str,
-    item_id: str,
-    fallback_entries: Any = None,
-    *,
-    upgrade_count: int | None = None,
-) -> str:
-    """将条目描述做本地化与可读化处理，输出可用于决策的文本。
-
-    Args:
-        table_name: 本项目数据库表名（`ProduceCard` / `ProduceDrink` / `ProduceItem`）。
-        item_id: 目标条目 ID。
-        fallback_entries: 数据库未命中时使用的回退描述数据。
-        upgrade_count: 强化次数，用于读取强化后的条目描述。
-
-    Returns:
-        str: 处理后的文本结果。
-    """
-    entries = _resolve_localized_descriptions(
-        table_name=table_name,
-        item_id=item_id,
-        upgrade_count=upgrade_count,
-    ) or fallback_entries
-    return _humanize_runtime_text(_description_text(entries))
 
 
 @lru_cache(maxsize=1)
@@ -237,14 +217,132 @@ def _lookup_item_row(item_id: str) -> Any | None:
 
 
 def _display_name(payload: Any) -> str:
-    """获取实体展示名（优先本地化，失败回退原名）。"""
-    loc = getattr(payload, "localization", None)
-    return str((getattr(loc, "name", None) if loc else None) or getattr(payload, "name", "") or "")
+    """获取实体名称。
+
+    非 UI 决策链路统一使用主数据库原始名称，避免本地化文本继续向下游传播。
+    """
+    return str(getattr(payload, "name", "") or "")
 
 
 def _raw_name(payload: Any) -> str:
     """获取实体原始名称。"""
     return str(getattr(payload, "name", "") or "")
+
+
+def _raw_description_text(
+    table_name: str,
+    item_id: str,
+    fallback_entries: Any = None,
+    *,
+    upgrade_count: int | None = None,
+) -> str:
+    """读取主数据库原始描述并拼接为文本。"""
+    entries = _resolve_raw_descriptions(
+        table_name=table_name,
+        item_id=item_id,
+        upgrade_count=upgrade_count,
+    ) or fallback_entries
+    return _description_text(entries)
+
+
+def _resolve_raw_descriptions(
+    *,
+    table_name: str,
+    item_id: str,
+    upgrade_count: int | None = None,
+) -> Any:
+    """读取主数据库原始描述片段。"""
+    if not item_id:
+        return None
+    table = str(table_name or "").strip()
+    if table == "ProduceCard":
+        payload = _lookup_card_row(item_id, upgrade_count=upgrade_count)
+    elif table == "ProduceDrink":
+        payload = _lookup_drink_row(item_id)
+    elif table == "ProduceItem":
+        payload = _lookup_item_row(item_id)
+    else:
+        payload = None
+    if payload is None:
+        return None
+    return getattr(payload, "produceDescriptions", None)
+
+
+def _decision_name(payload: Any) -> str:
+    """返回非 UI 链路使用的决策名称。"""
+    return _raw_name(payload)
+
+
+def _decision_description(
+    table_name: str,
+    item_id: str,
+    fallback_entries: Any = None,
+    *,
+    upgrade_count: int | None = None,
+) -> str:
+    """返回非 UI 链路使用的原始描述文本。"""
+    return _raw_description_text(
+        table_name,
+        item_id,
+        fallback_entries,
+        upgrade_count=upgrade_count,
+    )
+
+
+def _ui_localized_description(
+    *,
+    table_name: str,
+    item_id: str,
+    upgrade_count: int | None = None,
+) -> Any:
+    """仅供 UI 识别匹配层读取本地化描述。"""
+    if not item_id:
+        return None
+    table = str(table_name or "").strip()
+    if table == "ProduceCard":
+        payload = _lookup_card_row(item_id, upgrade_count=upgrade_count)
+    elif table == "ProduceDrink":
+        payload = _lookup_drink_row(item_id)
+    elif table == "ProduceItem":
+        payload = _lookup_item_row(item_id)
+    else:
+        payload = None
+    if payload is None:
+        return None
+    loc = getattr(payload, "localization", None)
+    return getattr(loc, "produceDescriptions", None) if loc else None
+
+
+def _localized_humanized_description(
+    table_name: str,
+    item_id: str,
+    fallback_entries: Any = None,
+    *,
+    upgrade_count: int | None = None,
+) -> str:
+    """仅供 UI 识别匹配层使用的本地化描述。"""
+    entries = _ui_localized_description(
+        table_name=table_name,
+        item_id=item_id,
+        upgrade_count=upgrade_count,
+    ) or fallback_entries
+    return _description_text(entries)
+
+
+def _resolve_localized_descriptions(
+    *,
+    table_name: str,
+    item_id: str,
+    upgrade_count: int | None = None,
+) -> Any:
+    """兼容旧调用；仅返回 UI 层允许使用的本地化描述。"""
+    return _ui_localized_description(
+        table_name=table_name,
+        item_id=item_id,
+        upgrade_count=upgrade_count,
+    )
+
+
 
 
 def _effect_types_from_effect_groups(effect_groups: Sequence[Any] | None) -> list[str]:
@@ -266,30 +364,6 @@ def _effect_types_from_effect_groups(effect_groups: Sequence[Any] | None) -> lis
                 if effect and effect not in result:
                     result.append(effect)
     return result
-
-
-def _resolve_localized_descriptions(
-    *,
-    table_name: str,
-    item_id: str,
-    upgrade_count: int | None = None,
-) -> Any:
-    """读取本项目数据库中的本地化描述片段。"""
-    if not item_id:
-        return None
-    table = str(table_name or "").strip()
-    if table == "ProduceCard":
-        payload = _lookup_card_row(item_id, upgrade_count=upgrade_count)
-    elif table == "ProduceDrink":
-        payload = _lookup_drink_row(item_id)
-    elif table == "ProduceItem":
-        payload = _lookup_item_row(item_id)
-    else:
-        payload = None
-    if payload is None:
-        return None
-    loc = getattr(payload, "localization", None)
-    return (getattr(loc, "produceDescriptions", None) if loc else None) or getattr(payload, "produceDescriptions", None)
 
 
 def _match_catalog_entry_from_texts(
@@ -370,9 +444,9 @@ def _enrich_card_metadata(card_id: str, *, upgrade_count: int = 0) -> dict[str, 
         "plan_type_label": _plan_type_payload(getattr(row, "planType", "")).get("label", ""),
         "cost_type": str(getattr(row, "costType", "") or ""),
         "cost": int(getattr(row, "stamina", 0) or 0),
-        "display_name": _display_name(row),
+        "display_name": _decision_name(row),
         "raw_name": _raw_name(row),
-        "description": _localized_humanized_description(
+        "description": _decision_description(
             "ProduceCard",
             card_id,
             getattr(row, "produceDescriptions", None),
@@ -392,9 +466,9 @@ def _enrich_drink_metadata(drink_id: str) -> dict[str, Any]:
         "rarity": str(getattr(row, "rarity", "") or ""),
         "plan_type": str(getattr(row, "planType", "") or ""),
         "plan_type_label": _plan_type_payload(getattr(row, "planType", "")).get("label", ""),
-        "display_name": _display_name(row),
+        "display_name": _decision_name(row),
         "raw_name": _raw_name(row),
-        "description": _localized_humanized_description(
+        "description": _decision_description(
             "ProduceDrink",
             drink_id,
             getattr(row, "produceDescriptions", None),
@@ -410,9 +484,9 @@ def _enrich_item_metadata(item_id: str) -> dict[str, Any]:
         return {}
     return {
         "rarity": str(getattr(row, "rarity", "") or ""),
-        "display_name": _display_name(row),
+        "display_name": _decision_name(row),
         "raw_name": _raw_name(row),
-        "description": _localized_humanized_description(
+        "description": _decision_description(
             "ProduceItem",
             item_id,
             getattr(row, "produceDescriptions", None),

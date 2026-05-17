@@ -8,7 +8,7 @@
       icon="md:minimize"
       variant="text"
       size="small"
-      title="最小化"
+      :title="translateKey('app.window.minimize')"
       :disabled="pending"
       @click="minimizeWindow"
     />
@@ -17,7 +17,7 @@
       :icon="isMaximized ? 'md:filter_none' : 'md:crop_square'"
       variant="text"
       size="small"
-      :title="isMaximized ? '还原' : '最大化'"
+      :title="isMaximized ? translateKey('app.window.restore') : translateKey('app.window.maximize')"
       :disabled="pending"
       @click="toggleMaximizeWindow"
     />
@@ -26,7 +26,7 @@
       icon="md:close"
       variant="text"
       size="small"
-      title="关闭"
+      :title="translateKey('app.window.close')"
       @click="closeWindow"
     />
   </div>
@@ -35,6 +35,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { addWindowHostReadyListener, getWindowHostApi } from "@/scripts/utils/windowHost.js";
+import { translateKey } from "@/scripts/i18n/translate";
 
 const isReady = ref(false);
 const isFrameless = ref(false);
@@ -158,7 +159,7 @@ onBeforeUnmount(() => {
   min-height: 100%;
   padding: 0;
   border-radius: 0;
-  color: rgba(255, 255, 255, 0.92);
+  color: rgba(var(--v-theme-on-surface), 0.92);
   transition: background-color 0.16s ease, color 0.16s ease;
 }
 

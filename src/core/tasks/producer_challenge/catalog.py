@@ -163,14 +163,17 @@ def _match_lines_against_catalog(
         if key in seen_pairs:
             continue
         seen_pairs.add(key)
+        metadata = dict(entry.metadata or {})
+        raw_name = str(metadata.get("raw_name") or entry.display_name or "")
         matched.append(
             {
                 "kind": entry.kind,
                 "id": entry.id,
-                "name": entry.display_name,
+                "name": raw_name,
+                "raw_name": raw_name,
                 "matched_text": matched_text,
                 "score": round(score, 2),
-                "metadata": entry.metadata,
+                "metadata": metadata,
             }
         )
     return matched
@@ -285,12 +288,12 @@ def get_memory_ability_catalog() -> tuple[CatalogEntry, ...]:
         skill = produce_skill_db.get_by_id(skill_key)
         if skill is None:
             continue
-        source = skill.localization if getattr(skill, "localization", None) else skill
-        description = _concat_produce_descriptions(getattr(source, "produceDescriptions", []))
-        # 同时保留日文描述，提升 OCR 匹配命中率
-        description_ja = ""
-        if getattr(skill, "localization", None):
-            description_ja = _concat_produce_descriptions(getattr(skill, "produceDescriptions", []))
+        description_ja = _concat_produce_descriptions(getattr(skill, "produceDescriptions", []))
+        localization = getattr(skill, "localization", None)
+        description = ""
+        if localization is not None:
+            description = _concat_produce_descriptions(getattr(localization, "produceDescriptions", []))
+        # 同时保留 localized 描述，提升 OCR 匹配命中率
         if not description and not description_ja:
             continue
 
@@ -299,16 +302,16 @@ def get_memory_ability_catalog() -> tuple[CatalogEntry, ...]:
         bucket = by_description.setdefault(
             normalized_description,
             {
-                "display_name": description or description_ja,
-                "lookup_texts": set(),
+                "display_name": description_ja or description,
+                "lookup_texts": [],
                 "candidates": [],
                 "produce_group_ids": set(),
             },
         )
-        if description:
-            bucket["lookup_texts"].add(description)
         if description_ja:
-            bucket["lookup_texts"].add(description_ja)
+            bucket["lookup_texts"].append(description_ja)
+        if description:
+            bucket["lookup_texts"].append(description)
         produce_group_ids = list(getattr(ability, "produceGroupIds", []) or [])
         bucket["produce_group_ids"].update(produce_group_ids)
         bucket["candidates"].append(
@@ -366,12 +369,12 @@ def get_card_item_catalog() -> tuple[CatalogEntry, ...]:
                 需具备 name 和 localization.name 属性。
 
         Returns:
-            tuple[str, tuple[str, ...]]: 第一个元素为展示名（优先 localized 名），
+            tuple[str, tuple[str, ...]]: 第一个元素为展示名（优先主数据日文原名），
             第二个元素为去重后的查找名元组。
         """
         raw_name = getattr(obj, "name", "") or ""
         loc_name = getattr(getattr(obj, "localization", None), "name", None) or ""
-        display = loc_name or raw_name
+        display = raw_name or loc_name
         names = _dedupe_strings([n for n in (raw_name, loc_name) if n])
         return display, names
 
@@ -404,6 +407,7 @@ def get_card_item_catalog() -> tuple[CatalogEntry, ...]:
             display,
             lookups,
             {
+                "raw_name": getattr(card, "name", "") or "",
                 "rarity": getattr(card, "rarity", ""),
                 "plan_type": getattr(card, "planType", ""),
                 "category": getattr(card, "category", ""),
@@ -421,6 +425,7 @@ def get_card_item_catalog() -> tuple[CatalogEntry, ...]:
             display,
             lookups,
             {
+                "raw_name": getattr(item, "name", "") or "",
                 "rarity": getattr(item, "rarity", ""),
                 "plan_type": getattr(item, "planType", ""),
                 "asset_id": getattr(item, "assetId", ""),
@@ -437,6 +442,7 @@ def get_card_item_catalog() -> tuple[CatalogEntry, ...]:
             display,
             lookups,
             {
+                "raw_name": getattr(drink, "name", "") or "",
                 "rarity": getattr(drink, "rarity", ""),
                 "plan_type": getattr(drink, "planType", ""),
                 "asset_id": getattr(drink, "assetId", ""),
@@ -473,16 +479,16 @@ def get_support_ability_catalog() -> tuple[CatalogEntry, ...]:
                 bucket = by_description.setdefault(
                     normalized_description,
                     {
-                        "display_name": description or description_ja,
-                        "lookup_texts": set(),
+                        "display_name": description_ja or description,
+                        "lookup_texts": [],
                         "support_card_ids": set(),
                         "sources": [],
                     },
                 )
-                if description:
-                    bucket["lookup_texts"].add(description)
                 if description_ja:
-                    bucket["lookup_texts"].add(description_ja)
+                    bucket["lookup_texts"].append(description_ja)
+                if description:
+                    bucket["lookup_texts"].append(description)
                 bucket["support_card_ids"].add(support_card_id)
                 bucket["sources"].append(
                     {
@@ -535,16 +541,16 @@ def get_support_event_catalog() -> tuple[CatalogEntry, ...]:
             bucket = by_title.setdefault(
                 normalized_title,
                 {
-                    "display_name": title or title_ja,
-                    "lookup_texts": set(),
+                    "display_name": title_ja or title,
+                    "lookup_texts": [],
                     "support_card_ids": set(),
                     "candidates": [],
                 },
             )
             if title_ja:
-                bucket["lookup_texts"].add(title_ja)
+                bucket["lookup_texts"].append(title_ja)
             if title:
-                bucket["lookup_texts"].add(title)
+                bucket["lookup_texts"].append(title)
             bucket["support_card_ids"].add(support_card_id)
             bucket["candidates"].append(
                 {
@@ -687,11 +693,7 @@ def get_support_card_name_catalog() -> tuple[CatalogEntry, ...]:
         name_loc = getattr(loc, "name", "") if loc else ""
         if not name_ja and not name_loc:
             continue
-        lookup: set[str] = set()
-        if name_ja:
-            lookup.add(name_ja)
-        if name_loc:
-            lookup.add(name_loc)
+        lookup = _dedupe_strings([name_ja, name_loc])
 
         sc_events = events_map.get(sc.id, [])
         event_summaries = []
@@ -709,7 +711,7 @@ def get_support_card_name_catalog() -> tuple[CatalogEntry, ...]:
             CatalogEntry(
                 kind="support_card",
                 id=sc.id,
-                display_name=name_loc or name_ja,
+                display_name=name_ja or name_loc,
                 lookup_texts=_dedupe_strings(lookup),
                 metadata={
                     "name_ja": name_ja,

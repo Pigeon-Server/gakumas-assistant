@@ -1,0 +1,28 @@
+以下是一局培育的完整数据，请从结果反推，提炼出可迁移的阶段策略洞察。
+
+== 培育结果 ==
+剧本: {{ scenario }} | 难度: {{ difficulty }} | 路线: {{ idol_plan_type }} ({{ idol_plan_focus }})
+属性优先级: {{ parameter_priority }}
+考试结果: 排名={{ exam_rank }}/{{ exam_total }}, 分数={{ exam_score }}, 合格={{ exam_passed }}
+参数快照(最后一次观测): vocal={{ vocal }}, dance={{ dance }}, visual={{ visual }}
+最终周数: {{ final_week }}
+
+== 全决策时间线 ==
+{% for step in timeline %}
+第{{ step.week }}周 [{{ step.phase }}] 目标={{ step.decision_goal }} | 选择={{ step.decision_tags }} | 结果={{ step.outcome }}
+{% endfor %}
+
+== 牌组变化 ==
+{% for m in deck_mutations %}
+第{{ m.week }}周: {{ m.type }} {{ m.kind }} ({{ m.detail }})
+{% endfor %}
+
+请从结果反推，分析这局的策略节奏和关键转折点。
+
+输出 JSON：
+{
+  "strategy_description": "这局的策略节奏总结",
+  "setup_pattern": "抽象的阶段性模式",
+  "when_to_apply": "什么条件下适用",
+  "when_not_to_apply": "什么条件下不适用"
+}

@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.modal_text import ModalText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.utils.game_tools import get_modal
@@ -9,9 +10,9 @@ from src.utils.string_tools import string_match, MatchConfig
 if TYPE_CHECKING:
     from src.main import AppProcessor
 
-last_card_name = ""
 last_modal = False
 last_modal_title = ""
+
 
 def register_middlewares(processor: "AppProcessor"):
 
@@ -31,6 +32,7 @@ def register_middlewares(processor: "AppProcessor"):
             last_modal_title = ""
             return True
 
+        # 非通信错误弹窗：沿用原有跳过逻辑
         if last_modal and not string_match(
             last_modal_title,
             [

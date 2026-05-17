@@ -1,6 +1,7 @@
 <script setup>
 import apis from "@/scripts/apis.js";
 import message from "@/scripts/utils/message.js";
+import { translateAny, translateKey } from '@/scripts/i18n/translate'
 
 const props = defineProps({
   data: Object
@@ -10,8 +11,8 @@ const props = defineProps({
 <template>
   <v-list-item>
     <v-text-field
-      label="游戏窗口名"
-      hint="默认：gakumas（修改后需重启生效）"
+      :label="translateAny(props.data.base.game_window_name.ui.label)"
+      :hint="translateAny(props.data.base.game_window_name.ui.hint)"
       append-icon="md:replay"
       v-model="props.data.base.game_window_name.value"
       @click:append="props.data.base.game_window_name.value = props.data.base.game_window_name.default_value"
@@ -20,16 +21,16 @@ const props = defineProps({
   </v-list-item>
   <v-list-item>
     <v-text-field
-      label="游戏安装目录"
-      hint="游戏安装路径，指向gakumas.exe（默认自动获取，非必要无需修改）"
+      :label="translateAny(props.data.dmm_player.game_exe_path.ui.label)"
+      :hint="translateAny(props.data.dmm_player.game_exe_path.ui.hint)"
       v-model="props.data.dmm_player.game_exe_path.value"
       persistent-hint
     />
   </v-list-item>
   <v-list-item>
     <v-text-field
-      label="Viewer ID"
-      hint="自动获取，非必要无需修改"
+      :label="translateAny(props.data.dmm_player.viewer_id.ui.label)"
+      :hint="translateAny(props.data.dmm_player.viewer_id.ui.hint)"
       v-model="props.data.dmm_player.viewer_id.value"
       persistent-hint
       disabled
@@ -37,8 +38,8 @@ const props = defineProps({
   </v-list-item>
   <v-list-item>
     <v-text-field
-      label="Open ID"
-      hint="自动获取，非必要无需修改"
+      :label="translateAny(props.data.dmm_player.open_id.ui.label)"
+      :hint="translateAny(props.data.dmm_player.open_id.ui.hint)"
       v-model="props.data.dmm_player.open_id.value"
       persistent-hint
       disabled
@@ -46,8 +47,8 @@ const props = defineProps({
   </v-list-item>
   <v-list-item>
     <v-text-field
-      label="PF Token"
-      hint="自动获取，非必要无需修改"
+      :label="translateAny(props.data.dmm_player.pf_token.ui.label)"
+      :hint="translateAny(props.data.dmm_player.pf_token.ui.hint)"
       v-model="props.data.dmm_player.pf_token.value"
       persistent-hint
       disabled
@@ -60,9 +61,9 @@ const props = defineProps({
       @click="async ()=> {
         await apis.refresh_ddm_player_token()
         props.data = (await apis.get_config()).data
-        await message.showSuccess('启动参数刷新成功')
+        await message.showSuccess(translateKey('settings.refreshLaunchArgsSuccess'))
       }">
-      刷新启动参数
+      {{ translateKey('settings.refreshLaunchArgs') }}
     </v-btn>
   </v-list-item>
 </template>

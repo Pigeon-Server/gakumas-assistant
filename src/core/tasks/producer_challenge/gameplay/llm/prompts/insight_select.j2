@@ -1,0 +1,15 @@
+当前决策局面：
+- 阶段: {{ phase }} | 位置: {{ position }}
+- 轴属性: {{ idol_plan_type }} ({{ parameter_priority }})
+- 路线: {{ route_bias }}
+- 下个门槛: {{ next_gate }} ({{ weeks_until_gate }}周后)
+- 资源压力: {{ resource_pressure }}
+- 当前目标: {{ decision_goal }}
+
+可选的策略洞察索引：
+{% for insight in insights %}
+[{{ insight.id }}] {{ insight.strategy_description }}
+  适用: {{ insight.when_to_apply }}
+{% endfor %}
+
+请选出与当前局面最相关的 0~3 条洞察 ID。

@@ -20,6 +20,7 @@ from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.tasks.producer_challenge.shared.common import (
+    click_relative_point,
     detect_bottom_white_modal_region,
     invoke_decision_strategy,
     ocr_text,
@@ -121,8 +122,8 @@ def _normalize_pending_p_drink_payload(candidate: PDrinkCandidate) -> dict[str, 
     return {
         "action_id": candidate.action_id,
         "db_id": candidate.db_id,
-        "title": candidate.title,
-        "display_name": str(metadata.get("display_name") or candidate.title or ""),
+        "title": str(metadata.get("raw_name") or candidate.title or ""),
+        "name": str(metadata.get("raw_name") or candidate.title or ""),
         "description": str(metadata.get("description") or ""),
         "effect_types": list(metadata.get("effect_types", []) or []),
         "rarity": str(metadata.get("rarity") or ""),
@@ -153,11 +154,10 @@ def _get_pending_new_p_drink(ctx: "ProduceContext" | None) -> dict[str, Any]:
 
 
 def _drink_display_name(payload: dict[str, Any]) -> str:
-    """根据候选数据生成人类可读的饮料显示名。"""
+    """返回非 UI 决策链路使用的饮料名称。"""
     return str(
-        payload.get("display_name")
+        payload.get("name")
         or payload.get("title")
-        or payload.get("name")
         or payload.get("db_id")
         or ""
     ).strip()
@@ -243,19 +243,13 @@ def _annotate_p_drink_limit_preference(
     label = f"候选 {preferred_index}"
     for payload in decision_state.get("candidates", []) or []:
         if int(payload.get("index", -1)) == preferred_index:
-            payload["recommended"] = True
             label = str(payload.get("label") or payload.get("title") or label)
             break
-    for payload in decision_state.get("llm_actions", []) or []:
-        if int(payload.get("index", -1)) == preferred_index:
-            payload["recommended"] = True
-
-    stage_context = dict(decision_state.get("stage_context", {}) or {})
-    stage_context["system_recommendation"] = f"系统当前推荐优先考虑：{label}。{reason}"
-    decision_state["stage_context"] = stage_context
-    llm_snapshot = decision_state.get("llm_snapshot")
-    if isinstance(llm_snapshot, dict):
-        llm_snapshot["stage_context"] = stage_context
+    decision_state["local_preference"] = {
+        "index": int(preferred_index),
+        "label": label,
+        "reason": str(reason or ""),
+    }
 
 
 # ────────────────────────────────────────────────────────────
@@ -747,9 +741,11 @@ def _scan_and_learn_inventory_drinks(
                 candidate.source = resolution.source
                 candidate.confidence = resolution.confidence
                 candidate.metadata.update(resolution.metadata)
-                new_drink_name = candidate.metadata.get("new_drink", {}).get("display_name") or "新饮料"
-                candidate.title = f"丢弃「{resolution.display_name}」并保留新饮料「{new_drink_name}」"
-                logger.info(f"p_drink: 底栏饮料已识别 → {resolution.display_name} (db_id={resolution.db_id})")
+                new_drink_payload = dict(candidate.metadata.get("new_drink", {}) or {})
+                new_drink_name = str(new_drink_payload.get("name") or new_drink_payload.get("title") or "新饮料")
+                resolved_name = str(candidate.metadata.get("raw_name") or resolution.db_id or candidate.title)
+                candidate.title = f"丢弃「{resolved_name}」并保留新饮料「{new_drink_name}」"
+                logger.info(f"p_drink: 底栏饮料已识别 → {resolved_name} (db_id={resolution.db_id})")
 
         # 5. 关闭模态
         _click_cancel_in_modal(app)
@@ -773,7 +769,7 @@ def _execute_drink_discard_chain(
     Returns:
         True 表示丢弃成功，False 表示链中某步骤失败（已安全回退）。
     """
-    drink_name = target.metadata.get("display_name") or target.title or "未知饮料"
+    drink_name = str(target.metadata.get("raw_name") or target.title or "未知饮料")
     logger.info("p_drink: 开始丢弃链 - 丢弃「{}」(slot={})",
                 drink_name, target.metadata.get("slot_index", "?"))
 
@@ -945,7 +941,8 @@ def collect_p_drink_limit_action_candidates(
             candidate.source = resolution.source
             candidate.confidence = resolution.confidence
             candidate.metadata.update(resolution.metadata)
-            candidate.title = f"丢弃「{resolution.display_name}」并保留新饮料「{new_drink_name}」"
+            resolved_name = str(candidate.metadata.get("raw_name") or resolution.db_id or candidate.title)
+            candidate.title = f"丢弃「{resolved_name}」并保留新饮料「{new_drink_name}」"
         candidates.append(candidate)
 
     # CLIP 未识别的底栏饮料：逐个点击打开详情模态读取名称并触发自动学习
@@ -1299,6 +1296,166 @@ def _handle_reward_skip_confirmation(app: "AppProcessor", timeout: float = 2.0) 
     return False
 
 
+def _box_pixel_width(box: Any) -> int:
+    """将检测框转换为像素宽度。"""
+    x1 = int(getattr(box, "x", 0))
+    x2 = int(getattr(box, "w", 0))
+    width = x2 - x1
+    return width if width > 0 else int(getattr(box, "w", 0))
+
+
+def _box_pixel_height(box: Any) -> int:
+    """将检测框转换为像素高度。"""
+    y1 = int(getattr(box, "y", 0))
+    y2 = int(getattr(box, "h", 0))
+    height = y2 - y1
+    return height if height > 0 else int(getattr(box, "h", 0))
+
+
+def _find_receive_button_by_bottom_ocr(app: "AppProcessor") -> tuple[int, int] | None:
+    """在普通领取页下半屏 OCR 定位「受け取る」主按钮文本中心。"""
+    frame = getattr(app, "latest_frame", None)
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return None
+
+    frame_height, frame_width = frame.shape[:2]
+    x1 = int(frame_width * 0.18)
+    x2 = int(frame_width * 0.82)
+    y1 = int(frame_height * 0.72)
+    y2 = int(frame_height * 0.96)
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+
+    ocr_result_list = _ocr.ocr(crop)
+    merged_lines = (
+        list(
+            ocr_result_list.auto_merge_lines(
+                cy_range=max(8, int(crop.shape[0] * 0.08)),
+                width_gap=max(12, int(crop.shape[1] * 0.05)),
+            )
+        )
+        if hasattr(ocr_result_list, "auto_merge_lines")
+        else list(ocr_result_list)
+    )
+    if not merged_lines:
+        return None
+
+    debugger = getattr(app, "debug_tools", None)
+    candidates: list[tuple[float, int, int, int, int]] = []
+    for line in merged_lines:
+        text = normalize_ocr_jp(fullwidth_to_halfwidth(str(getattr(line, "text", "") or "")))
+        if not text:
+            continue
+        if ProduceText.P_DRINK_LIMIT_NO_RECEIVE in text:
+            continue
+        if ProduceText.RECEIVE not in text and ProduceText.P_DRINK_USE not in text:
+            continue
+
+        line_x = int(getattr(line, "x", 0))
+        line_y = int(getattr(line, "y", 0))
+        line_w = max(1, int(getattr(line, "w", 0)))
+        line_h = max(1, int(getattr(line, "h", 0)))
+        abs_x1 = x1 + line_x
+        abs_y1 = y1 + line_y
+        abs_x2 = abs_x1 + line_w
+        abs_y2 = abs_y1 + line_h
+        center_x = abs_x1 + line_w // 2
+        center_y = abs_y1 + line_h // 2
+
+        # 主按钮文本通常位于底部中央，优先靠中且靠下的结果。
+        center_bias = 1.0 - min(1.0, abs(center_x - frame_width / 2.0) / max(frame_width / 2.0, 1.0))
+        vertical_bias = min(1.0, center_y / max(frame_height, 1))
+        score = center_bias * 2.0 + vertical_bias
+        candidates.append((score, center_x, center_y, abs_x1, abs_y1))
+
+        if debugger is not None:
+            debugger.add_box(
+                abs_x1,
+                abs_y1,
+                abs_x2,
+                abs_y2,
+                label=f"p_drink_receive_ocr:{text[:16]}",
+                color=(60, 220, 180),
+                alpha=0.16,
+                duration=2.5,
+                font_size=14,
+            )
+
+    if not candidates:
+        return None
+
+    _, center_x, center_y, _, _ = max(candidates, key=lambda item: item[0])
+    return center_x, center_y
+
+
+def _find_receive_button(app: "AppProcessor") -> Any | None:
+    """优先定位普通领取页的「受け取る」主按钮。
+
+    当前页面底部可能同时存在对话气泡上的圆形功能按钮，它们在 YOLO 中也可能被识别为
+    BUTTON；如果简单按 `cy` 取最靠下按钮，容易误点这些小圆按钮，导致一直停在
+    `p_drink_selected`。这里先尝试 OCR 明确匹配「受け取る」，失败后再按主按钮几何
+    特征回退。
+    """
+    results = getattr(app, "latest_results", None)
+    frame = getattr(app, "latest_frame", None)
+    if results is None:
+        return None
+
+    confirm_boxes = list(results.filter_by_label(ProducerLabels.CONFIRM_BUTTON))
+    if confirm_boxes:
+        return max(confirm_boxes, key=lambda box: int(getattr(box, "cy", 0)))
+
+    frame_width = int(frame.shape[1]) if frame is not None and getattr(frame, "size", 0) > 0 else 0
+    frame_height = int(frame.shape[0]) if frame is not None and getattr(frame, "size", 0) > 0 else 0
+
+    receive_candidates: list[Any] = []
+    fallback_candidates: list[Any] = []
+    for button in results.filter_by_label(BaseUILabels.BUTTON):
+        width = _box_pixel_width(button)
+        height = _box_pixel_height(button)
+        cx = int(getattr(button, "cx", 0))
+        cy = int(getattr(button, "cy", 0))
+
+        # 主领取按钮通常是底部横向长按钮，圆形功能按钮则更小、更接近正圆。
+        is_large_bottom_button = width >= 220 and height >= 70 and width >= int(height * 1.8)
+        is_centered_button = frame_width <= 0 or abs(cx - frame_width // 2) <= int(frame_width * 0.22)
+        is_reasonable_vertical_zone = frame_height <= 0 or cy >= int(frame_height * 0.68)
+        if is_large_bottom_button and is_centered_button and is_reasonable_vertical_zone:
+            fallback_candidates.append(button)
+
+        button_text = normalize_ocr_jp(fullwidth_to_halfwidth(ocr_text(getattr(button, "frame", None))))
+        if not button_text:
+            continue
+        if ProduceText.P_DRINK_LIMIT_NO_RECEIVE in button_text:
+            continue
+        if ProduceText.RECEIVE in button_text or ProduceText.P_DRINK_USE in button_text:
+            receive_candidates.append(button)
+
+    if receive_candidates:
+        return max(receive_candidates, key=lambda box: int(getattr(box, "cy", 0)))
+    if fallback_candidates:
+        return max(
+            fallback_candidates,
+            key=lambda box: (_box_pixel_width(box) * _box_pixel_height(box), int(getattr(box, "cy", 0))),
+        )
+    return None
+
+
+def _click_receive_button(app: "AppProcessor") -> bool:
+    """点击普通领取页的主领取按钮。"""
+    target = _find_receive_button(app)
+    if target is not None:
+        app.device.click_element(target)
+        return True
+
+    ocr_click_point = _find_receive_button_by_bottom_ocr(app)
+    if ocr_click_point is None:
+        return False
+    app.device.click(int(ocr_click_point[0]), int(ocr_click_point[1]), el_label="p_drink_receive_ocr")
+    return True
+
+
 def _click_any_bottom_button(app: "AppProcessor") -> bool:
     """点击P饮料面板底部的按钮（不区分 Confirm/Disable 标签）。
 
@@ -1367,7 +1524,7 @@ def _record_p_drink_confirmed(ctx: "ProduceContext") -> None:
         ctx.mutate_deck_acquire(
             drink_db_id,
             kind="produce_drink",
-            name=ctx.pending_p_drink_label or pending_drink.get("display_name", ""),
+            name=ctx.pending_p_drink_label or pending_drink.get("name", ""),
             source="p_drink",
         )
     ctx.clear_p_drink_pending()
@@ -1435,14 +1592,35 @@ def execute_p_drink_step(
 ) -> PDrinkStepResult | None:
     """执行一步 P 饮料交互。
 
+    - p_drink_showcase: 点击展示页安全区域推进到下一步
     - p_drink_selected: 点击确认按钮（第 2 步），必要时转入所持上限决策
     - p_drink_idle: 选择一个饮料（第 1 步），检测所持上限并走决策流程
     """
+    if position == "p_drink_showcase":
+        click_relative_point(app, x_ratio=0.5, y_ratio=0.82, label="p_drink_showcase_advance")
+        ctx.record_operation(
+            "advance_p_drink_showcase",
+            target="p_drink_showcase",
+            position=position,
+        )
+        ctx.handler_state["unknown_retry_override"] = {
+            "reason": "p_drink_showcase_transition",
+            "retry_limit": int(
+                ctx.handler_state.get("loading_unknown_retry_limit", 15) or 15
+            ),
+            "retry_sleep": float(
+                ctx.handler_state.get("loading_unknown_retry_sleep", 1.0) or 1.0
+            ),
+        }
+        return PDrinkStepResult(status="confirmed")
+
     if position == "p_drink_selected":
         if _should_handle_p_drink_limit_page(app):
             return _handle_p_drink_limit_page(app, ctx)
 
-        _click_any_bottom_button(app)
+        if not _click_receive_button(app):
+            logger.warning("p_drink: 未找到可点击的「受け取る」主按钮")
+            return None
 
         # 验证画面是否推进
         if _verify_p_drink_advanced(app):

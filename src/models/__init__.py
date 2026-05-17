@@ -10,6 +10,7 @@ from .clip import (
 )
 from .auto_purchase import AutoPurchaseExchangeRecord
 from .config import ConfigModel
+from .strategy_insight import ProduceStrategyInsight
 
 all_models = [
     AutoPurchaseExchangeRecord,
@@ -22,4 +23,5 @@ all_models = [
     CLIPayload_SkillCard,
     CLIPayload_SupportCard,
     ConfigModel,
+    ProduceStrategyInsight,
 ]

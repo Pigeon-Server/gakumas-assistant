@@ -27,41 +27,45 @@ from src.utils.game_database_tools import (
     _concat_produce_descriptions,
 )
 from src.utils.logger import logger
+from src.utils.i18n_tools import I18nText, i18n_text, serialize_i18n_value, translate_like_payload
 from src.utils.runtime_paths import resolve_data_str, resolve_runtime_str
 from src.utils.task_failure_package import resolve_task_failure_package_download
 
 if TYPE_CHECKING:
     from src.main import AppProcessor
 
-def _api_return(status: bool, message: str = '', data: dict | list = None):
+def _api_return(status: bool, message: I18nText | str | dict = '', data: dict | list = None):
     return {
         'status': status,
-        'message': message,
-        'data': data
+        'message': serialize_i18n_value(message),
+        'data': serialize_i18n_value(data),
     }
 
 def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSocketManager):
     def _resource_not_ready_response():
-        return _api_return(False, "首次启动需要先下载游戏数据库和本地化资源，请在 WebUI 中确认下载。")
+        return _api_return(
+            False,
+            translate_like_payload(None, "backend.api.resourceNotReady"),
+        )
 
     def _get_item_db():
         if not processor.is_resource_ready():
-            raise RuntimeError("游戏数据库资源尚未就绪")
+            raise RuntimeError(str(i18n_text("backend.api.gameDatabaseNotReady", fallback="游戏数据库资源尚未就绪")))
         return GakumasDatabase_ItemDataUtils()
 
     def _get_support_card_db():
         if not processor.is_resource_ready():
-            raise RuntimeError("游戏数据库资源尚未就绪")
+            raise RuntimeError(str(i18n_text("backend.api.gameDatabaseNotReady", fallback="游戏数据库资源尚未就绪")))
         return GakumasDatabase_SupportCardDataUtils()
 
     def _get_idol_card_db():
         if not processor.is_resource_ready():
-            raise RuntimeError("游戏数据库资源尚未就绪")
+            raise RuntimeError(str(i18n_text("backend.api.gameDatabaseNotReady", fallback="游戏数据库资源尚未就绪")))
         return GakumasDatabase_IdolCardDataUtils()
 
     def _get_produce_item_db():
         if not processor.is_resource_ready():
-            raise RuntimeError("游戏数据库资源尚未就绪")
+            raise RuntimeError(str(i18n_text("backend.api.gameDatabaseNotReady", fallback="游戏数据库资源尚未就绪")))
         return GakumasDatabase_ProduceItemDataUtils()
 
     @app.websocket("/ws")
@@ -82,9 +86,16 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
                 action = data.get("action")
                 data = data.get("data")
                 if action == WebsocketActions.BaseActionFlag + ":" + WebsocketActions.WebsocketHeartBeat.Ping:
-                    await ws_manager.send_action(websocket, WebsocketActions.WebsocketHeartBeat.Pong)
+                    pong_sent = await ws_manager.send_action(websocket, WebsocketActions.WebsocketHeartBeat.Pong)
+                    if not pong_sent:
+                        break
         except WebSocketDisconnect:
-            pass
+            logger.debug("WebSocket client disconnected")
+        except RuntimeError as e:
+            if ws_manager.is_normal_disconnect_error(e, websocket):
+                logger.debug("WebSocket session closed normally [{}]: {}", type(e).__name__, e)
+            else:
+                logger.exception(f"Websocket Error: {e}")
         except Exception as e:
             logger.exception(f"Websocket Error: {e}")
         finally:
@@ -96,10 +107,14 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         if not processor.is_resource_ready():
             return _resource_not_ready_response()
         if not processor.ensure_device_ready(restart_inference=True):
-            return _api_return(False, processor.get_device_status().get("message", "当前设备不可用"))
+            return _api_return(
+                False,
+                processor.get_device_status().get("message")
+                or translate_like_payload(None, "backend.app.deviceUnavailable"),
+            )
         if not processor.exec_task():
-            return _api_return(False, "任务队列启动失败")
-        return _api_return(True, "OK")
+            return _api_return(False, translate_like_payload(None, "backend.api.taskQueueStartFailed"))
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
     @app.get("/api/task/start/{task_name:str}")
     def run_task(task_name: str):
@@ -111,10 +126,14 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         if not processor.is_resource_ready():
             return _resource_not_ready_response()
         if not processor.ensure_device_ready(restart_inference=True):
-            return _api_return(False, processor.get_device_status().get("message", "当前设备不可用"))
+            return _api_return(
+                False,
+                processor.get_device_status().get("message")
+                or translate_like_payload(None, "backend.app.deviceUnavailable"),
+            )
         if not processor.exec_task(task_name):
-            return _api_return(False, "任务启动失败")
-        return _api_return(True, "OK")
+            return _api_return(False, translate_like_payload(None, "backend.api.taskStartFailed"))
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
     @app.get("/api/task/start_from/{task_name:str}")
     def run_task_from(task_name: str):
@@ -122,15 +141,19 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         if not processor.is_resource_ready():
             return _resource_not_ready_response()
         if not processor.ensure_device_ready(restart_inference=True):
-            return _api_return(False, processor.get_device_status().get("message", "当前设备不可用"))
+            return _api_return(
+                False,
+                processor.get_device_status().get("message")
+                or translate_like_payload(None, "backend.app.deviceUnavailable"),
+            )
         task = processor.task_queue._find_task(task_name)
         if task is None:
-            return _api_return(False, "任务不存在")
+            return _api_return(False, translate_like_payload(None, "backend.api.invalidTaskName"))
         if task.manual_only:
-            return _api_return(False, "仅手动任务不支持从这里开始执行")
+            return _api_return(False, translate_like_payload(None, "backend.api.manualOnlyRunFromUnsupported"))
         if not processor.exec_task_from(task_name):
-            return _api_return(False, "从当前任务开始执行失败")
-        return _api_return(True, "OK")
+            return _api_return(False, translate_like_payload(None, "backend.api.runFromFailed"))
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
     @app.get("/api/task/suspend")
     def suspend_task():
@@ -140,11 +163,11 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         """
         current_running_task = processor.task_queue.get_current_running_task()
         if not current_running_task:
-            return _api_return(False, "当前没有正在运行的任务")
+            return _api_return(False, translate_like_payload(None, "backend.api.noRunningTask"))
         if not current_running_task.allow_manual_suspend:
-            return _api_return(False, "当前任务不支持手动挂起")
+            return _api_return(False, translate_like_payload(None, "backend.api.suspendUnsupported"))
         processor.task_queue.suspend_running_task()
-        return _api_return(True, "OK")
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
     @app.get("/api/task/resume")
     def resume_task():
@@ -153,28 +176,28 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         :return:
         """
         if processor.task_queue.queue_status() != TaskStatus.SUSPENDED:
-            return _api_return(False, "当前没有已挂起的任务")
+            return _api_return(False, translate_like_payload(None, "backend.api.noSuspendedTask"))
         if not processor.task_queue.get_current_suspend_task().allow_manual_resume:
-            return _api_return(False, "当前任务不支持手动解除挂起")
+            return _api_return(False, translate_like_payload(None, "backend.api.resumeUnsupported"))
         if processor.task_queue.get_current_running_task() is not None:
             logger.debug(f"Current running task: {processor.task_queue.get_current_running_task()}")
-            return _api_return(False, "当前处于插队执行中，无法恢复执行")
+            return _api_return(False, translate_like_payload(None, "backend.api.resumeBlockedByInsertedTask"))
         processor.task_queue.resume_suspended_task()
-        return _api_return(True, "OK")
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
 
     @app.get("/api/task/stop")
     def stop_task_queue():
         """停止任务队列"""
         processor.task_queue.stop()
-        return _api_return(True, "OK")
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
     @app.get("/api/task/failure_package/download/{package_id}")
     def download_task_failure_package(package_id: str):
         """下载任务失败日志压缩包（重启前有效）。"""
         package_path = resolve_task_failure_package_download(package_id)
         if package_path is None:
-            return _api_return(False, "日志压缩包不存在或已失效，请重试任务后重新下载。")
+            return _api_return(False, translate_like_payload(None, "backend.api.taskFailurePackageMissing"))
         return FileResponse(
             str(package_path),
             media_type="application/zip",
@@ -184,17 +207,17 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
     @app.get("/api/status")
     def get_status():
         """获取服务状态"""
-        return _api_return(True, 'OK', processor.build_app_status())
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), processor.build_app_status())
 
     @app.post("/api/app/shutdown")
     def shutdown_app():
         processor.request_app_shutdown()
-        return _api_return(True, "应用正在退出")
+        return _api_return(True, translate_like_payload(None, "backend.api.shutdownStarted"))
 
     @app.get("/api/task/get_registered_tasks")
     def get_registered_tasks():
         """获取所有已注册的任务"""
-        return _api_return(True, 'OK', processor.task_queue.get_task_list())
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), processor.task_queue.get_task_list())
 
     @app.post("/api/task/disable/{task_name:str}")
     def disable_task(task_name):
@@ -205,7 +228,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         """
         new_config = processor.config_service().base.disabled_tasks.value.append(task_name)
         processor.config_service.save_config(new_config)
-        return _api_return(True, 'OK', processor.task_queue.disable_task(task_name))
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), processor.task_queue.disable_task(task_name))
 
     @app.post("/api/task/enable/{task_name:str}")
     def enable_task(task_name):
@@ -216,7 +239,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         """
         new_config = processor.config_service().base.disabled_tasks.value.remove(task_name)
         processor.config_service.save_config(new_config)
-        return _api_return(True, 'OK', processor.task_queue.enable_task(task_name))
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), processor.task_queue.enable_task(task_name))
 
     # @app.get("/api/debug/switch_yolo_model/{model_name:str}")
     # def switch_yolo_model(model: str):
@@ -233,7 +256,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         :return:
         """
         config = processor.config_service()
-        return _api_return(True, 'OK', config.to_json_dict())
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), config.to_json_dict())
 
     @app.get("/api/config/tools/reset_config")
     def reset_config():
@@ -256,8 +279,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             ddm_cfg.pf_token.value = result.pf_token
             processor.config_service.save_config()
         except Exception as e:
-            return _api_return(False, f"提取游戏启动参数失败 {e}")
-        return _api_return(True, "OK")
+            return _api_return(False, translate_like_payload(i18n_text("backend.api.refreshDmmTokenFailed", fallback=f"提取游戏启动参数失败：{e}", error=str(e)), "backend.api.refreshDmmTokenFailed"))
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
     @app.get("/api/config/{task_name:str}")
     def get_task_config(task_name: str):
@@ -267,12 +290,12 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         :return:
         """
         if task_name not in processor.task_queue.get_task_list().keys():
-            return _api_return(False, "Invalid task name")
+            return _api_return(False, translate_like_payload(None, "backend.api.invalidTaskName"))
         all_config = processor.config_service().to_json_dict()
         task_name = f"task__{task_name}"
         if task_name not in all_config.keys():
-            return _api_return(False, "The task does not have any configuration.")
-        return _api_return(True, "OK", all_config[task_name])
+            return _api_return(False, translate_like_payload(None, "backend.api.taskConfigMissing"))
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), all_config[task_name])
 
     @app.put("/api/config")
     async def set_all_config(request: Request):
@@ -286,9 +309,9 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         status, errors = config.from_json_dict(data)
         if status:
             processor.config_service.save_config(config)
-            return _api_return(True, 'OK', config.to_json_dict())
+            return _api_return(True, translate_like_payload(None, "backend.api.ok"), config.to_json_dict())
         else:
-            return _api_return(False, "error", {f"{e.section}.{e.field}": e.message for e in errors})
+            return _api_return(False, translate_like_payload(None, "backend.api.genericError"), {f"{e.section}.{e.field}": e.message for e in errors})
 
     @app.put("/api/config/{task_name:str}")
     async def set_task_config(request: Request, task_name: str):
@@ -299,26 +322,26 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         :return:
         """
         if task_name not in processor.task_queue.get_task_list().keys():
-            return _api_return(False, "Invalid task name")
+            return _api_return(False, translate_like_payload(None, "backend.api.invalidTaskName"))
         config = copy(processor.config_service())
         all_config = config.to_json_dict()
         task_name = f"task__{task_name}"
         if task_name not in all_config.keys():
-            return _api_return(False, "The task does not have any configuration.")
+            return _api_return(False, translate_like_payload(None, "backend.api.taskConfigMissing"))
         data = await request.json()
         # 合并新的 task 配置
         all_config[task_name] = data
         status, errors = config.from_json_dict(all_config)
         if status:
             processor.config_service.save_config(config)
-            return _api_return(True, 'OK', config.to_json_dict()[task_name])
+            return _api_return(True, translate_like_payload(None, "backend.api.ok"), config.to_json_dict()[task_name])
         else:
-            return _api_return(False, "error", {f"{e.section}.{e.field}": e.message for e in errors})
+            return _api_return(False, translate_like_payload(None, "backend.api.genericError"), {f"{e.section}.{e.field}": e.message for e in errors})
 
     @app.get("/api/resource_update/status")
     def get_resource_update_status():
         """获取资源仓库更新状态"""
-        return _api_return(True, "OK", processor.resource_update_service.get_status())
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), processor.resource_update_service.get_status())
 
     @app.post("/api/resource_update/check")
     def check_resource_updates():
@@ -337,14 +360,14 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         """获取所有ADB设备"""
         try:
             devices = [s.serial for s in adbutils.adb.device_list()]
-            return _api_return(True, 'OK', {
+            return _api_return(True, translate_like_payload(None, "backend.api.ok"), {
                 "devices": devices,
                 "available": True,
-                "message": "",
+                "message": i18n_text("backend.adb.noError", fallback=""),
             })
         except Exception as exc:
             _, reason = describe_adb_error(exc)
-            return _api_return(True, 'OK', {
+            return _api_return(True, translate_like_payload(None, "backend.api.ok"), {
                 "devices": [],
                 "available": False,
                 "message": reason,
@@ -356,14 +379,14 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             serial_list = adbutils.adb.device_list()
             serial_list = [s.serial for s in serial_list if ":" not in str(s.serial)]
-            return _api_return(True, 'OK', {
+            return _api_return(True, translate_like_payload(None, "backend.api.ok"), {
                 "devices": serial_list,
                 "available": True,
-                "message": "",
+                "message": i18n_text("backend.adb.noError", fallback=""),
             })
         except Exception as exc:
             _, reason = describe_adb_error(exc, connect_mode="USB")
-            return _api_return(True, 'OK', {
+            return _api_return(True, translate_like_payload(None, "backend.api.ok"), {
                 "devices": [],
                 "available": False,
                 "message": reason,
@@ -375,7 +398,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             items = _get_item_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, str(exc))
+            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
         all_items = []
         for item in items:
             all_items.append({
@@ -391,7 +414,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
                 "image": os.path.exists(os.path.join(processor.data_path, f"CLIP/items/{item.id}.png")),
                 "gameAssetImage": game_asset_service.has_item_image(item.id),
             })
-        return _api_return(True, "OK", all_items)
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), all_items)
 
     @app.get("/api/idol_card/list")
     def get_all_idol_cards():
@@ -400,7 +423,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             produce_item_db = _get_produce_item_db()
             cards = _get_idol_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, str(exc))
+            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
 
         def _primary_attribute(card):
             stats = {
@@ -489,7 +512,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
                 "hasImage": clip_exists,
                 "hasFullImage": full_image_exists,
             })
-        return _api_return(True, "OK", all_cards)
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), all_cards)
 
     @app.get("/api/support_card/list")
     def get_all_support_cards():
@@ -497,7 +520,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, str(exc))
+            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
 
         # 构建支援卡技能描述映射（从 ProduceSkill 关联获取）
         from src.utils.game_database_tools import (
@@ -564,12 +587,12 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
                 "gameAssetImage": game_asset_exists,
                 "gameAssetFullImage": game_asset_full_exists,
             })
-        return _api_return(True, "OK", all_cards)
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), all_cards)
 
     @app.get("/api/game_asset/status")
     def get_game_asset_status():
         """获取游戏资源下载状态"""
-        return _api_return(True, "OK", {
+        return _api_return(True, translate_like_payload(None, "backend.api.ok"), {
             "available": game_asset_service._is_gom_available(),
             "downloadedCount": game_asset_service.get_downloaded_card_count(),
             **game_asset_service.get_download_status(),
@@ -580,44 +603,44 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         """触发下载支援卡缩略图"""
         config = processor.config_service()
         if not config.base.enable_game_asset_download.value:
-            return _api_return(False, "游戏资源下载功能未启用，请在设置中开启")
+            return _api_return(False, translate_like_payload(None, "backend.api.imageDownloadDisabled"))
 
         if not game_asset_service._is_gom_available():
-            return _api_return(False, "GkmasObjectManager 未就绪，请确认 vendor/GkmasObjectManager 子模块已初始化")
+            return _api_return(False, translate_like_payload(None, "backend.api.objectManagerUnavailable"))
 
         status = game_asset_service.get_download_status()
         if status["downloading"]:
-            return _api_return(False, "正在下载中，请稍后")
+            return _api_return(False, translate_like_payload(None, "backend.api.downloadInProgress"))
 
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, str(exc))
+            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
 
         game_asset_service.download_support_card_images_async(
             card_db_list=cards,
             clip_manager=processor.clip_manager,
         )
-        return _api_return(True, "开始下载支援卡缩略图")
+        return _api_return(True, translate_like_payload(None, "backend.api.supportCardThumbDownloadStarted"))
 
     @app.post("/api/game_asset/download_support_cards_full")
     def trigger_download_support_cards_full():
         """触发下载支援卡全尺寸图片"""
         config = processor.config_service()
         if not config.base.enable_game_asset_download.value:
-            return _api_return(False, "游戏资源下载功能未启用，请在设置中开启")
+            return _api_return(False, translate_like_payload(None, "backend.api.imageDownloadDisabled"))
 
         if not game_asset_service._is_gom_available():
-            return _api_return(False, "GkmasObjectManager 未就绪，请确认 vendor/GkmasObjectManager 子模块已初始化")
+            return _api_return(False, translate_like_payload(None, "backend.api.objectManagerUnavailable"))
 
         status = game_asset_service.get_download_status()
         if status["downloading"]:
-            return _api_return(False, "正在下载中，请稍后")
+            return _api_return(False, translate_like_payload(None, "backend.api.downloadInProgress"))
 
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, str(exc))
+            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
 
         from threading import Thread
         Thread(
@@ -625,51 +648,51 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             args=(cards, False),
             daemon=True,
         ).start()
-        return _api_return(True, "开始下载支援卡全尺寸图片")
+        return _api_return(True, translate_like_payload(None, "backend.api.supportCardFullDownloadStarted"))
 
     @app.post("/api/game_asset/download_card_full/{card_id}")
     def download_single_card_full(card_id: str):
         """按需下载单张支援卡全尺寸图片（查看详情时触发）"""
         config = processor.config_service()
         if not config.base.enable_game_asset_download.value:
-            return _api_return(False, "游戏资源下载功能未启用")
+            return _api_return(False, translate_like_payload(None, "backend.api.imageDownloadFeatureDisabledShort"))
         if not game_asset_service._is_gom_available():
-            return _api_return(False, "GkmasObjectManager 未就绪")
+            return _api_return(False, translate_like_payload(None, "backend.api.objectManagerUnavailableShort"))
         if game_asset_service.has_support_card_full_image(card_id):
-            return _api_return(True, "已存在", {"exists": True})
+            return _api_return(True, translate_like_payload(None, "backend.api.downloadAlreadyExists"), {"exists": True})
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, str(exc))
+            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
         card = next((c for c in cards if c.id == card_id), None)
         if not card:
-            return _api_return(False, f"未找到卡牌: {card_id}")
+            return _api_return(False, translate_like_payload(i18n_text("backend.api.cardNotFound", fallback=f"未找到卡牌：{card_id}", cardId=card_id), "backend.api.cardNotFound"))
         from threading import Thread
         Thread(
             target=game_asset_service.download_single_support_card_full_image,
             args=(card_id, card.assetId),
             daemon=True,
         ).start()
-        return _api_return(True, "开始下载")
+        return _api_return(True, translate_like_payload(None, "backend.api.downloadStarted"))
 
     @app.post("/api/game_asset/auto_download")
     def trigger_auto_download():
         """批量下载所有支援卡相关图片（在设置页面触发）"""
         config = processor.config_service()
         if not config.base.enable_game_asset_download.value:
-            return _api_return(False, "游戏资源下载功能未启用")
+            return _api_return(False, translate_like_payload(None, "backend.api.imageDownloadFeatureDisabledShort"))
 
         if not game_asset_service._is_gom_available():
-            return _api_return(False, "GkmasObjectManager 未就绪")
+            return _api_return(False, translate_like_payload(None, "backend.api.objectManagerUnavailableShort"))
 
         status = game_asset_service.get_download_status()
         if status["downloading"]:
-            return _api_return(True, "下载已在进行中")
+            return _api_return(True, translate_like_payload(None, "backend.api.downloadAlreadyRunning"))
 
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, str(exc))
+            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
 
         from threading import Thread
 
@@ -678,7 +701,7 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             kwargs={"card_db_list": cards, "clip_manager": processor.clip_manager},
             daemon=True,
         ).start()
-        return _api_return(True, "开始自动下载支援卡图片")
+        return _api_return(True, translate_like_payload(None, "backend.api.supportCardAutoDownloadStarted"))
 
     app.mount(
         "/assets",

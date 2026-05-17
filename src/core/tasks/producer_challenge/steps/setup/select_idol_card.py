@@ -27,8 +27,9 @@ from src.core.tasks.base_ui.learn_idol_card_clip import (
     _try_clip_identify,
 )
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
-from src.core.tasks.producer_challenge.ui import wait_frame_stable
-from src.entity.Game.Components.Button import ButtonList
+from src.core.tasks.producer_challenge.ui import find_button, wait_frame_stable
+from src.entity.Game.Components.Button import ButtonList, Button
+from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.game_database_tools import GakumasDatabase_IdolCardDataUtils
 from src.utils.logger import logger
 from src.utils.opencv_tools import check_frame_change, compute_ssim_score
@@ -78,6 +79,7 @@ class SelectIdolCardStep(ProduceStep):
         Notes:
             该步骤会把最终确认的偶像卡写入 `ctx.selected_idol_card`，供后续编成信息采集与日志使用。
         """
+        app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__IDOL_SELECTION)
         if ctx.target_idol_card_id:
             self._select_by_list(app, ctx)
         else:
@@ -108,22 +110,49 @@ class SelectIdolCardStep(ProduceStep):
         found = self._search_idol_list_grid(app, target_id, ctx)
 
         if found:
-            app.game_utils.click_button(
-                ButtonText.CONFIRM,
-                match_config=MatchConfig(use_fuzz=True, fuzz_threshold=70),
-            )
+            flag = False
+            for _ in range(5):
+                try:
+                    app.game_utils.click_button(
+                        ButtonText.CONFIRM,
+                        match_config=MatchConfig(use_fuzz=True, fuzz_threshold=70),
+                    )
+                    app.game_utils.wait_location_update(
+                        GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__IDOL_SELECTION
+                    )
+                    flag = True
+                    break
+                except TimeoutError:
+                    sleep(1)
+                    continue
+            if not flag:
+                self._try_use_back_button_exit_idol_select_page(app)
         else:
             logger.warning(
                 f"在 Pアイドル一覧 中未找到目标偶像卡 '{target_id}'，使用当前选中卡"
             )
-            if not self._leave_idol_list_page(app):
-                logger.warning("无法稳定退出 Pアイドル一覧 页面，继续使用当前画面")
+            self._try_use_back_button_exit_idol_select_page(app)
 
         sleep(0.8)
         app.game_utils.wait_frame_stable(stable_count=2)
 
         if not found:
             self._remember_current_selection(app, ctx)
+
+    def _try_use_back_button_exit_idol_select_page(self, app: "AppProcessor") -> bool:
+        flag = False
+        for _ in range(5):
+            if not self._leave_idol_list_page(app):
+                logger.warning("无法稳定退出 Pアイドル一覧 页面，继续使用当前画面")
+                sleep(1)
+                continue
+            if not app.game_utils.wait_location_update(
+                    GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__IDOL_SELECTION):
+                sleep(1)
+                continue
+            flag = True
+            break
+        return flag
 
     def _search_idol_list_grid(
             self,
@@ -137,16 +166,12 @@ class SelectIdolCardStep(ProduceStep):
         上方区域（取最顶部同侧两行：角色名+偶像卡名）；OCR 成功时
         自动将缩略图作为 CLIP 变体学习。
         """
-        has_clip = (
-            getattr(app, "clip_manager", None) is not None
-            and hasattr(app.clip_manager, "idol_card_clip")
-        )
         previous_grid: Optional[np.ndarray] = None
         previous_selected_card, _ = _ocr_match_grid_selected_card(app)
         previous_selected_id = previous_selected_card.id if previous_selected_card is not None else None
 
         for scroll_index in range(_IDOL_LIST_MAX_SCROLLS):
-            frame = getattr(app, "latest_frame", None)
+            frame = app.latest_frame
             if frame is None or frame.size == 0:
                 break
 
@@ -163,8 +188,9 @@ class SelectIdolCardStep(ProduceStep):
                 ].copy()
 
                 # CLIP 快速识别（原始缩略图）
-                if has_clip and thumb_image.size > 0:
+                if thumb_image.size > 0:
                     clip_card = _try_clip_identify(app, thumb_image)
+                    # 找不到匹配的偶像卡
                     if clip_card is not None and clip_card.id == target_id:
                         app.device.click(thumb_box.cx, thumb_box.cy, "idol-list-thumbnail")
                         sleep(0.35)
@@ -196,7 +222,7 @@ class SelectIdolCardStep(ProduceStep):
                 texts: list[str] = []
                 if current_card is None:
                     current_card, texts = _ocr_match_grid_selected_card(app)
-                current_frame = getattr(app, "latest_frame", None)
+                current_frame = app.latest_frame
                 region_changed = False
                 if current_frame is not None and current_frame.size > 0:
                     after_crop = current_frame[
@@ -215,7 +241,7 @@ class SelectIdolCardStep(ProduceStep):
                     )
                     ctx.selected_idol_card = current_card
                     previous_selected_id = current_card.id
-                    self._clip_learn_variant(app, has_clip, thumb_image, current_card)
+                    self._clip_learn_variant(app, thumb_image, current_card)
                     return True
 
                 if current_card is not None:
@@ -223,11 +249,9 @@ class SelectIdolCardStep(ProduceStep):
                         f"网格卡: {current_card.name} ({current_card.id})，非目标卡"
                     )
                     previous_selected_id = current_card.id
-                    self._clip_learn_variant(app, has_clip, thumb_image, current_card)
+                    self._clip_learn_variant(app, thumb_image, current_card)
 
-            current_grid = _extract_idol_list_grid_region(
-                getattr(app, "latest_frame", None)
-            )
+            current_grid = _extract_idol_list_grid_region(app.latest_frame)
             if previous_grid is not None and check_frame_change(
                 previous_grid, current_grid
             ):
@@ -299,12 +323,11 @@ class SelectIdolCardStep(ProduceStep):
     @staticmethod
     def _clip_learn_variant(
             app: "AppProcessor",
-            has_clip: bool,
             image: Optional[np.ndarray],
             card: "IdolCard",
     ) -> None:
         """将缩略图作为 CLIP 变体自动学习。"""
-        if not has_clip or image is None or image.size == 0:
+        if image is None or image.size == 0:
             return
         try:
             if app.clip_manager.idol_card_clip.add_variant_to_memory(
@@ -348,7 +371,7 @@ class SelectIdolCardStep(ProduceStep):
         """
         app.game_utils.click_button(
             ButtonText.NEXT,
-            match_config=MatchConfig(fuzz_threshold=80),
+            match_config=MatchConfig(use_fuzz=True, use_contains=True, fuzz_threshold=70, normalize=True),
         )
         app.game_utils.wait_loading()
         return self._wait_for_support_selection_page(app)
@@ -365,11 +388,7 @@ class SelectIdolCardStep(ProduceStep):
         - 或页面存在空槽 `Blank Slot`
         """
         for _ in range(15):
-            has_support_slot = (
-                app.latest_results.exists_label(BaseUILabels.SUPPORT_CARD)
-                or app.latest_results.exists_label(BaseUILabels.BLANK_SLOT)
-            )
-            if has_support_slot:
+            if app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__SUPPORT_SELECTION):
                 wait_frame_stable(app, timeout=2.5)
                 logger.debug("成功进入支援卡编成页")
                 return True

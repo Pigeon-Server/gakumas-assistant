@@ -81,12 +81,8 @@ class CollectFormationDetailsStep(ProduceStep):
     skip_on_resume = True
 
     def validate(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
-        """确认当前仍停留在可打开「編成詳細」的开始确认页。
-
-        本步骤只能从最终确认页进入；若页面已经进入正式 gameplay 或仍停留在
-        记忆编成页，后续的「編成詳細」按钮和三子页签结构都不成立。
-        """
-        return is_final_confirm_page(app)
+        """确认当前仍停留在可打开「編成詳細」的开始确认页或已打开浮层。"""
+        return is_final_confirm_page(app) or self._is_formation_overlay_page(app)
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """采集「編成詳細」三子页签，并把结果写回上下文。
@@ -102,7 +98,9 @@ class CollectFormationDetailsStep(ProduceStep):
             bool: 采集完成或在无法打开浮层时安全跳过，均返回 True；真正的失败通过
                 浮层打开/页面切换超时等异常向上抛出。
         """
-        if not self._open_formation_details(app):
+        if self._is_formation_overlay_page(app):
+            logger.debug("已经处于編成詳細浮层，直接继续采集")
+        elif not self._open_formation_details(app):
             logger.warning("无法打开編成詳細，跳过开始前详情采集")
             return True
 

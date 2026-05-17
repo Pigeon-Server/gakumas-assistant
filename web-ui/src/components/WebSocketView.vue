@@ -5,14 +5,26 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { useTheme } from 'vuetify'
 import { wsService } from '@/scripts/utils/websocket.ts'
+import { translateKey } from '@/scripts/i18n/translate'
 
 const canvasRef = ref(null)
 const containerRef = ref(null)
+const vuetifyTheme = useTheme()
 let lastBuffer = null
 let resizeObserver = null
 let renderSeq = 0
+
+/**
+ * 判断当前是否处于暗色主题。
+ *
+ * @returns 是否为暗色主题
+ */
+function isDarkTheme() {
+  return vuetifyTheme.global.name.value === 'dark'
+}
 
 function parseBinaryData (buffer) {
   const bytes = new Uint8Array(buffer)
@@ -27,7 +39,7 @@ function parseBinaryData (buffer) {
     }
   }
 
-  if (comma1 === -1 || comma2 === -1) throw new Error('无效的格式')
+  if (comma1 === -1 || comma2 === -1) throw new Error(translateKey('websocket.invalidBinaryFormat'))
 
   const width = Number.parseInt(String.fromCodePoint(...bytes.subarray(0, comma1)), 10)
   const height = Number.parseInt(String.fromCodePoint(...bytes.subarray(comma1 + 1, comma2)), 10)
@@ -98,14 +110,25 @@ function drawPlaceholder (text) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.scale(dpr, dpr)
 
-  ctx.fillStyle = '#212121'
+  ctx.fillStyle = isDarkTheme() ? '#212121' : '#f6f8fb'
   ctx.fillRect(0, 0, rect.width, rect.height)
 
-  ctx.fillStyle = '#aaa'
+  ctx.fillStyle = isDarkTheme() ? '#b0bec5' : '#5f6870'
   ctx.font = '20px sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText(text, rect.width / 2, rect.height / 2)
+}
+
+/**
+ * 重绘当前预览内容。
+ */
+function redrawPreview() {
+  if (lastBuffer) {
+    void renderToCanvas(lastBuffer)
+    return
+  }
+  drawPlaceholder(translateKey('websocket.waitingServer'))
 }
 
 
@@ -119,15 +142,18 @@ onMounted(() => {
   if (!container) return
 
   resizeObserver = new ResizeObserver(() => {
-    if (lastBuffer) {
-      renderToCanvas(lastBuffer)
-    } else {
-      drawPlaceholder('等待服务器响应.....')
-    }
+    redrawPreview()
   })
   resizeObserver.observe(container)
-  drawPlaceholder('等待服务器响应.....')
+  redrawPreview()
 })
+
+watch(
+  () => vuetifyTheme.global.name.value,
+  () => {
+    redrawPreview()
+  },
+)
 
 onUnmounted(() => {
   if (resizeObserver) {
@@ -144,7 +170,10 @@ onUnmounted(() => {
   width: 100%;
   overflow: hidden;
   position: relative;
-  background: rgb(33, 33, 33);
+  background: rgb(var(--v-theme-surface));
+  border-radius: 18px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.06);
+  box-shadow: 0 10px 24px rgba(31, 37, 43, 0.05);
 }
 
 .websocket_view-canvas {

@@ -3,6 +3,8 @@ import site
 import platform
 from typing import Any
 
+from src.utils.i18n_tools import I18nText, i18n_text
+
 _WINDOWS_APP_CLASS = None
 _WINDOWS_IMPORT_ERROR = None
 _WINDOWS_LOADED = False
@@ -37,18 +39,27 @@ def windows_pc_mode_is_available() -> bool:
     return _WINDOWS_APP_CLASS is not None
 
 
-def get_windows_unavailability_reason() -> str:
+def get_windows_unavailability_reason() -> I18nText:
     _ensure_windows_loaded()
     if _WINDOWS_APP_CLASS is not None:
-        return ""
+        return i18n_text("backend.device.windows.available", fallback="")
     if platform.system() != "Windows":
-        return "PC 模式仅支持 Windows，请在 macOS/Linux 上使用 Phone 模式。"
-    if _WINDOWS_IMPORT_ERROR is not None:
-        return (
-            "PC 模式依赖的 Windows 专用组件未就绪（通常是 pywin32 未安装或损坏），"
-            "请重新执行 `pip install -r requirements.txt` 后重试。"
+        return i18n_text(
+            "backend.device.windows.unavailable.non_windows",
+            fallback="PC 模式仅支持 Windows，请在 macOS/Linux 上使用 Phone 模式。",
         )
-    return "PC 模式当前不可用。"
+    if _WINDOWS_IMPORT_ERROR is not None:
+        return i18n_text(
+            "backend.device.windows.unavailable.import_error",
+            fallback=(
+                "PC 模式依赖的 Windows 专用组件未就绪（通常是 pywin32 未安装或损坏），"
+                "请重新执行 `pip install -r requirements.txt` 后重试。"
+            ),
+        )
+    return i18n_text(
+        "backend.device.windows.unavailable.unknown",
+        fallback="PC 模式当前不可用。",
+    )
 
 
 def create_windows_device():
@@ -56,8 +67,8 @@ def create_windows_device():
     if _WINDOWS_APP_CLASS is None:
         message = get_windows_unavailability_reason()
         if _WINDOWS_IMPORT_ERROR is not None:
-            raise RuntimeError(message) from _WINDOWS_IMPORT_ERROR
-        raise RuntimeError(message)
+            raise RuntimeError(str(message)) from _WINDOWS_IMPORT_ERROR
+        raise RuntimeError(str(message))
     return _WINDOWS_APP_CLASS()
 
 

@@ -10,6 +10,7 @@ import {AppStatus, DeviceStatus} from "@/scripts/entity/status";
 import {TaskItem} from "@/scripts/entity/task";
 import {ConfigItem} from "@/scripts/entity/config";
 import {ResourceUpdateStatus} from "@/scripts/entity/resourceUpdate";
+import { formatLocalizedList, translateAny, translateKey } from '@/scripts/i18n/translate'
 
 /** Store State */
 export interface AppState {
@@ -37,7 +38,7 @@ export const useAppStore = defineStore('app', {
         device: {
           available: false,
           code: "initializing",
-          message: "正在初始化设备...",
+          message: { key: 'backend.app.deviceInitializing' },
         },
         game: {
           current_location: '',
@@ -108,7 +109,7 @@ export const useAppStore = defineStore('app', {
     },
     async run_task(task_name: string) {
       const task = this.get_task_by_id(task_name)
-      const taskLabel = task?.description || task_name
+      const taskLabel = translateAny(task?.description) || task_name
       await apis.run_task(task_name)
       this.status.task = TaskStatus.RUNNING
       this.status.current_task = task_name
@@ -116,11 +117,11 @@ export const useAppStore = defineStore('app', {
       if (task) {
         task.status = TaskStatus.RUNNING
       }
-      message.showInfo(`已开始手动执行任务：${taskLabel}`)
+      message.showInfo(translateKey('backend.task.startManual', { task: taskLabel }))
     },
     async run_task_from(task_name: string) {
       const task = this.get_task_by_id(task_name)
-      const taskLabel = task?.description || task_name
+      const taskLabel = translateAny(task?.description) || task_name
       await apis.run_task_from(task_name)
       this.status.task = TaskStatus.RUNNING
       this.status.current_task = task_name
@@ -128,27 +129,27 @@ export const useAppStore = defineStore('app', {
       if (task) {
         task.status = TaskStatus.RUNNING
       }
-      message.showInfo(`已从这里开始执行后续任务：${taskLabel}`)
+      message.showInfo(translateKey('backend.task.startFrom', { task: taskLabel }))
     },
     async enable_task(task_name: string) {
       const task = this.get_task_by_id(task_name)
-      const taskLabel = task?.description || task_name
+      const taskLabel = translateAny(task?.description) || task_name
       await apis.enable_task(task_name)
       if (task) {
         task.enable = true
       }
       await this.refresh_task_list()
-      message.showSuccess(`已启用任务：${taskLabel}`)
+      message.showSuccess(translateKey('backend.task.enabled', { task: taskLabel }))
     },
     async disable_task(task_name: string) {
       const task = this.get_task_by_id(task_name)
-      const taskLabel = task?.description || task_name
+      const taskLabel = translateAny(task?.description) || task_name
       await apis.disable_task(task_name)
       if (task) {
         task.enable = false
       }
       await this.refresh_task_list()
-      message.showSuccess(`已禁用任务：${taskLabel}`)
+      message.showSuccess(translateKey('backend.task.disabled', { task: taskLabel }))
     },
     async load_config() {
       const response = await apis.get_config()
@@ -161,7 +162,7 @@ export const useAppStore = defineStore('app', {
     async save_config() {
       await apis.save_config(this.config).then((response) => {
         this.config = response.data
-        message.showSuccess("设置保存成功")
+        message.showSuccess(translateKey('settings.saveSuccess'))
       })
     },
     notify_device_status_change(previousDevice?: DeviceStatus, currentDevice?: DeviceStatus) {
@@ -179,11 +180,11 @@ export const useAppStore = defineStore('app', {
         return
       }
       if (!previousDevice.available && currentDevice.available) {
-        message.showSuccess("已自动识别到可用设备")
+        message.showSuccess(translateKey('backend.app.deviceReadyAutoDetected'))
         return
       }
       if (previousDevice.available && !currentDevice.available) {
-        message.showWarning(currentDevice.message || "设备连接已断开")
+        message.showWarning(translateAny(currentDevice.message) || translateKey('backend.app.deviceDisconnected'))
       }
     },
     apply_app_status(status: AppStatus) {
@@ -198,9 +199,14 @@ export const useAppStore = defineStore('app', {
     },
     format_bytes(value: number) {
       if (!Number.isFinite(value) || value <= 0) {
-        return "0 B"
+        return `0 ${translateKey('resource.bytes.B')}`
       }
-      const units = ["B", "KB", "MB", "GB"]
+      const units = [
+        translateKey('resource.bytes.B'),
+        translateKey('resource.bytes.KB'),
+        translateKey('resource.bytes.MB'),
+        translateKey('resource.bytes.GB'),
+      ]
       let size = value
       let unitIndex = 0
       while (size >= 1024 && unitIndex < units.length - 1) {
@@ -217,10 +223,13 @@ export const useAppStore = defineStore('app', {
       }
       const parts: string[] = []
       if (progress.current_step && progress.total_steps) {
-        parts.push(`步骤 ${progress.current_step}/${progress.total_steps}`)
+        parts.push(translateKey('resource.progress.step', {
+          current: progress.current_step,
+          total: progress.total_steps,
+        }))
       }
       if (progress.repository) {
-        parts.push(progress.repository)
+        parts.push(translateAny(progress.repository))
       }
       if (progress.bytes_total > 0) {
         parts.push(`${this.format_bytes(progress.bytes_downloaded)} / ${this.format_bytes(progress.bytes_total)}`)
@@ -228,10 +237,15 @@ export const useAppStore = defineStore('app', {
         parts.push(`${progress.percent.toFixed(1)}%`)
       }
       if (progress.attempt > 0) {
-        parts.push(`尝试 ${progress.attempt}/${progress.max_attempts}`)
+        parts.push(translateKey('resource.progress.attempt', {
+          current: progress.attempt,
+          total: progress.max_attempts,
+        }))
       }
       if (progress.retry_wait_seconds > 0) {
-        parts.push(`${progress.retry_wait_seconds}s 后重试`)
+        parts.push(translateKey('resource.progress.retryInSeconds', {
+          seconds: progress.retry_wait_seconds,
+        }))
       }
       return parts.join(" / ")
     },
@@ -248,29 +262,33 @@ export const useAppStore = defineStore('app', {
         this.resource_update_latest_event = ""
         this.resource_update_latest_event_type = "info"
       } else if (status.progress?.active && status.progress?.message) {
-        this.resource_update_latest_event = status.progress.message
+        this.resource_update_latest_event = translateAny(status.progress.message)
         this.resource_update_latest_event_type = "info"
       }
       if (previousStatus?.checking && !status.checking && !previousStatus?.updating) {
         if (status.last_error) {
-          this.resource_update_latest_event = `资源检查失败：${status.last_error}`
+          this.resource_update_latest_event = translateKey('resource.progress.checkFailed', {
+            error: translateAny(status.last_error),
+          })
           this.resource_update_latest_event_type = "warning"
         } else if (status.has_update) {
-          this.resource_update_latest_event = "检测到资源仓库更新，可立即更新"
+          this.resource_update_latest_event = translateKey('resource.progress.checkHasUpdate')
           this.resource_update_latest_event_type = "info"
         } else {
-          this.resource_update_latest_event = "资源仓库已经是最新版本"
+          this.resource_update_latest_event = translateKey('resource.progress.checkUpToDate')
           this.resource_update_latest_event_type = "success"
         }
       }
       if (previousStatus?.updating && !status.updating) {
         if (status.last_error) {
-          this.resource_update_latest_event = `资源更新失败：${status.last_error}`
+          this.resource_update_latest_event = translateKey('resource.progress.updateFailed', {
+            error: translateAny(status.last_error),
+          })
           this.resource_update_latest_event_type = "warning"
         } else {
           const successMessage = previousStatus?.bootstrap_required || !previousStatus?.required_resources_ready
-            ? "首次启动所需资源下载完成，游戏数据库已重新加载"
-            : "资源仓库更新完成，游戏数据库已重新加载"
+            ? translateKey('resource.progress.bootstrapCompleted')
+            : translateKey('resource.progress.updateCompleted')
           this.resource_update_latest_event = successMessage
           this.resource_update_latest_event_type = "success"
           message.showSuccess(successMessage)
@@ -280,45 +298,61 @@ export const useAppStore = defineStore('app', {
     },
     build_resource_update_status_text(status: ResourceUpdateStatus | null) {
       if (!status) {
-        return "尚未执行资源仓库检查"
+        return translateKey('resource.progress.notCheckedYet')
       }
       const parts: string[] = []
       if (status.bootstrap_required && !status.required_resources_ready) {
-        parts.push("首次启动需要下载游戏数据库和本地化资源")
+        parts.push(translateKey('resource.progress.bootstrapDownloadHint'))
       } else if (status.checking) {
-        parts.push("正在检查资源仓库更新")
+        parts.push(translateKey('resource.progress.checkingHint'))
       } else if (status.updating) {
-        parts.push("正在更新资源仓库")
+        parts.push(translateKey('resource.progress.updatingHint'))
       } else if (status.last_checked_at) {
-        parts.push(`上次检查：${status.last_checked_at.replace("T", " ")}`)
+        parts.push(translateKey('resource.progress.lastCheckedAt', {
+          time: status.last_checked_at.replace("T", " "),
+        }))
       } else {
-        parts.push("尚未执行资源仓库检查")
+        parts.push(translateKey('resource.progress.notCheckedYet'))
       }
       const progressText = this.build_resource_progress_text(status)
       if (progressText) {
         parts.push(progressText)
       }
       if (status.next_check_at) {
-        parts.push(`下次定时检查：${status.next_check_at.replace("T", " ")}`)
+        parts.push(translateKey('resource.progress.nextCheckAt', {
+          time: status.next_check_at.replace("T", " "),
+        }))
       }
       return parts.join(" / ")
     },
     build_required_resource_prompt(status: ResourceUpdateStatus) {
       const repositories = status.missing_required_resources
-        .map(item => `${item.name}（缺少 ${item.missing_count}/${item.required_count} 个文件）`)
+        .map(item => translateKey('resource.progress.repoMissingItem', {
+          name: translateAny(item.name),
+          missing: item.missing_count,
+          required: item.required_count,
+        }))
       if (!repositories.length) {
-        return "首次启动需要下载游戏数据库和本地化资源。下载过程中会显示进度，失败会自动重试。是否现在开始下载？"
+        return translateKey('resource.progress.bootstrapPromptSingle')
       }
-      return `首次启动需要下载以下资源：${repositories.join("、")}。下载过程中会显示进度，失败会自动重试。是否现在开始下载？`
+      return translateKey('resource.progress.bootstrapPromptMultiple', {
+        repositories: formatLocalizedList(repositories, { style: 'long', type: 'conjunction' }),
+      })
     },
     build_resource_update_prompt(status: ResourceUpdateStatus) {
       const repositories = status.repositories
         .filter(repo => repo.has_update && !repo.error)
-        .map(repo => `${repo.name}（${repo.local_commit_short} -> ${repo.remote_commit_short}）`)
+        .map(repo => translateKey('resource.progress.repositoryCommitRange', {
+          name: translateAny(repo.name),
+          local: repo.local_commit_short,
+          remote: repo.remote_commit_short,
+        }))
       if (!repositories.length) {
-        return "检测到资源仓库有更新，是否现在更新并重新加载游戏数据库？"
+        return translateKey('resource.progress.updatePromptSingle')
       }
-      return `检测到资源仓库有更新：${repositories.join("、")}。是否现在更新并重新加载游戏数据库？`
+      return translateKey('resource.progress.updatePromptMultiple', {
+        repositories: formatLocalizedList(repositories, { style: 'long', type: 'conjunction' }),
+      })
     },
     async maybe_prompt_resource_update(status: ResourceUpdateStatus | null) {
       if (status?.bootstrap_required) {
@@ -337,10 +371,10 @@ export const useAppStore = defineStore('app', {
       this.last_prompted_resource_update_signature = status.update_signature
       try {
         await dialogs.confirm(
-          "发现资源仓库更新",
+          translateKey('resource.progress.updatePromptTitle'),
           this.build_resource_update_prompt(status),
-          "立即更新",
-          "稍后处理",
+          translateKey('resource.progress.updatePromptConfirm'),
+          translateKey('resource.progress.updatePromptCancel'),
         )
         await this.apply_resource_updates()
       } catch (err) {
@@ -365,21 +399,23 @@ export const useAppStore = defineStore('app', {
       await apis.check_resource_updates().then((response) => {
         this.handle_resource_update_status(response.data)
         if (response.data?.last_error) {
-          this.resource_update_latest_event = response.message || response.data.last_error
+          this.resource_update_latest_event = translateAny(response.message) || translateAny(response.data.last_error)
           this.resource_update_latest_event_type = "warning"
-          message.showWarning(response.message || response.data.last_error)
+          message.showWarning(translateAny(response.message) || translateAny(response.data.last_error))
           return
         }
-        this.resource_update_latest_event = response.message || "资源仓库检查完成"
+        this.resource_update_latest_event = translateAny(response.message) || translateKey('resource.progress.checkCompleted')
         this.resource_update_latest_event_type = "success"
         if (!response.data?.has_update) {
-          message.showSuccess(response.message || "资源仓库检查完成")
+          message.showSuccess(translateAny(response.message) || translateKey('resource.progress.checkCompleted'))
         }
       })
     },
     async apply_resource_updates() {
       const isBootstrap = Boolean(this.resource_update_status?.bootstrap_required || !this.resource_update_status?.required_resources_ready)
-      this.resource_update_latest_event = isBootstrap ? "正在下载首次启动所需资源..." : "正在更新资源仓库..."
+      this.resource_update_latest_event = isBootstrap
+        ? translateKey('resource.progress.bootstrapRunning')
+        : translateKey('resource.progress.updateRunning')
       this.resource_update_latest_event_type = "info"
       try {
         await apis.apply_resource_updates().then((response) => {
@@ -399,13 +435,13 @@ export const useAppStore = defineStore('app', {
       await apis.save_task_config(task_name, this.config?.[`task__${task_name}`]).then((response) => {
         const target_config = `task__${task_name}`
         this.config[target_config] = response.data
-        message.showSuccess("设置保存成功")
+        message.showSuccess(translateKey('settings.saveSuccess'))
       })
     },
     async reset_config() {
       await apis.reset_config().then(response => {
         this.config = response.data
-        message.showSuccess("设置重置完成，部分设置可能需要重启生效")
+        message.showSuccess(translateKey('settings.resetSuccess'))
       })
     },
     get_task_by_id(task_id: string): TaskItem | undefined {

@@ -1,13 +1,33 @@
 {{ snapshot }}
 
-## 合法动作
-{% for a in actions -%}
-{{ a.index }}: {{ a.label }}{% if a.kind %} ({{ a.kind }}){% endif %}{% if a.selected %} [已选中]{% endif %}{% if not a.available %} [当前不可用]{% endif %}{% if a.description %} - {{ a.description }}{% endif %}{% if a.operation_meaning %}；操作含义：{{ a.operation_meaning }}{% endif %}{{ '' }}
+{% if strategy_insights %}
+## 历史策略洞察（来自过往培育经验，仅供参考）
+{% for insight in strategy_insights[:3] -%}
+- 策略: {{ insight.strategy_description }}{% if insight.when_to_apply %} | 适用: {{ insight.when_to_apply }}{% endif %}{% if insight.when_not_to_apply %} | 不适用: {{ insight.when_not_to_apply }}{% endif %}
+{% endfor %}
+{% endif %}
+
+## 当前可选动作
+{% for a in actions if a.available -%}
+{{ a.index }}: {{ a.label }}{% if a.kind %} ({{ a.kind }}){% endif %}{% if a.description %} - {{ a.description }}{% endif %}{% if a.gain_summary %} | 收益角色: {{ a.gain_summary }}{% endif %}{% if a.cost_summary %} | 成本: {{ a.cost_summary }}{% endif %}{{ '' }}
+{% endfor %}
+
+## 当前不可选动作
+{% for a in actions if not a.available -%}
+{{ a.index }}: {{ a.label }}{% if a.kind %} ({{ a.kind }}){% endif %}{% if a.availability_reason %} - {{ a.availability_reason }}{% elif a.description %} - {{ a.description }}{% endif %}{{ '' }}
 {% endfor %}
 
 ## 决策要求
-- 只从上面的合法动作中选择。
-- 只输出一个动作编号，不要解释，不要附加文本。
-- 如果当前信息不足，选你认为最稳妥的合法动作。
+- 只能从"当前可选动作"中选择。
+- 不得选择"当前不可选动作"中的编号。
+- 如果当前信息不足，选你认为最稳妥的可选动作。
 
-请选择当前最优动作，只输出动作编号：
+## 输出格式
+严格输出以下 JSON，不要附加任何其他文本：
+```json
+{
+  "why_this": "为什么选这个动作（简短）",
+  "why_not_others": "为什么不选其他动作（简短）",
+  "action_index": 动作编号
+}
+```

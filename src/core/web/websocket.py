@@ -77,12 +77,17 @@ class WebSocketManager(metaclass=SingletonMeta):
             await websocket.send_bytes(data)
 
     async def _send_message_safely(self, data: WebSocketData, websocket: WebSocket) -> bool:
-        # 获取连接锁，串行化同一连接的发送操作，防止 websockets 库并发 drain 断言失败
+        if self._is_disconnected(websocket):
+            self.disconnect(websocket)
+            return False
         lock = self._connection_locks.get(websocket)
         if lock is None:
             return False
         try:
             async with lock:
+                if self._is_disconnected(websocket):
+                    self.disconnect(websocket)
+                    return False
                 await self.send_message(data, websocket)
             return True
         except WebSocketDisconnect:
@@ -100,10 +105,24 @@ class WebSocketManager(metaclass=SingletonMeta):
             logger.exception("WebSocket send failed, disconnecting client [{}]: {}", type(exc).__name__, exc)
             return False
 
+    @staticmethod
+    def is_normal_disconnect_error(exc: Exception, websocket: Optional[WebSocket] = None) -> bool:
+        if websocket is not None and WebSocketManager._is_disconnected(websocket):
+            return True
+        message = str(exc)
+        return (
+            "WebSocket is not connected" in message
+            or "Cannot call \"send\" once a close message has been sent" in message
+            or "Cannot call \"receive\" once a disconnect message has been received" in message
+        )
+
     async def broadcast(self, data: WebSocketData):
         """向所有 WebSocket 连接发送消息"""
         for connection in list(self.active_connections):
-            await self._send_message_safely(data, connection)
+            if not self._is_disconnected(connection):
+                await self._send_message_safely(data, connection)
+            else:
+                self.disconnect(connection)
 
     @staticmethod
     def _consume_future_exception(future) -> None:

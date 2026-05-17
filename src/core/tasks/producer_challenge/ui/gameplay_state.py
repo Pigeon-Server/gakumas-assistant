@@ -261,8 +261,8 @@ def _looks_like_present_support_showcase(frame_text: str, results) -> bool:
         return False
 
     header_text = ""
-    frame = getattr(results, "frame", None)
-    if frame is not None and getattr(frame, "size", 0) > 0:
+    frame = results.frame
+    if frame is not None and frame.size > 0:
         height, width = frame.shape[:2]
         header_crop = frame[:int(height * 0.12), :int(width * 0.32)]
         header_text = normalize_text(
@@ -329,7 +329,7 @@ def _looks_like_loading_screen(results) -> bool:
     Returns:
         bool: 判定为 loading 页面返回 True，否则返回 False。
     """
-    frame = getattr(results, "frame", None)
+    frame = results.frame
     if frame is None or not hasattr(frame, "shape"):
         return False
     height, width = frame.shape[:2]
@@ -348,7 +348,7 @@ def _looks_like_exam_prep_screen(results) -> bool:
       - 底部提示区 (83%~90% 高度) 包含「タップして次へ」
     两项至少满足一项即判定为考试准备页面。
     """
-    frame = getattr(results, "frame", None)
+    frame = results.frame
     if frame is None or not hasattr(frame, "shape"):
         return False
     h, w = frame.shape[:2]
@@ -385,7 +385,7 @@ def _has_center_p_drink_boxes(results) -> bool:
     """
     if results is None:
         return False
-    frame = getattr(results, "frame", None)
+    frame = results.frame
     if frame is None or not hasattr(frame, "shape"):
         return False
     frame_height = frame.shape[0]
@@ -433,8 +433,8 @@ def _looks_like_resume_title_screen(frame_text: str, results) -> bool:
         return False
 
     title_text = normalized
-    frame = getattr(results, "frame", None)
-    if frame is not None and getattr(frame, "size", 0) > 0:
+    frame = results.frame
+    if frame is not None and frame.size > 0:
         height, width = frame.shape[:2]
         logo_crop = frame[int(height * 0.40):int(height * 0.63), int(width * 0.05):int(width * 0.95)]
         logo_text = normalize_text(
@@ -599,7 +599,7 @@ def _looks_like_skill_reward_showcase(results, frame_text: str) -> bool:
         _collect_reward_layout_boxes((ProducerLabels.SKILL_CARD_INFO,))
     )
     primary_card_count = len(primary_card_boxes)
-    frame = getattr(results, "frame", None)
+    frame = results.frame
     if frame is None:
         return False
     frame_h = int(frame.shape[0])
@@ -821,7 +821,7 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
     # ── 横画面检测（Live演出）──
     # Live 演出中游戏画面会横屏（width > height）。
     # YOLO 按竖屏训练，横屏时可能无法检测到标签。
-    frame = getattr(results, "frame", None)
+    frame = results.frame
     if frame is not None and frame.shape[1] > frame.shape[0] * 1.3:
         return GameplayPhase.LIVE_PERFORMANCE
 

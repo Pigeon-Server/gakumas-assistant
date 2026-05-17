@@ -1,5 +1,6 @@
 import dialog_utils from '@/scripts/utils/dialogs.js'
 import message_component from '@/components/dialogs/message.vue'
+import { translateAny, translateKey } from '@/scripts/i18n/translate'
 
 const messageQueue = []
 let showingMessage = false
@@ -41,8 +42,12 @@ function showApiErrorMsg (message, status = null, close_delay = 3000) {
   /**
    * 显示API错误信息
    */
+  const statusText = status ? translateKey('api.statusSuffix', { status }) : ''
   return enqueueMessage({
-    text: `API错误：${message} ${status ? '(status:' + status + ')' : ''}`,
+    text: translateKey('api.errorPrefix', {
+      message: translateAny(message),
+      status: statusText,
+    }),
     type: 'error',
     timeout: close_delay,
   })

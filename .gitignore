@@ -41,4 +41,6 @@ _debug*
 *plan.md
 *test_*.json
 /.opencode/opencode.json
-/CLAUDE.md
+/docs/references/
+/experiments/produce_gameplay_captures/
+/tests/_artifacts/

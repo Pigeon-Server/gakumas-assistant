@@ -82,8 +82,6 @@ def serialize_candidate(candidate: Any, *, phase: str) -> dict[str, Any]:
         "name": title,
         "type": metadata.get("consult_action") or metadata.get("candidate_type") or phase,
         "label": getattr(candidate, "label", "") or getattr(candidate, "kind", "") or title,
-        "selected": bool(getattr(candidate, "selected", False)),
-        "recommended": bool(getattr(candidate, "recommended", False)),
         "available": bool(metadata.get("available", True)),
         "bbox": _serialize_box(getattr(candidate, "box", None)),
         "source": getattr(candidate, "source", "") or metadata.get("source", ""),
@@ -173,12 +171,42 @@ def _build_stage_context(
             description = "当前已进入「活動支給 / 差し入れ」收益选择页，需要在多个加成候选中选一个。"
             available_action_summary = "可从当前活动支给候选项中选择一个收益分支，这类页面通常单击即可确认。"
             interaction_hint = "活动支给候选通常单击就会直接进入后续奖励链。"
+        elif position_key == GameplayPosition.SCHEDULE_PRESENT_SUPPORT_SHOWCASE:
+            stage_id = "schedule_present_support_showcase"
+            label = "活动支给结果展示"
+            description = "当前是活動支給结果展示页，通常用于展示刚获得的收益或演出结果。"
+            available_action_summary = "这类页面通常以点击空白处推进为主，不需要重新选择收益候选。"
+            interaction_hint = "确认展示内容后推进到下一页。"
+        elif position_key == GameplayPosition.SCHEDULE_LESSON_OPTIONS:
+            stage_id = "schedule_lesson_options"
+            label = "授业课程选择"
+            description = "当前已进入授業分支，需要在ボーカル / ダンス / ビジュアル等课程中选一项。"
+            available_action_summary = "可从当前授業候选中选择一项课程；通常先选中，再在下一帧确认进入。"
+            interaction_hint = "授業候选一般需要先点一次选中，再点一次确认。"
+        elif position_key == GameplayPosition.SCHEDULE_LESSON_SELECTED:
+            stage_id = "schedule_lesson_confirm"
+            label = "授业课程确认"
+            description = "当前已有授業课程被选中，等待确认进入该课程。"
+            available_action_summary = "再次点击当前已选授業课程即可确认进入。"
+            interaction_hint = "确认前先检查是否确实选中了目标课程。"
         elif position_key == GameplayPosition.SCHEDULE_SELECTED:
             stage_id = "schedule_action_confirm"
             label = "周行动确认"
             description = "当前已有一个周行动被选中，等待确认进入。"
+            available_action_summary = "再次点击当前已选周行动即可确认进入。"
+            interaction_hint = "确认前先检查是否确实选中了目标周行动。"
         elif position_key == GameplayPosition.SCHEDULE_RECOMMEND:
-            stage_id = "schedule_action_recommend"
+            stage_id = "schedule_action_preview"
+            label = "周行动预览"
+            description = "当前停留在周行动预览态，仍然需要在候选周行动中自行做选择。"
+            available_action_summary = "可从候选周行动中选择一项，再进入后续确认。"
+            interaction_hint = "预览态本身不是最终动作，仍要按候选项完成选择。"
+        elif position_key == GameplayPosition.SCHEDULE_EVENT_DIALOGUE:
+            stage_id = "schedule_event_dialogue"
+            label = "周事件对话推进"
+            description = "当前处于行程内事件文本推进阶段，尚未出现分支选项。"
+            available_action_summary = "当前以推进文本为主；若后续出现选项则转为周事件分支选择。"
+            interaction_hint = "无分支时点击推进文本。"
     elif phase_key == GameplayPhase.DIALOGUE:
         if has_progress_hud:
             if position_key in {
@@ -278,7 +306,7 @@ def _build_stage_context(
     elif phase_key == GameplayPhase.P_DRINK:
         stage_id = "p_drink_select"
         label = "P饮料选择"
-        description = "当前处于 P 饮料选择阶段，需要决定是否使用/领取某个饮料。"
+        description = "当前处于 P 饮料领取/选择阶段，需要决定保留哪一瓶饮料。"
         available_action_summary = "可从当前 P 饮料候选中选择一个；若已有选中饮料，则下一次点击会确认。"
         interaction_hint = "P 饮料通常是先选中，再确认。"
         if position_key == "p_drink_limit":
@@ -287,10 +315,12 @@ def _build_stage_context(
             description = "当前 P 饮料槽已满，需要决定是放弃新饮料，还是丢弃一瓶旧饮料来保留新饮料。"
             available_action_summary = "可选择放弃新饮料，或丢弃一瓶现有饮料以腾出槽位。"
             interaction_hint = "所持上限页的每个动作都会直接改变保留方案。"
-        if position_key == GameplayPosition.P_DRINK_SELECTED:
+        elif position_key == GameplayPosition.P_DRINK_SELECTED:
             stage_id = "p_drink_confirm"
             label = "P饮料确认"
-            description = "当前已有 P 饮料被选中，等待确认。"
+            description = "当前已有一瓶 P 饮料被选中，等待点击确认领取。"
+            available_action_summary = "再次点击当前已选 P 饮料或确认按钮即可完成领取。"
+            interaction_hint = "确认前先检查是否确实选中了目标饮料。"
     elif phase_key == GameplayPhase.CONSULT:
         if position_key == GameplayPosition.CONSULT_EXCHANGE:
             stage_id = "consult_exchange"
@@ -298,45 +328,74 @@ def _build_stage_context(
             description = "当前处于相談兑换页，可执行多个操作后再退出。"
             available_action_summary = "可兑换物品（多次）、打开強化（限1次）、打开削除（限1次）、或退出。"
             interaction_hint = "兑换类候选点选后立即进入下一步；每次操作后会再次询问。"
+        elif position_key == GameplayPosition.CONSULT_ENHANCEMENT_PREVIEW:
+            pending_mode = ""
+            if candidate_payloads:
+                candidate_type = str(candidate_payloads[0].get("type") or "")
+                if "remove" in candidate_type:
+                    pending_mode = "remove"
+                elif "enhancement" in candidate_type:
+                    pending_mode = "enhancement"
+            stage_id = "consult_remove_preview" if pending_mode == "remove" else "consult_enhancement_preview"
+            label = "咨询削除预览" if pending_mode == "remove" else "咨询强化预览"
+            description = "当前处于相談卡牌预览页，需要先浏览并选定目标卡牌。"
+            if pending_mode == "remove":
+                available_action_summary = "可从当前可见卡牌中选择一张作为削除目标，选中后进入确认。"
+                interaction_hint = "削除目标通常先点卡牌，再进入确认页。"
+            else:
+                available_action_summary = "可从当前可见卡牌中选择一张作为強化目标，选中后进入确认。"
+                interaction_hint = "強化目标通常先点卡牌，再进入确认页。"
+        elif position_key == GameplayPosition.CONSULT_ENHANCEMENT_READY:
+            pending_mode = ""
+            if candidate_payloads:
+                candidate_type = str(candidate_payloads[0].get("type") or "")
+                if "remove" in candidate_type:
+                    pending_mode = "remove"
+                elif "enhancement" in candidate_type:
+                    pending_mode = "enhancement"
+            stage_id = "consult_remove_confirm" if pending_mode == "remove" else "consult_enhancement_confirm"
+            label = "咨询削除确认" if pending_mode == "remove" else "咨询强化确认"
+            description = "当前已有相談处理目标被选中，等待最终确认。"
+            if pending_mode == "remove":
+                available_action_summary = "可确认削除当前选中的技能卡。"
+                interaction_hint = "确认后会永久移除该卡。"
+            else:
+                available_action_summary = "可确认強化当前选中的技能卡。"
+                interaction_hint = "确认后会直接完成強化。"
         else:
-            stage_id = "consult_card_select"
-            label = "咨询卡牌处理"
-            description = "当前处于相談后的卡牌预览/确认页，需要决定强化或删除对象。"
-            available_action_summary = "可从当前可见卡牌中选择要强化/删除的目标。"
-            interaction_hint = "卡牌目标通常是先选中，再确认。"
+            stage_id = "consult_idle"
+            label = "咨询处理中"
+            description = "当前仍处于相談流程中，但尚未稳定识别为兑换页或选卡页。"
+            available_action_summary = "优先根据当前合法动作判断是继续选卡、确认，还是返回兑换页。"
+            interaction_hint = "若画面刚切换，先等待一帧稳定。"
     elif phase_key == GameplayPhase.ITEM_SELECT:
-        stage_id = "item_select"
-        label = "P物品选择"
-        description = "当前处于 P 物品选择阶段，需要从候选物品中选择一个。"
-        available_action_summary = "可从当前 P 物品候选中选择一个；若已有选中物品，则下一次点击会确认。"
+        has_unresolved = any(not str(payload.get("db_id") or "").strip() for payload in candidate_payloads)
+        stage_id = "item_select_probe" if has_unresolved else "item_select"
+        label = "P物品探查选择" if has_unresolved else "P物品选择"
+        description = (
+            "当前有未完成识别的 P 物品，应该先探查清楚候选内容再决定领取。"
+            if has_unresolved
+            else "当前处于 P 物品选择阶段，需要从候选物品中选择一个。"
+        )
+        available_action_summary = (
+            "可先逐个探查未识别物品，再在已识别候选中选择一个；若已有选中物品，则下一次点击会确认。"
+            if has_unresolved
+            else "可从当前 P 物品候选中选择一个；若已有选中物品，则下一次点击会确认。"
+        )
         interaction_hint = "P 物品通常是先选中，再确认。"
         if position_key == GameplayPosition.ITEM_SELECT_SELECTED:
             stage_id = "item_confirm"
             label = "P物品确认"
-            description = "当前已有 P 物品被选中，等待确认。"
+            description = "当前已有 P 物品被选中，等待确认领取。"
+            available_action_summary = "点击确认按钮即可领取当前已选 P 物品。"
+            interaction_hint = "确认前先检查是否确实选中了目标物品。"
+        elif has_unresolved:
+            interaction_hint = "探查过程中可能先点物品查看详情，再回到领取决策。"
 
     candidate_names = [
         payload.get("name") or payload.get("label") or f"动作{payload.get('index', 0)}"
         for payload in candidate_payloads
     ]
-    recommended_names = [
-        payload.get("name") or payload.get("label") or f"动作{payload.get('index', 0)}"
-        for payload in candidate_payloads
-        if payload.get("recommended")
-    ]
-
-    system_recommendation = ""
-    if recommended_names:
-        system_recommendation = f"系统当前推荐优先考虑：{' / '.join(recommended_names[:3])}"
-        if len(recommended_names) > 3:
-            system_recommendation += f" 等{len(recommended_names)}项"
-    else:
-        recommend_kind = str(hud_state.get("recommend_action_kind") or "").strip()
-        recommend_text = str(hud_state.get("recommend_action_text") or "").strip()
-        if recommend_kind and recommend_kind != "unknown":
-            system_recommendation = f"系统当前推荐优先考虑 {recommend_kind} 系行动"
-        elif recommend_text:
-            system_recommendation = f"系统当前推荐提示：{recommend_text}"
 
     return {
         "id": stage_id,
@@ -346,130 +405,8 @@ def _build_stage_context(
         "interaction_hint": interaction_hint,
         "candidate_count": len(candidate_payloads),
         "candidate_names": candidate_names,
-        "system_recommendation": system_recommendation,
         "is_schedule_context": has_progress_hud,
     }
-
-
-def _describe_candidate_operation(
-    payload: dict[str, Any],
-    *,
-    phase: str,
-    position: str,
-    stage_context: dict[str, Any],
-) -> str:
-    """生成`describe_candidate_operation`。"""
-    phase_key = phase.value if hasattr(phase, "value") else str(phase)
-    position_key = position.value if hasattr(position, "value") else str(position)
-    label = str(payload.get("name") or payload.get("label") or f"动作{payload.get('index', 0)}")
-    stage_id = str(stage_context.get("id") or "")
-
-    if phase_key == GameplayPhase.SCHEDULE:
-        metadata = dict(payload.get("metadata") or {})
-        readable = str(
-            metadata.get("display_name")
-            or payload.get("name")
-            or payload.get("label")
-            or f"动作{payload.get('index', 0)}"
-        )
-        if stage_id == "schedule_present_support_options":
-            return f"点击后会直接选择这项活動支給收益：「{readable}」。"
-        if position_key == GameplayPosition.SCHEDULE_SELECTED:
-            return f"点击后会确认进入「{readable}」这个周行动。"
-        return f"点击后会选中「{readable}」这个周行动，下一帧再次点击会确认进入。"
-    if stage_id == "schedule_event_options":
-        metadata = dict(payload.get("metadata") or {})
-        p_cost = metadata.get("p_cost")
-        cost_hint = f"（消耗{p_cost}Pポイント）" if p_cost is not None else ""
-        return f"点击后会选中「{label}」这个周事件分支{cost_hint}，下一帧再次点击会确认该分支。"
-    if phase_key == GameplayPhase.DIALOGUE and position_key == GameplayPosition.DIALOGUE_OPTIONS:
-        return f"点击后会选中「{label}」这个对话分支，下一帧再次点击会确认该分支。"
-    if phase_key == GameplayPhase.LESSON:
-        if is_end_turn_action_id(payload.get("id")):
-            if position_key == GameplayPosition.LESSON_SELECTED:
-                return "点击后会先取消当前选中的技能卡，再执行 SKIP 结束本回合。"
-            return "点击后会执行 SKIP，放弃本回合剩余出牌并直接进入下一回合。"
-        if is_produce_drink_action_id(payload.get("id")):
-            return f"点击后会确认使用这瓶 P 饮料「{label}」。"
-        if position_key == GameplayPosition.LESSON_SELECTED:
-            return f"点击后会确认使用这张技能卡：「{label}」。"
-        return f"点击后会选中技能卡「{label}」，下一帧再次点击会确认使用。"
-    if phase_key == GameplayPhase.EXAM:
-        if position_key == GameplayPosition.EXAM_RETRY_CONFIRM_MODAL:
-            action_id = str(payload.get("id") or "")
-            if action_id == "exam_retry":
-                return "点击后会消耗一次再挑战机会，重新开始当前这场考试，不会直接结束本次培育。"
-            if action_id == "produce_end":
-                return "点击后会确认结束本次培育，本场考试将按失败处理并退出本次挑战。"
-            return f"点击后会在考试失败后的确认弹窗里执行「{label}」。"
-        if is_end_turn_action_id(payload.get("id")):
-            if position_key == GameplayPosition.EXAM_SELECTED:
-                return "点击后会先取消当前选中的技能卡，再结束本回合。"
-            return "点击后会结束本回合，放弃当前剩余出牌并推进到下一回合。"
-        if is_produce_drink_action_id(payload.get("id")):
-            return f"点击后会确认在考试中使用这瓶 P 饮料「{label}」。"
-        if position_key == GameplayPosition.EXAM_SELECTED:
-            return f"点击后会确认在考试中使用这张技能卡：「{label}」。"
-        return f"点击后会选中考试用技能卡「{label}」，下一帧再次点击会确认使用。"
-    if phase_key == GameplayPhase.SKILL_REWARD:
-        metadata = dict(payload.get("metadata") or {})
-        if metadata.get("is_redraw"):
-            remaining = metadata.get("redraw_remaining", 0)
-            return f"点击后会消耗一次再抽選机会（剩余{remaining}回），刷新全部候选技能卡。使用后不可撤销。"
-        if position_key == GameplayPosition.SKILL_REWARD_SELECTED:
-            return f"点击后会确认领取奖励卡「{label}」。"
-        return f"点击后会选中奖励卡「{label}」，下一帧再次点击会确认领取。"
-    if phase_key == GameplayPhase.P_DRINK:
-        if position_key == "p_drink_limit":
-            kind = str(payload.get("kind") or "")
-            if kind == "skip_new_drink":
-                return f"点击后会放弃新饮料「{label}」，保留当前饮料槽配置。"
-            if kind == "discard_existing_drink":
-                return f"点击后会丢弃当前库存中的一瓶旧饮料，并保留新饮料「{label}」。"
-        if position_key == GameplayPosition.P_DRINK_SELECTED:
-            return f"点击后会确认当前选择的 P 饮料「{label}」。"
-        return f"点击后会选中 P 饮料「{label}」，下一帧再次点击会确认。"
-    if phase_key == GameplayPhase.CONSULT:
-        consult_action = str(
-            payload.get("type")
-            or (payload.get("metadata") or {}).get("consult_action")
-            or payload.get("label")
-            or ""
-        )
-        metadata = dict(payload.get("metadata") or {})
-        display_name = str(
-            metadata.get("display_name")
-            or metadata.get("raw_name")
-            or label
-        )
-        if position_key == GameplayPosition.CONSULT_EXCHANGE:
-            if consult_action == "consult_open_enhancement":
-                return "点击后会进入技能卡強化页面，可以选择一张技能卡进行強化。"
-            if consult_action == "consult_open_remove":
-                return "点击后会进入技能卡削除页面，可以选择一张技能卡进行削除。"
-            if consult_action == "consult_exit":
-                return "点击后会退出相談，结束本次相談环节。"
-            price = str(metadata.get("price") or "")
-            price_part = f"消耗 {price}P" if price else "消耗对应 P ポイント"
-            return f"点击后会尝试兑换「{display_name}」，{price_part}。"
-        if consult_action == "consult_confirm_enhancement":
-            return f"点击后会确认強化选中的技能卡「{display_name}」。"
-        if consult_action == "consult_confirm_remove":
-            return f"点击后会确认削除选中的技能卡「{display_name}」。"
-        if consult_action in {"consult_select_enhancement_target", "consult_select_remove_target"}:
-            return f"点击后会选中「{display_name}」作为相談处理目标，下一帧再确认。"
-        return f"点击后会选中「{display_name}」作为相談处理目标，下一帧再确认。"
-    if phase_key == GameplayPhase.ITEM_SELECT:
-        item_meta = dict(payload.get("metadata") or {})
-        display_name = str(
-            item_meta.get("display_name")
-            or item_meta.get("raw_name")
-            or label
-        )
-        if position_key == GameplayPosition.ITEM_SELECT_SELECTED:
-            return f"点击后会确认领取/选择 P 物品「{display_name}」。"
-        return f"点击后会选中 P 物品「{display_name}」，下一帧再次点击会确认。"
-    return str(stage_context.get("available_action_summary") or "")
 
 
 def register_realtime_resource_snapshot(ctx: "ProduceContext", **values: Any) -> None:
@@ -914,7 +851,6 @@ def _append_exam_snapshot_details(
 __all__ = [
     "_build_stage_context",
     "_compute_remaining_weeks",
-    "_describe_candidate_operation",
     "_serialize_box",
     "_sync_virtual_battle_state",
     "is_end_turn_action_id",

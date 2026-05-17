@@ -621,19 +621,26 @@ def _handle_unknown_item(app, item_box, item_inner, commodity_target, index):
             _save_debug_unknown_item(item_info, modal_item_image, modal.modal_body, index, final_name)
 
         # 购买决策
+        handled = True
         if string_match(final_name, commodity_target, MatchConfig(fuzz_threshold=80)):
             logger.info(f"Purchase new item {final_name} (id={index})")
             if status and db_result is not None:
-                _confirm_and_record_exchange(app, db_result, modal, page_money_before=page_money_before)
+                handled = _confirm_and_record_exchange(app, db_result, modal, page_money_before=page_money_before)
             else:
-                _confirm_exchange_modal(app, modal, final_name)
+                handled = _confirm_exchange_modal(app, modal, final_name)
         else:
             logger.debug(f"{final_name} not in target, cancel.")
             if modal.cancel_button is not None:
-                app.device.click_element(modal.cancel_button)
+                handled = app.game_utils.click_modal_button_and_wait_transition(
+                    modal.cancel_button,
+                    previous_modal_title=modal.modal_title,
+                    timeout=5,
+                    interval=0.2,
+                )
+            else:
+                handled = False
 
-        app.game_utils.wait_label_exist(BaseUILabels.MODAL_HEADER)
-        return True
+        return handled
 
     except Exception as e:
         logger.error(f"Error processing unknown item: {e}")
@@ -655,9 +662,8 @@ def _purchase_item(app: "AppProcessor", item_data, el: Yolo_Box, page_money_befo
         app.game_utils.wait_frame_stable()
         modal = app.game_utils.wait_for_modal(ModalText.TITLE.EXCHANGE_CONFIRMATION)
         if modal:
-            _confirm_and_record_exchange(app, item_data, modal, page_money_before=page_money_before)
-            break
-    app.game_utils.wait_label_exist(BaseUILabels.MODAL_HEADER)
+            return _confirm_and_record_exchange(app, item_data, modal, page_money_before=page_money_before)
+    return False
 
 def _scroll_page(app, scroll_x, scroll_y, item_commodity):
     """
@@ -750,65 +756,78 @@ def _confirm_exchange_modal(app: "AppProcessor", modal: Modal, item_name: str) -
     """
     处理交换确认弹窗。
 
-    若资源不足，则关闭弹窗并返回；若确认点击后弹窗未切换，
-    则尝试重新解析当前弹窗并兜底关闭，避免残留模态阻塞后续流程。
+    先重新获取稳定弹窗再点击；若点击后未转场，则再次稳定获取并重试一次，
+    避免单帧误判或旧按钮坐标导致残留模态阻塞流程。
     """
-    previous_title = modal.modal_title
-    modal_body_text = modal.modal_body_text or ""
-    if modal.confirm_button is None and modal.cancel_button is None:
+    stable_modal = app.game_utils.wait_for_modal(
+        ModalText.TITLE.EXCHANGE_CONFIRMATION,
+        timeout=2,
+        interval=0.2,
+        no_body=False,
+    ) or modal
+    previous_title = stable_modal.modal_title
+    modal_body_text = stable_modal.modal_body_text or ""
+    if stable_modal.confirm_button is None and stable_modal.cancel_button is None:
         logger.warning(f"Exchange modal for '{item_name}' has no actionable button")
         return False
 
     should_cancel = (
-        modal.confirm_button is None
-        or modal.confirm_button.is_disabled()
+        stable_modal.confirm_button is None
+        or stable_modal.confirm_button.is_disabled()
         or ("不足" in modal_body_text and "AP" in modal_body_text)
     )
-    action_button = modal.cancel_button if should_cancel else modal.confirm_button
-    if action_button is None:
-        action_button = modal.cancel_button or modal.confirm_button
+    if should_cancel:
+        logger.warning(f"Skip purchasing '{item_name}' because resources are insufficient")
+
+    def _pick_action_button(current_modal: Modal):
+        action_button = current_modal.cancel_button if should_cancel else current_modal.confirm_button
+        if action_button is None:
+            action_button = current_modal.cancel_button or current_modal.confirm_button
+        return action_button
+
+    action_button = _pick_action_button(stable_modal)
     if action_button is None:
         logger.warning(f"Exchange modal for '{item_name}' has no fallback button")
         return False
 
-    if should_cancel:
-        logger.warning(f"Skip purchasing '{item_name}' because resources are insufficient")
-    elif not app.game_utils.click_modal_button_and_wait_transition(
+    if app.game_utils.click_modal_button_and_wait_transition(
             action_button,
             previous_modal_title=previous_title,
             timeout=5,
             interval=0.2,
     ):
-        logger.warning(
-            f"Exchange modal for '{item_name}' did not transition after confirm, trying to close it"
-        )
-        fallback_modal = app.game_utils.try_get_modal(no_body=False)
-        if fallback_modal is not None:
-            fallback_button = fallback_modal.cancel_button or fallback_modal.confirm_button
-            if fallback_button is not None:
-                app.game_utils.click_modal_button_and_wait_transition(
-                    fallback_button,
-                    previous_modal_title=fallback_modal.modal_title,
-                    timeout=5,
-                    interval=0.2,
-                )
-        app.game_utils.wait_frame_stable()
-        return True
-    else:
         app.game_utils.wait_frame_stable()
         return True
 
+    retry_reason = "cancel" if should_cancel else "confirm"
+    logger.warning(
+        f"Exchange modal for '{item_name}' did not transition after {retry_reason}, retrying with refreshed modal"
+    )
+    refreshed_modal = app.game_utils.wait_for_modal(
+        ModalText.TITLE.EXCHANGE_CONFIRMATION,
+        timeout=2,
+        interval=0.2,
+        no_body=False,
+    )
+    if refreshed_modal is None:
+        logger.warning(f"Exchange modal for '{item_name}' could not be reacquired for retry")
+        return False
+
+    retry_button = _pick_action_button(refreshed_modal)
+    if retry_button is None:
+        logger.warning(f"Exchange modal for '{item_name}' has no actionable button after refresh")
+        return False
+
     if not app.game_utils.click_modal_button_and_wait_transition(
-            action_button,
-            previous_modal_title=previous_title,
+            retry_button,
+            previous_modal_title=refreshed_modal.modal_title,
             timeout=5,
             interval=0.2,
     ):
-        logger.warning(f"Exchange modal for '{item_name}' did not close after cancel")
+        logger.warning(f"Exchange modal for '{item_name}' did not close after retry")
         return False
     app.game_utils.wait_frame_stable()
     return True
-
 
 def _wait_exchange_item_groups(
         app: "AppProcessor",

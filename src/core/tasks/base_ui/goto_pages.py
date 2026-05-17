@@ -394,18 +394,27 @@ def goto__claim_pass_rewards(app: "AppProcessor"):
         if not app.latest_results.exists_label(BaseUILabels.MODAL_HEADER) and app.latest_results.exists_all_labels([BaseUILabels.CURRENT_LOCATION, BaseUILabels.BUTTON]):
             break
         if app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
-            modal = app.game_utils.wait_for_modal(ModalText.TITLE.INFO_FETCH_FAILED, timeout=5, no_body=True)
+            modal = app.game_utils.wait_for_modal(None, timeout=5, no_body=True)
             if not modal:
                 continue
-            app.device.click_element(modal.confirm_button)
+            action_button = modal.confirm_button or modal.cancel_button
+            if action_button is None:
+                continue
+            app.device.click_element(action_button)
             app.game_utils.wait_loading()
-            if modal := app.game_utils.wait_for_label(BaseUILabels.MODAL_HEADER, timeout=5):
-                app.device.click_element(modal.cancel_button)
-            app.game_utils.wait_loading()
+            if app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
+                followup_modal = app.game_utils.wait_for_modal(None, timeout=5, no_body=True)
+                if followup_modal is not None:
+                    followup_action = followup_modal.cancel_button or followup_modal.confirm_button
+                    if followup_action is not None:
+                        app.device.click_element(followup_action)
+                        app.game_utils.wait_loading()
     if app.latest_results.exists_label(BaseUILabels.MODAL_HEADER):
         modal = get_modal(app.latest_results, True)
         if modal:
-            app.device.click_element(modal.cancel_button)
+            action_button = modal.cancel_button or modal.confirm_button
+            if action_button is not None:
+                app.device.click_element(action_button)
     app.game_utils.wait_location_update(GamePageTypes.HOME_TAB.PASS_REWARD)
 
 def goto_support_card_list_page(app: "AppProcessor"):

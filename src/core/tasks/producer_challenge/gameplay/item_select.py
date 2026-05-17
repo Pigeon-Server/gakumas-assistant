@@ -275,7 +275,7 @@ def collect_item_select_candidates(app: "AppProcessor", *, selected: bool = Fals
         candidate.db_id = resolution.db_id
         candidate.source = resolution.source
         candidate.confidence = resolution.confidence
-        candidate.title = resolution.display_name or candidate.title
+        candidate.title = str(resolution.metadata.get("raw_name") or candidate.title)
         candidate.metadata = {
             **dict(resolution.metadata),
             "lookup_texts": lookup_texts,
@@ -585,7 +585,7 @@ def _probe_unresolved_items(
             candidate.db_id = resolution.db_id
             candidate.source = resolution.source
             candidate.confidence = resolution.confidence
-            candidate.title = resolution.display_name or name
+            candidate.title = str(resolution.metadata.get("raw_name") or name)
             candidate.metadata.update(resolution.metadata)
 
             last_probed_index = candidate.index

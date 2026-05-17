@@ -4,6 +4,7 @@
   import apis from '@/scripts/apis.js'
   import { probeImage } from '@/scripts/utils/image.js'
   import { useAppStore } from '@/stores/app.ts'
+  import { translateKey } from '@/scripts/i18n/translate'
 
   const store = useAppStore()
 
@@ -73,27 +74,27 @@
     IdolCardRarity_R: '#CD7F32',
   }
 
-  const idolRarityLabel = {
-    IdolCardRarity_Ssr: 'SSR',
-    IdolCardRarity_Sr: 'SR',
-    IdolCardRarity_R: 'R',
-  }
+  const idolRarityLabels = computed(() => ({
+    IdolCardRarity_Ssr: translateKey('backend.config.task__auto_producer.idol_card_browser.rarity.ssr'),
+    IdolCardRarity_Sr: translateKey('backend.config.task__auto_producer.idol_card_browser.rarity.sr'),
+    IdolCardRarity_R: translateKey('backend.config.task__auto_producer.idol_card_browser.rarity.r'),
+  }))
 
-  const idolPlanLabel = {
-    ProducePlanType_Plan1: '感性',
-    ProducePlanType_Plan2: '逻辑',
-    ProducePlanType_Plan3: '异常',
-    ProducePlanType_Common: '通用',
-  }
+  const idolPlanLabels = computed(() => ({
+    ProducePlanType_Plan1: translateKey('backend.config.task__auto_producer.idol_card_browser.plan.plan1'),
+    ProducePlanType_Plan2: translateKey('backend.config.task__auto_producer.idol_card_browser.plan.plan2'),
+    ProducePlanType_Plan3: translateKey('backend.config.task__auto_producer.idol_card_browser.plan.plan3'),
+    ProducePlanType_Common: translateKey('backend.config.task__auto_producer.idol_card_browser.plan.common'),
+  }))
 
-  const examEffectLabel = {
-    ProduceExamEffectType_ExamParameterBuff: '好調',
-    ProduceExamEffectType_ExamReview: '好印象',
-    ProduceExamEffectType_ExamLessonBuff: '集中',
-    ProduceExamEffectType_ExamConcentration: '強気',
-    ProduceExamEffectType_ExamCardPlayAggressive: 'やる気',
-    ProduceExamEffectType_ExamFullPower: '全力',
-  }
+  const examEffectLabels = computed(() => ({
+    ProduceExamEffectType_ExamParameterBuff: translateKey('backend.config.task__auto_producer.idol_card_browser.exam_effect.parameter_buff'),
+    ProduceExamEffectType_ExamReview: translateKey('backend.config.task__auto_producer.idol_card_browser.exam_effect.review'),
+    ProduceExamEffectType_ExamLessonBuff: translateKey('backend.config.task__auto_producer.idol_card_browser.exam_effect.lesson_buff'),
+    ProduceExamEffectType_ExamConcentration: translateKey('backend.config.task__auto_producer.idol_card_browser.exam_effect.concentration'),
+    ProduceExamEffectType_ExamCardPlayAggressive: translateKey('backend.config.task__auto_producer.idol_card_browser.exam_effect.card_play_aggressive'),
+    ProduceExamEffectType_ExamFullPower: translateKey('backend.config.task__auto_producer.idol_card_browser.exam_effect.full_power'),
+  }))
 
   const characterOptions = computed(() => {
     const characterMap = new Map()
@@ -110,46 +111,46 @@
 
   const idolFilterGroups = computed(() => [
     {
-      label: '稀有度',
+      label: translateKey('backend.config.task__auto_producer.idol_card_browser.filter.rarity'),
       key: 'rarity',
       options: [
-        { value: 'IdolCardRarity_Ssr', label: 'SSR', color: '#FFD700' },
-        { value: 'IdolCardRarity_Sr', label: 'SR', color: '#C0C0C0' },
-        { value: 'IdolCardRarity_R', label: 'R', color: '#CD7F32' },
+        { value: 'IdolCardRarity_Ssr', label: idolRarityLabels.value.IdolCardRarity_Ssr, color: '#FFD700' },
+        { value: 'IdolCardRarity_Sr', label: idolRarityLabels.value.IdolCardRarity_Sr, color: '#C0C0C0' },
+        { value: 'IdolCardRarity_R', label: idolRarityLabels.value.IdolCardRarity_R, color: '#CD7F32' },
       ],
     },
     {
-      label: '计划',
+      label: translateKey('backend.config.task__auto_producer.idol_card_browser.filter.plan'),
       key: 'planType',
       options: [
-        { value: 'ProducePlanType_Plan1', label: '感性' },
-        { value: 'ProducePlanType_Plan2', label: '逻辑' },
-        { value: 'ProducePlanType_Plan3', label: '异常' },
+        { value: 'ProducePlanType_Plan1', label: idolPlanLabels.value.ProducePlanType_Plan1 },
+        { value: 'ProducePlanType_Plan2', label: idolPlanLabels.value.ProducePlanType_Plan2 },
+        { value: 'ProducePlanType_Plan3', label: idolPlanLabels.value.ProducePlanType_Plan3 },
       ],
     },
     {
-      label: '属性',
+      label: translateKey('backend.config.task__auto_producer.idol_card_browser.filter.attribute'),
       key: 'primaryAttribute',
       options: [
-        { value: 'vocal', label: '声乐 Vo.' },
-        { value: 'dance', label: '舞蹈 Da.' },
-        { value: 'visual', label: '形象 Vi.' },
+        { value: 'vocal', label: translateKey('backend.config.task__auto_producer.idol_card_browser.attribute.vocal') },
+        { value: 'dance', label: translateKey('backend.config.task__auto_producer.idol_card_browser.attribute.dance') },
+        { value: 'visual', label: translateKey('backend.config.task__auto_producer.idol_card_browser.attribute.visual') },
       ],
     },
     {
-      label: '角色流派',
+      label: translateKey('backend.config.task__auto_producer.idol_card_browser.filter.exam_effect'),
       key: 'examEffectType',
       options: [
-        { value: 'ProduceExamEffectType_ExamParameterBuff', label: '好調' },
-        { value: 'ProduceExamEffectType_ExamReview', label: '好印象' },
-        { value: 'ProduceExamEffectType_ExamLessonBuff', label: '集中' },
-        { value: 'ProduceExamEffectType_ExamConcentration', label: '強気' },
-        { value: 'ProduceExamEffectType_ExamFullPower', label: '全力' },
-        { value: 'ProduceExamEffectType_ExamCardPlayAggressive', label: 'やる気' },
+        { value: 'ProduceExamEffectType_ExamParameterBuff', label: examEffectLabels.value.ProduceExamEffectType_ExamParameterBuff },
+        { value: 'ProduceExamEffectType_ExamReview', label: examEffectLabels.value.ProduceExamEffectType_ExamReview },
+        { value: 'ProduceExamEffectType_ExamLessonBuff', label: examEffectLabels.value.ProduceExamEffectType_ExamLessonBuff },
+        { value: 'ProduceExamEffectType_ExamConcentration', label: examEffectLabels.value.ProduceExamEffectType_ExamConcentration },
+        { value: 'ProduceExamEffectType_ExamFullPower', label: examEffectLabels.value.ProduceExamEffectType_ExamFullPower },
+        { value: 'ProduceExamEffectType_ExamCardPlayAggressive', label: examEffectLabels.value.ProduceExamEffectType_ExamCardPlayAggressive },
       ],
     },
     {
-      label: '角色',
+      label: translateKey('backend.config.task__auto_producer.idol_card_browser.filter.character'),
       key: 'characterId',
       options: characterOptions.value,
     },
@@ -208,8 +209,8 @@
   }
 
   function idolCardSubtitle (card) {
-    const rarity = idolRarityLabel[card.rarity] || ''
-    const plan = idolPlanLabel[card.planType] || ''
+    const rarity = idolRarityLabels.value[card.rarity] || ''
+    const plan = idolPlanLabels.value[card.planType] || ''
     const character = card.characterName || ''
     return [rarity, plan, character].filter(Boolean).join(' · ')
   }
@@ -219,7 +220,7 @@
   }
 
   function getIdolRarityLabel (card) {
-    return idolRarityLabel[card.rarity] || ''
+    return idolRarityLabels.value[card.rarity] || ''
   }
 
   function formatGrowthRate (permil) {
@@ -426,8 +427,8 @@
 
 <template>
   <div class="idol-card-browser">
-    <div class="browser-label">目标偶像卡</div>
-    <div class="browser-hint">目标 Pアイドル（留空使用默认选中的卡）</div>
+    <div class="browser-label">{{ translateKey('backend.config.task__auto_producer.target_idol_card_id.label') }}</div>
+    <div class="browser-hint">{{ translateKey('backend.config.task__auto_producer.target_idol_card_id.hint') }}</div>
 
     <div v-if="selectedIdolCard" class="selected-chips">
       <v-chip
@@ -444,7 +445,7 @@
       </v-chip>
     </div>
     <div v-else class="no-selection-hint">
-      未选择，使用默认选中的卡
+      {{ translateKey('backend.config.task__auto_producer.idol_card_browser.no_selection') }}
     </div>
 
     <v-btn
@@ -455,7 +456,7 @@
       variant="tonal"
       @click="openDialog"
     >
-      选择目标偶像卡
+      {{ translateKey('backend.config.task__auto_producer.target_idol_card_id.label') }}
     </v-btn>
 
     <CardSelectorDialog
@@ -470,8 +471,8 @@
       mode="single"
       :rarity-color="getIdolRarityColor"
       :rarity-label="getIdolRarityLabel"
-      search-placeholder="搜索偶像卡名称/角色名（支持中文/日文/ID）"
-      title="选择目标偶像卡"
+      :search-placeholder="translateKey('backend.config.task__auto_producer.idol_card_browser.search_placeholder')"
+      :title="translateKey('backend.config.task__auto_producer.target_idol_card_id.label')"
       @card-detail="onIdolCardDetail"
     >
       <template #detail="{ card, isSelected, toggle, close }">
@@ -499,11 +500,11 @@
             />
             <div v-else class="card-image-placeholder detail-placeholder">
               <span class="placeholder-rarity" :style="{ color: idolRarityColor[card.rarity] }">
-                {{ idolRarityLabel[card.rarity] }}
+                {{ idolRarityLabels[card.rarity] }}
               </span>
             </div>
             <div class="detail-badge" :style="{ backgroundColor: idolRarityColor[card.rarity] }">
-              {{ idolRarityLabel[card.rarity] }}
+              {{ idolRarityLabels[card.rarity] }}
             </div>
             <div
               v-if="downloadingFullImageFor?.startsWith(card.id)"
@@ -520,8 +521,8 @@
 
           <div v-if="card._hasFullImage" class="detail-skin-toggle">
             <v-btn-toggle v-model="idolCardSkin" color="primary" density="compact" mandatory>
-              <v-btn size="x-small" :value="0">覚醒前</v-btn>
-              <v-btn size="x-small" :value="1">覚醒後</v-btn>
+              <v-btn size="x-small" :value="0">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.skin.before') }}</v-btn>
+              <v-btn size="x-small" :value="1">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.skin.after') }}</v-btn>
             </v-btn-toggle>
           </div>
 
@@ -535,22 +536,22 @@
 
           <div class="detail-tags">
             <v-chip class="detail-tag" :color="idolRarityColor[card.rarity]" size="x-small" variant="flat">
-              {{ idolRarityLabel[card.rarity] }}
+              {{ idolRarityLabels[card.rarity] }}
             </v-chip>
             <v-chip class="detail-tag" size="x-small" variant="outlined">
-              {{ idolPlanLabel[card.planType] || card.planType }}
+              {{ idolPlanLabels[card.planType] || card.planType }}
             </v-chip>
             <v-chip v-if="card.characterName" class="detail-tag" size="x-small" variant="outlined">
               {{ card.characterName }}
             </v-chip>
             <v-chip
-              v-if="examEffectLabel[card.examEffectType]"
+              v-if="examEffectLabels[card.examEffectType]"
               class="detail-tag"
               color="teal"
               size="x-small"
               variant="outlined"
             >
-              {{ examEffectLabel[card.examEffectType] }}
+              {{ examEffectLabels[card.examEffectType] }}
             </v-chip>
             <v-chip
               v-if="card.isLimited"
@@ -559,15 +560,15 @@
               size="x-small"
               variant="outlined"
             >
-              限定
+              {{ translateKey('backend.config.task__auto_producer.idol_card_browser.limit_only') }}
             </v-chip>
           </div>
 
           <div class="detail-section">
-            <div class="detail-section-title">培育パラメータ</div>
+            <div class="detail-section-title">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.section.growth') }}</div>
             <div class="detail-stats">
               <div class="stat-row">
-                <span class="stat-label stat-vocal">Vo</span>
+                <span class="stat-label stat-vocal">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.stat.vocalShort') }}</span>
                 <div class="stat-bar-wrapper">
                   <div
                     class="stat-bar stat-bar-vocal"
@@ -577,7 +578,7 @@
                 <span class="stat-value">{{ card.produceVocal }}</span>
               </div>
               <div class="stat-row">
-                <span class="stat-label stat-dance">Da</span>
+                <span class="stat-label stat-dance">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.stat.danceShort') }}</span>
                 <div class="stat-bar-wrapper">
                   <div
                     class="stat-bar stat-bar-dance"
@@ -587,7 +588,7 @@
                 <span class="stat-value">{{ card.produceDance }}</span>
               </div>
               <div class="stat-row">
-                <span class="stat-label stat-visual">Vi</span>
+                <span class="stat-label stat-visual">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.stat.visualShort') }}</span>
                 <div class="stat-bar-wrapper">
                   <div
                     class="stat-bar stat-bar-visual"
@@ -599,10 +600,10 @@
             </div>
             <div class="stat-summary">
               <span class="stat-summary-item">
-                总计 <strong>{{ card.produceVocal + card.produceDance + card.produceVisual }}</strong>
+                {{ translateKey('backend.config.task__auto_producer.idol_card_browser.total') }} <strong>{{ card.produceVocal + card.produceDance + card.produceVisual }}</strong>
               </span>
               <span class="stat-summary-item stat-stamina-text">
-                体力 <strong>{{ card.produceStamina }}</strong>
+                {{ translateKey('backend.config.task__auto_producer.idol_card_browser.stamina') }} <strong>{{ card.produceStamina }}</strong>
               </span>
             </div>
             <div class="growth-rates">
@@ -613,7 +614,7 @@
           </div>
 
           <div v-if="card.produceCard" class="detail-section">
-            <div class="detail-section-title">固有技能卡</div>
+            <div class="detail-section-title">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.section.skill_card') }}</div>
             <div class="detail-item-block">
               <div class="detail-item-row">
                 <img
@@ -639,7 +640,7 @@
           </div>
 
           <div v-if="card.beforeProduceItem || card.afterProduceItem" class="detail-section">
-            <div class="detail-section-title">固有P物品</div>
+            <div class="detail-section-title">{{ translateKey('backend.config.task__auto_producer.idol_card_browser.section.item') }}</div>
 
             <div v-if="card.beforeProduceItem" class="detail-item-block">
               <div class="detail-item-row">
@@ -676,7 +677,7 @@
                   <div class="detail-item-name">
                     {{ localizedName(card.afterProduceItem) }}
                     <v-chip class="detail-tag detail-inline-chip" color="amber" size="x-small" variant="outlined">
-                      特訓後
+                      {{ translateKey('backend.config.task__auto_producer.idol_card_browser.after_training') }}
                     </v-chip>
                   </div>
                   <div
@@ -703,7 +704,7 @@
               :variant="isSelected ? 'flat' : 'outlined'"
               @click="toggle"
             >
-              {{ isSelected ? '取消选择' : '选择此卡' }}
+              {{ isSelected ? translateKey('dialogs.selector.cancelSelect') : translateKey('dialogs.selector.selectCard') }}
             </v-btn>
           </div>
         </div>
@@ -723,13 +724,13 @@
 .browser-label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.87);
+  color: rgba(var(--v-theme-on-surface), 0.87);
 }
 
 .browser-hint {
   margin-top: -6px;
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
 .selected-chips {
@@ -743,13 +744,13 @@
 }
 
 .no-selection-hint {
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.5);
   font-size: 0.875rem;
 }
 
 .detail-panel {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.03);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.08);
   border-radius: 10px;
   padding: 12px;
 }
@@ -766,7 +767,7 @@
   border-radius: 8px;
   overflow: hidden;
   margin-bottom: 10px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .detail-image-loading {
@@ -790,7 +791,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(var(--v-theme-on-surface), 0.03);
 }
 
 .placeholder-rarity {
@@ -827,7 +828,7 @@
 
 .detail-name-sub {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(var(--v-theme-on-surface), 0.45);
   margin-bottom: 8px;
   line-height: 1.3;
 }
@@ -854,7 +855,7 @@
 .detail-section-title {
   font-size: 0.75rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-surface), 0.7);
   margin-bottom: 4px;
 }
 
@@ -897,7 +898,7 @@
 .stat-bar-wrapper {
   flex: 1;
   height: 6px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--v-theme-on-surface), 0.1);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -932,7 +933,7 @@
   display: flex;
   justify-content: space-between;
   font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.6);
   padding-top: 2px;
 }
 
@@ -964,7 +965,7 @@
 }
 
 .detail-item-block {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--v-theme-on-surface), 0.04);
   border-radius: 6px;
   padding: 8px 10px;
 }
@@ -985,7 +986,7 @@
   border-radius: 4px;
   object-fit: cover;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--v-theme-on-surface), 0.06);
 }
 
 .detail-item-text {
@@ -1004,20 +1005,20 @@
 
 .detail-item-name-sub {
   font-size: 0.65rem;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(var(--v-theme-on-surface), 0.4);
 }
 
 .detail-item-desc {
   margin-top: 6px;
   font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(var(--v-theme-on-surface), 0.55);
   line-height: 1.4;
 }
 
 .detail-card-id {
   font-size: 0.65rem;
   font-family: monospace;
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(var(--v-theme-on-surface), 0.3);
   word-break: break-all;
   text-align: center;
 }

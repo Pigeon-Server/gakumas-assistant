@@ -1,27 +1,30 @@
 <script setup>
 import app from "@/main.js";
+import { translateAny, translateOptionTitle } from '@/scripts/i18n/translate'
 const props = defineProps({
   data: Object
 })
-
-const items = [
-  {id: "Network", title: "网络连接"},
-  {id: "USB", title: "USB连接"}
-]
 </script>
 
 <template>
   <v-list-item>
     <v-select
-      label="ADB连接模式"
-      hint="安卓调试桥的连接模式，手机建议使用USB，模拟器可使用网络连接（修改后需重启生效）"
-      :items="items"
-      item-title="title"
-      item-value="id"
+      :label="translateAny(props.data.base.adb_connect_mode.ui.label)"
+      :hint="translateAny(props.data.base.adb_connect_mode.ui.hint)"
+      :items="props.data.base.adb_connect_mode.ui.options"
+      :item-title="translateOptionTitle"
+      item-value="value"
       :item-color="app.config.globalProperties.$theme.color"
       v-model="props.data.base.adb_connect_mode.value"
       persistent-hint
-    ></v-select>
+    >
+      <template #item="{ props: optionProps, item: optionItem }">
+        <v-list-item v-bind="optionProps" :title="translateAny(optionItem.raw?.title)" />
+      </template>
+      <template #selection="{ item: optionItem }">
+        <span>{{ translateAny(optionItem.raw?.title) }}</span>
+      </template>
+    </v-select>
   </v-list-item>
 </template>
 

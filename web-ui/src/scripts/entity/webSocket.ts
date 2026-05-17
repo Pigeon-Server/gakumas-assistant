@@ -1,6 +1,7 @@
 import {WS_ACTION} from "@/scripts/constants.js"
 import {TaskItem} from "@/scripts/entity/task";
 import {AppStatus} from "@/scripts/entity/status";
+import type { I18nText } from '@/scripts/i18n/types'
 
 export interface WsOptions {
   reconnect?: boolean
@@ -23,10 +24,10 @@ export interface WsEventPayloads {
   [WS_ACTION.TaskQueueSuspend]: void
   [WS_ACTION.TaskExecutionError]: {
     task_id: string
-    task_name: string
+    task_name: I18nText | string
     status: string
     error_type: string
-    error_message: string
+    error_message: I18nText | string
     dump_dir: string
     package_path: string
     package_id: string

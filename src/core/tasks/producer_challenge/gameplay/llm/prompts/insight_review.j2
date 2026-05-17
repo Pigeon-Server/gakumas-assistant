@@ -1,0 +1,45 @@
+以下是本局新生成的洞察和数据库中的已有洞察，请逐条审查。
+
+== 本局新生成的洞察 ==
+{% for insight in new_insights %}
+[{{ insight.id }}] {{ insight.strategy_description }}
+  适用: {{ insight.when_to_apply }}
+  不适用: {{ insight.when_not_to_apply }}
+{% endfor %}
+
+== 已有洞察（待审查）==
+{% for insight in existing_insights %}
+[{{ insight.id }}] ({{ insight.validation_status }}, 证据={{ insight.evidence_count }}, 矛盾={{ insight.contradiction_count }})
+  策略: {{ insight.strategy_description }}
+  适用: {{ insight.when_to_apply }}
+  不适用: {{ insight.when_not_to_apply }}
+{% endfor %}
+
+== 本局决策时间线 ==
+{% for step in timeline %}
+第{{ step.week }}周 [{{ step.phase }}] {{ step.decision_tags }} → {{ step.outcome }}
+{% endfor %}
+
+== 本局结果 ==
+{{ result_summary }}
+
+请对每条已有洞察输出 JSON 数组：
+[
+  {
+    "insight_id": 123,
+    "judgment": "keep",
+    "reason": "理由"
+  },
+  {
+    "insight_id": 456,
+    "judgment": "update_conditions",
+    "reason": "理由",
+    "updated_when_to_apply": "新的适用条件",
+    "updated_when_not_to_apply": "新的不适用条件"
+  },
+  {
+    "insight_id": 789,
+    "judgment": "delete",
+    "reason": "理由"
+  }
+]

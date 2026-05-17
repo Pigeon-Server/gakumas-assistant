@@ -6,11 +6,98 @@
 {% if stage_context.available_action_summary %}
 当前可执行: {{ stage_context.available_action_summary }}
 {% endif %}
-{% if stage_context.interaction_hint %}
-交互方式: {{ stage_context.interaction_hint }}
-{% endif %}
+{% if planning %}
+### 长线规划
+{% if planning.route_bias and planning.route_bias.summary %}
+路线倾向: {{ planning.route_bias.summary }}
 {% if idol_plan_label %}
 当前流派: {{ idol_plan_label }}{% if idol_plan_focus %} | 核心资源: {{ idol_plan_focus }}{% endif %}{% if idol_plan_description %} | {{ idol_plan_description }}{% endif %}{{ '' }}
+{% endif %}
+{% elif idol_plan_label %}
+路线倾向: {{ idol_plan_label }}{% if idol_plan_focus %} | 核心资源: {{ idol_plan_focus }}{% endif %}{% if idol_plan_description %} | {{ idol_plan_description }}{% endif %}{{ '' }}
+{% endif %}
+{% if planning.current_objectives and planning.current_objectives.summary %}
+主流程目标: {{ planning.current_objectives.summary }}
+{% elif produce_goals.summary %}
+主流程目标: {{ produce_goals.summary }}
+{% endif %}
+{% if planning.next_gate %}
+下个门槛: {{ planning.next_gate.gate_label or '未知' }}{% if planning.next_gate.weeks_until_gate is not none %} | 剩余{{ planning.next_gate.weeks_until_gate }}周{% endif %}{% if planning.next_gate.readiness_summary %} | {{ planning.next_gate.readiness_summary }}{% endif %}{{ '' }}
+{% endif %}
+{% if planning.resource_pressure and planning.resource_pressure.summary %}
+资源压力: {{ planning.resource_pressure.summary }}
+{% endif %}
+{% if planning.time_pressure and planning.time_pressure.summary %}
+时间压力: {{ planning.time_pressure.summary }}
+{% endif %}
+{% if planning.build_plan and planning.build_plan.summary %}
+成长规划: {{ planning.build_plan.summary }}
+{% endif %}
+{% if planning.deck_plan and planning.deck_plan.summary %}
+牌组规划: {{ planning.deck_plan.summary }}
+{% endif %}
+{% if planning.inventory_plan and planning.inventory_plan.summary %}
+库存规划: {{ planning.inventory_plan.summary }}
+{% endif %}
+{% if planning.recent_outcomes %}
+近期动作回顾: {{ planning.recent_outcomes[:4]|join(' | ') }}
+{% endif %}
+{% if exam_criteria %}
+### 审查基准
+{% for item in exam_criteria %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+{% if training_tasks %}
+### 育成课题
+{% for item in training_tasks[:5] %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+{% if planning.schedule_history_summary %}
+周流程历史: {{ planning.schedule_history_summary }}
+{% elif schedule_history_summary %}
+周流程历史: {{ schedule_history_summary }}
+{% endif %}
+{% if planning.future_schedule %}
+### 后续日程提示
+{% for item in planning.future_schedule[:6] %}
+- {{ item }}
+{% endfor %}
+{% elif future_schedule %}
+### 后续日程提示
+{% for item in future_schedule[:6] %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+{% elif idol_plan_label or produce_goals.summary or exam_criteria or training_tasks or schedule_history_summary or future_schedule %}
+{% if idol_plan_label %}
+当前流派: {{ idol_plan_label }}{% if idol_plan_focus %} | 核心资源: {{ idol_plan_focus }}{% endif %}{% if idol_plan_description %} | {{ idol_plan_description }}{% endif %}{{ '' }}
+{% endif %}
+{% if produce_goals.summary %}
+主流程目标: {{ produce_goals.summary }}
+{% endif %}
+{% if exam_criteria %}
+### 审查基准
+{% for item in exam_criteria %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+{% if training_tasks %}
+### 育成课题
+{% for item in training_tasks[:5] %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+{% if schedule_history_summary %}
+周流程历史: {{ schedule_history_summary }}
+{% endif %}
+{% if future_schedule %}
+### 后续日程提示
+{% for item in future_schedule[:6] %}
+- {{ item }}
+{% endfor %}
+{% endif %}
 {% endif %}
 {% if phase == 'lesson' or phase == 'exam' %}
 {% if turn is not none %}
@@ -145,8 +232,6 @@ Pポイント: {{ p_point }}
 {% if deck_cards|length > 12 %}
 ... 以及其他 {{ deck_cards|length - 12 }} 张
 {% endif %}
-{% else %}
-未知
 {% endif %}
 
 {% if drinks %}
@@ -179,7 +264,12 @@ Pポイント: {{ p_point }}
 ### 手牌 ({{ hand|length }}张)
 {% if hand %}
 {% for c in hand %}
-- {{ c.name }}{{ '[+%d]'|format(c.upgrade_count) if c.upgrade_count else '' }}{{ ' (' + c.category + ')' if c.category else '' }}{{ '\n  说明: ' + c.description if c.description else '' }}{{ '\n  消耗: ' + c.cost|string if c.cost else '' }}{{ '\n  效果轴: ' + c.effect_types|join(' / ') if c.effect_types else '' }}
+- {{ c.name }}{{ '[+%d]'|format(c.upgrade_count) if c.upgrade_count else '' }}
+  类型: {{ c.category or '未知' }}
+{% if c.description %}  效果:
+  {{ c.description }}
+{% endif %}{% if c.cost %}  消耗: {{ c.cost }}
+{% endif %}
 {% endfor %}
 {% else %}
 (空)
@@ -197,8 +287,6 @@ Pポイント: {{ p_point }}
 {% if deck_cards|length > 12 %}
 ... 以及其他 {{ deck_cards|length - 12 }} 张
 {% endif %}
-{% else %}
-未知
 {% endif %}
 
 ### 牌区计数

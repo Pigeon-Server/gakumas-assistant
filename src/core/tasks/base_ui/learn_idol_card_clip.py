@@ -533,21 +533,30 @@ def _get_idol_list_swipe_range(
 
 
 def _enter_idol_list_page(app: "AppProcessor") -> bool:
-    buttons = ButtonList(app.latest_results)
-    list_button = next(
-        (
-            button
-            for button in buttons
-            if string_match(button.text, ButtonText.PAGE__IDOL.IDOL_LIST, _IDOL_LIST_BUTTON_MATCH)
-        ),
-        None,
-    )
+    list_button = None
+    for _ in range(5):
+        buttons = ButtonList(app.latest_results)
+        list_button = next(
+            (
+                button
+                for button in buttons
+                if string_match(button.text, ButtonText.PAGE__IDOL.IDOL_LIST, _IDOL_LIST_BUTTON_MATCH)
+            ),
+            None,
+        )
+        if list_button is None:
+            logger.warning(f"find{ButtonText.PAGE__IDOL.IDOL_LIST} button not found, retrying......")
+            # logger.warning(f"{ButtonText.PAGE__IDOL.IDOL_LIST} button not found, skipping idol-list learning pass")
+            sleep(0.5)
+            continue
+        if not app.game_utils.click_element_and_wait_trigger(list_button, retries=3, timeout=2.5):
+            logger.warning(f"Failed to open {ButtonText.PAGE__IDOL.IDOL_LIST}")
+            sleep(0.5)
+            continue
+        break
+
     if list_button is None:
         logger.warning(f"{ButtonText.PAGE__IDOL.IDOL_LIST} button not found, skipping idol-list learning pass")
-        return False
-
-    if not app.game_utils.click_element_and_wait_trigger(list_button, retries=3, timeout=2.5):
-        logger.warning(f"Failed to open {ButtonText.PAGE__IDOL.IDOL_LIST}")
         return False
 
     sleep(0.8)

@@ -34,13 +34,13 @@ from src.constants.yolo.model_type import YoloModelType
 from src.core.inference.ocr_engine import OCRService
 from src.constants.game.producer_gameplay import GameplayPosition
 from src.core.tasks.producer_challenge.context import GameplayPhase
+from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import LLMStrategy
 from src.core.tasks.producer_challenge.shared.common import (
     click_relative_point,
     ocr_text,
 )
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.ui import (
-    collect_button_like_texts,
     collect_frame_text,
     click_modal_action_with_retry,
     detect_gameplay_state,
@@ -113,6 +113,13 @@ class HandleResultsStep(ProduceStep):
 
     step_name = "handle_results"
 
+    @staticmethod
+    def _flush_llm_session(ctx: "ProduceContext") -> None:
+        """结果链完成后补做一次最终会话 flush。"""
+        strategy = getattr(ctx, "schedule_strategy", None)
+        if isinstance(strategy, LLMStrategy):
+            strategy.flush_session(ctx)
+
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """推进培育结果链，必要时恢复 gameplay，最终确保回到主页。
 
@@ -130,70 +137,73 @@ class HandleResultsStep(ProduceStep):
             bool: 成功回到主页时返回 True；若恢复 gameplay 或手动回主页失败，会返回 False
                 或抛出异常。
         """
-        # 如果主循环已通过 produce_finishing 推进结果链并确认到主页，直接跳过
-        if ctx.handler_state.get("produce_finishing"):
-            logger.info("HandleResults: 主循环已完成培育收尾，跳过 step 12")
-            logger.success("培育完成，已返回主页")
-            return True
+        try:
+            # 如果主循环已通过 produce_finishing 推进结果链并确认到主页，直接跳过
+            if ctx.handler_state.get("produce_finishing"):
+                logger.info("HandleResults: 主循环已完成培育收尾，跳过 step 12")
+                logger.success("培育完成，已返回主页")
+                return True
 
-        ctx.gameplay_phase = "results"
-        logger.info("开始处理培育结果画面")
+            ctx.gameplay_phase = "results"
+            logger.info("开始处理培育结果画面")
+            post_state: tuple[str, str, str] | None = None
 
-        # 支持多次 retry 循环：考试失败→再挑戦→考试→再次失败→再挑戦…
-        _MAX_RESULT_RETRIES = 5
-        for attempt in range(_MAX_RESULT_RETRIES):
-            # 阶段一：在 PRODUCER 模型下跳过结果页面
-            post_state = self._skip_result_screens(app, ctx, timeout=120)
+            # 支持多次 retry 循环：考试失败→再挑戦→考试→再次失败→再挑戦…
+            _MAX_RESULT_RETRIES = 5
+            for attempt in range(_MAX_RESULT_RETRIES):
+                # 阶段一：在 PRODUCER 模型下跳过结果页面
+                post_state = self._skip_result_screens(app, ctx, timeout=120)
 
-            # 阶段二：切回 BASE_UI 模型
-            logger.info("切换回 BASE_UI 模型")
-            app.yolo_engine.load_model(YoloModelType.BASE_UI)
-            sleep(2)
+                # 阶段二：切回 BASE_UI 模型
+                logger.info("切换回 BASE_UI 模型")
+                app.switch_yolo_model(YoloModelType.BASE_UI, settle_seconds=2.0)
+
+                if post_state is None:
+                    post_state = self._detect_post_result_state(app, ctx)
+                if post_state[0] == "resume":
+                    phase, position = post_state[1], post_state[2]
+                    logger.info(f"结果链已回到 gameplay，恢复主循环: phase={phase}, position={position}")
+                    if hasattr(ctx, "set_phase"):
+                        ctx.set_phase(phase)
+                    else:
+                        ctx.gameplay_phase = phase
+                    if hasattr(ctx, "set_position"):
+                        ctx.set_position(position)
+                    else:
+                        ctx.gameplay_position = position
+                    from src.core.tasks.producer_challenge.steps.runtime.produce_gameplay_loop import (
+                        ProduceGameplayLoopStep,
+                    )
+
+                    logger.info("切换回 PRODUCER 模型用于 gameplay loop")
+                    app.switch_yolo_model(YoloModelType.PRODUCER, settle_seconds=1.5)
+                    if not ProduceGameplayLoopStep().execute(app, ctx):
+                        logger.error("恢复 gameplay 主循环失败")
+                        return False
+                    logger.info(f"gameplay loop 再次退出 (attempt {attempt + 1})，继续处理结果")
+                    continue
+
+                if post_state[0] == "home":
+                    break
+                break
 
             if post_state is None:
-                post_state = self._detect_post_result_state(app, ctx)
-            if post_state[0] == "resume":
-                phase, position = post_state[1], post_state[2]
-                logger.info(f"结果链已回到 gameplay，恢复主循环: phase={phase}, position={position}")
-                if hasattr(ctx, "set_phase"):
-                    ctx.set_phase(phase)
-                else:
-                    ctx.gameplay_phase = phase
-                if hasattr(ctx, "set_position"):
-                    ctx.set_position(position)
-                else:
-                    ctx.gameplay_position = position
-                from src.core.tasks.producer_challenge.steps.runtime.produce_gameplay_loop import (
-                    ProduceGameplayLoopStep,
-                )
+                post_state = ("result", "", "")
 
-                # 重新进入 gameplay loop（可能再次以 RESULT 退出）
-                logger.info("切换回 PRODUCER 模型用于 gameplay loop")
-                app.yolo_engine.load_model(YoloModelType.PRODUCER)
-                sleep(1.5)
-                if not ProduceGameplayLoopStep().execute(app, ctx):
-                    logger.error("恢复 gameplay 主循环失败")
+            # 阶段三：等待回到主页（处理残余弹窗）
+            if post_state[0] != "home" and not self._wait_for_home(app, timeout=40):
+                logger.warning("未自动回到主页，尝试手动导航")
+                try:
+                    app.game_utils.go_home(max_try=5)
+                except RuntimeError:
+                    logger.error("返回主页失败")
                     return False
-                # gameplay loop 再次退出，可能又是 RESULT → 回到循环顶部继续处理
-                logger.info(f"gameplay loop 再次退出 (attempt {attempt + 1})，继续处理结果")
-                continue
 
-            if post_state[0] == "home":
-                break
-            # 其他状态（"result" 等）→ 跳出循环，走 _wait_for_home 兜底
-            break
+            logger.success("培育完成，已返回主页")
+            return True
+        finally:
+            self._flush_llm_session(ctx)
 
-        # 阶段三：等待回到主页（处理残余弹窗）
-        if post_state[0] != "home" and not self._wait_for_home(app, timeout=40):
-            logger.warning("未自动回到主页，尝试手动导航")
-            try:
-                app.game_utils.go_home(max_try=5)
-            except RuntimeError:
-                logger.error("返回主页失败")
-                return False
-
-        logger.success("培育完成，已返回主页")
-        return True
 
     # ── 阶段一：结果链推进 ─────────────────────────────────
 
@@ -203,15 +213,16 @@ class HandleResultsStep(ProduceStep):
         ctx: "ProduceContext | None" = None,
         timeout: int = 120,
     ) -> tuple[str, str, str] | None:
-        """处理skip、结果、screens并返回结果。
+        """处理结果链页面推进，并在必要时返回恢复状态。
 
         Args:
             app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
             ctx: 培育上下文对象，保存跨步骤状态与策略配置。
-            timeout: 用于提供timeout相关输入。
+            timeout: 结果链推进阶段的最长等待时间。
 
         Returns:
-            tuple[str, str, str] | None: 返回值类型见注解。
+            tuple[str, str, str] | None: 若检测到可恢复 gameplay 或已回主页，返回状态元组；
+                否则返回 None 表示交给后续状态探测兜底。
         """
         start = time()
         consecutive_no_progress = 0

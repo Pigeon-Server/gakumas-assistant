@@ -51,6 +51,24 @@ def _is_startup_screen_ready(processor: "AppProcessor") -> bool:
     return latest_results.exists_label(BaseUILabels.MODAL_HEADER)
 
 
+def _ensure_windows_game_foreground(processor: "AppProcessor") -> bool:
+    """
+    尝试将 Windows 端游戏窗口恢复到前台。
+
+    仅在游戏已运行且设备确认为 Windows PC 模式时执行。
+    """
+    if not is_windows_device(processor.device):
+        return False
+    if not processor.device.is_app_running():
+        return False
+    if processor.device.is_app_focused():
+        return True
+
+    logger.debug("Game switch to front......")
+    processor.device.bring_to_front()
+    return _wait_until(processor.device.is_app_focused, timeout=5, interval=0.25)
+
+
 def register_tasks(processor: "AppProcessor"):
     @processor.task_queue.register_pre_queue_start()
     def _pre__check_adb_connect():
@@ -108,9 +126,9 @@ def register_tasks(processor: "AppProcessor"):
         GAME_RUNNING = False
         _ui_msg = UIMessage()
 
-        if not processor.config_service().base.auto_start_game.value:
-            # 未开启自动启动，检查游戏是否已在前台
-            if isinstance(processor.device, Android_App):
+        if isinstance(processor.device, Android_App):
+            if not processor.config_service().base.auto_start_game.value:
+                # 未开启自动启动，检查游戏是否已在前台
                 if processor.device.is_app_focused():
                     GAME_RUNNING = True
                     return True
@@ -121,15 +139,7 @@ def register_tasks(processor: "AppProcessor"):
                     _ui_msg.error("游戏未启动，请先手动启动游戏后重试", timeout=5)
                 logger.warning("游戏未在前台，auto_start_game 已关闭，取消任务队列")
                 return False
-            # 非 Android 设备
-            if processor.device.is_app_running() and processor.device.is_app_focused():
-                GAME_RUNNING = True
-                return True
-            _ui_msg.warning("游戏未在前台运行，请手动启动游戏后重试", timeout=5)
-            logger.warning("游戏未在前台，auto_start_game 已关闭，取消任务队列")
-            return False
 
-        if isinstance(processor.device, Android_App):
             if processor.device.is_app_focused():
                 GAME_RUNNING = True
                 return True
@@ -144,13 +154,21 @@ def register_tasks(processor: "AppProcessor"):
             if processor.device.is_app_focused():
                 return True
 
-            logger.debug("Game switch to front......")
-            if is_windows_device(processor.device):
-                processor.device.bring_to_front()
-                return _wait_until(processor.device.is_app_focused, timeout=5, interval=0.25)
+            if _ensure_windows_game_foreground(processor):
+                return True
+
+            if not processor.config_service().base.auto_start_game.value:
+                _ui_msg.warning("游戏未在前台运行，请手动切回游戏后重试", timeout=5)
+                logger.warning("游戏未在前台，任务队列取消执行")
+                return False
 
             processor.device.start_game()
             return True
+
+        if not processor.config_service().base.auto_start_game.value:
+            _ui_msg.warning("游戏未启动，请先手动启动游戏后重试", timeout=5)
+            logger.warning("游戏未启动，auto_start_game 已关闭，取消任务队列")
+            return False
 
         processor.device.start_game()
         return _wait_until(processor.device.is_app_running, timeout=120, interval=1)
@@ -202,12 +220,14 @@ def register_tasks(processor: "AppProcessor"):
     def _task__work_dispatch(app: "AppProcessor"):
         from src.core.tasks.base_ui.dispatch_work import (
             action__dispatch_all_available_work,
+            ensure__work_dispatch_page_ready,
             handle__work_dispatch_results,
         )
         from src.core.tasks.base_ui.goto_pages import goto__work_dispatch_page
 
         goto__work_dispatch_page(app)
         handle__work_dispatch_results(app)
+        ensure__work_dispatch_page_ready(app)
         action__dispatch_all_available_work(app)
 
     @processor.task_queue.register_task("get_gift", "获取礼物/邮箱")
@@ -274,12 +294,10 @@ def register_tasks(processor: "AppProcessor"):
         goto__claim_pass_rewards(app)
         claim_pass_rewards(app)
 
-    @processor.task_queue.register_task("auto_producer", "自动培育", -1)
+    @processor.task_queue.register_task("auto_producer", "自动培育（Bata）", -1)
     def _task__auto_producer(app: "AppProcessor"):
         from src.core.tasks.producer_challenge import build_produce_pipeline
         from src.core.tasks.producer_challenge.context import ProduceContext
-        from src.core.tasks.producer_challenge.gameplay.llm_strategy import inject_llm_strategy
-        from src.core.tasks.producer_challenge.gameplay.rl_strategy import inject_rl_strategy
 
         cfg = app.config_service().task__auto_producer
         # NIA 使用独立的 nia_difficulty 配置
@@ -303,24 +321,101 @@ def register_tasks(processor: "AppProcessor"):
             allow_destroy_production_data=cfg.allow_destroy_production_data.value,
         )
         base = app.config_service().base
-        decision_backend = str(getattr(base, "producer_decision_backend", "llm") or "llm")
-        if decision_backend == "rl_battle":
-            inject_rl_strategy(
-                ctx,
+
+        # 读取3个独立决策源配置
+        schedule_backend = str(getattr(base, "schedule_decision_backend", "llm") or "llm")
+        battle_backend = str(getattr(base, "battle_decision_backend", "llm") or "llm")
+        other_backend = str(getattr(base, "other_decision_backend", "llm") or "llm")
+
+        # 根据配置为每个决策源注入对应策略
+        # 统一策略对象：内部根据 phase 路由，互不干扰
+        # 1. 周行程决策
+        if schedule_backend == "rl_battle":
+            from src.core.tasks.producer_challenge.gameplay.strategy.rl_strategy import RLStrategy
+            ctx.schedule_strategy = RLStrategy(
+                base_url=str(base.rl_inference_base_url),
+                predict_timeout=float(base.rl_inference_timeout),
+            )
+        elif schedule_backend == "algo":
+            from src.core.tasks.producer_challenge.gameplay.strategy.algo_strategy import AlgoStrategy
+            ctx.schedule_strategy = AlgoStrategy()
+        elif schedule_backend == "rl":
+            from src.core.tasks.producer_challenge.gameplay.strategy.rl_strategy import RLStrategy
+            ctx.schedule_strategy = RLStrategy(
                 base_url=str(base.rl_inference_base_url),
                 predict_timeout=float(base.rl_inference_timeout),
             )
         else:
-            inject_llm_strategy(
-                ctx,
-                base_url=str(base.llm_base_url),
-                model=str(base.llm_model),
-                api_key=str(base.llm_api_key),
-                timeout=float(base.llm_timeout),
-                max_tokens=int(base.llm_max_tokens),
-                num_ctx=int(base.llm_num_ctx),
-                temperature=float(base.llm_temperature),
+            if not ctx.schedule_strategy:
+                from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import LLMStrategy
+                ctx.schedule_strategy = LLMStrategy()
+
+        # 2. 战斗决策（lesson/exam）
+        if battle_backend == "rl_battle":
+            from src.core.tasks.producer_challenge.gameplay.strategy.rl_strategy import RLStrategy
+            battle_strategy = RLStrategy(
+                base_url=str(base.rl_inference_base_url),
+                predict_timeout=float(base.rl_inference_timeout),
             )
+            ctx.lesson_strategy = battle_strategy
+            ctx.exam_strategy = battle_strategy
+        elif battle_backend == "algo":
+            from src.core.tasks.producer_challenge.gameplay.strategy.algo_strategy import AlgoStrategy
+            battle_strategy = AlgoStrategy()
+            ctx.lesson_strategy = battle_strategy
+            ctx.exam_strategy = battle_strategy
+        elif battle_backend == "rl":
+            from src.core.tasks.producer_challenge.gameplay.strategy.rl_strategy import RLStrategy
+            battle_strategy = RLStrategy(
+                base_url=str(base.rl_inference_base_url),
+                predict_timeout=float(base.rl_inference_timeout),
+            )
+            ctx.lesson_strategy = battle_strategy
+            ctx.exam_strategy = battle_strategy
+        else:
+            if not ctx.lesson_strategy:
+                from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import LLMStrategy
+                battle_strategy = LLMStrategy()
+                ctx.lesson_strategy = battle_strategy
+                ctx.exam_strategy = battle_strategy
+
+        # 3. 其他决策（dialogue/p_drink/skill_reward/consult/item_select/modal）
+        if other_backend == "algo":
+            from src.core.tasks.producer_challenge.gameplay.strategy.algo_strategy import AlgoStrategy
+            other_strategy = AlgoStrategy()
+            ctx.dialogue_strategy = other_strategy
+            ctx.p_drink_strategy = other_strategy
+            ctx.skill_reward_strategy = other_strategy
+            ctx.consult_strategy = other_strategy
+            ctx.item_select_strategy = other_strategy
+            ctx.modal_strategy = other_strategy
+        elif other_backend == "rl" or other_backend == "rl_battle":
+            from src.core.tasks.producer_challenge.gameplay.strategy.rl_strategy import RLStrategy
+            other_strategy = RLStrategy(
+                base_url=str(base.rl_inference_base_url),
+                predict_timeout=float(base.rl_inference_timeout),
+            )
+            ctx.dialogue_strategy = other_strategy
+            ctx.p_drink_strategy = other_strategy
+            ctx.skill_reward_strategy = other_strategy
+            ctx.consult_strategy = other_strategy
+            ctx.item_select_strategy = other_strategy
+            ctx.modal_strategy = other_strategy
+        else:
+            if not ctx.dialogue_strategy:
+                from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import LLMStrategy
+                other_strategy = LLMStrategy()
+                ctx.dialogue_strategy = other_strategy
+                ctx.p_drink_strategy = other_strategy
+                ctx.skill_reward_strategy = other_strategy
+                ctx.consult_strategy = other_strategy
+                ctx.item_select_strategy = other_strategy
+                ctx.modal_strategy = other_strategy
+
+        logger.info(
+            "决策后端配置: schedule={}, battle={}, other={}",
+            schedule_backend, battle_backend, other_backend,
+        )
 
         pipeline = build_produce_pipeline()
         pipeline.run(app, ctx)

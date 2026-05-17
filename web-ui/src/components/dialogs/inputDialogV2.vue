@@ -1,4 +1,6 @@
 <script>
+  import { translateKey } from '@/scripts/i18n/translate'
+
   export default {
     name: 'InputDialog',
     props: {
@@ -48,6 +50,14 @@
       close: {
         type: Function,
         required: true,
+      },
+    },
+    computed: {
+      resolvedConfirmText () {
+        return translateKey('common.confirm')
+      },
+      resolvedCloseText () {
+        return translateKey('common.cancel')
       },
     },
     data () {
@@ -109,8 +119,8 @@
         />
       </v-card-text>
       <v-card-actions>
-        <v-btn color="success" @click="confirm(value)">确定</v-btn>
-        <v-btn color="error" @click="close()">取消</v-btn>
+        <v-btn color="success" @click="confirm(value)">{{ resolvedConfirmText }}</v-btn>
+        <v-btn color="error" @click="close()">{{ resolvedCloseText }}</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

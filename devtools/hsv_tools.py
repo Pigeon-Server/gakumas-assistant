@@ -51,7 +51,7 @@ def get_hsv_value(event, x, y, flags, param):
         cv2.setTrackbarPos('Upper V', 'Trackbars', min(v + 50, 255))
 
 # 读取图像
-img = cv2.imread(r"C:\Users\fsj\Downloads\Gemini_Generated_Image_qrp0ekqrp0ekqrp0.png")
+img = cv2.imread(r"/Users/fengshangji/Desktop/Projects/gakumas/tests/mixin.png")
 
 # 创建窗口
 cv2.namedWindow('Trackbars', cv2.WINDOW_NORMAL)

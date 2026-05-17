@@ -28,16 +28,182 @@ class GameUtils:
         self._app_processor = app_processor
 
     def _get_current_frame(self) -> Optional[np.ndarray]:
-        frame = getattr(self._app_processor, "latest_frame", None)
+        frame = self._app_processor.latest_frame
         if frame is not None and frame.size > 0:
             return frame
-        results = getattr(self._app_processor, "latest_results", None)
+        results = self._app_processor.latest_results
         if results is None:
             return None
-        frame = getattr(results, "frame", None)
+        frame = results.frame
         if frame is None or frame.size == 0:
             return None
         return frame
+
+    @staticmethod
+    def _get_box_center(box: Optional[Yolo_Box]) -> tuple[float, float] | None:
+        if box is None:
+            return None
+        return float(box.cx), float(box.cy)
+
+    @staticmethod
+    def _get_modal_header_top(modal: Optional[Modal]) -> float:
+        """
+        获取模态标题区域的纵向位置。
+
+        优先读取 header_box 的 y 坐标；若没有则回退到 cy。
+        模态缺少标题框时直接抛出异常，避免把结构异常伪装成“未稳定”。
+        """
+        if modal is None:
+            raise ValueError("无法读取模态标题位置：modal 为空")
+        header_box = modal.header_box
+        if header_box is None:
+            raise ValueError(f"模态 '{modal.modal_title}' 缺少 header_box，无法判断稳定性")
+        header_y = header_box.y
+        if header_y is not None:
+            return float(header_y)
+        header_cy = header_box.cy
+        if header_cy is not None:
+            return float(header_cy)
+        raise ValueError(f"模态 '{modal.modal_title}' 的 header_box 缺少 y/cy 坐标，无法判断稳定性")
+
+    def _build_modal_signature(self, modal: Optional[Modal]) -> tuple | None:
+        if modal is None:
+            raise ValueError("无法构建模态签名：modal 为空")
+        if modal.header_box is None:
+            raise ValueError(f"模态 '{modal.modal_title}' 缺少 header_box，无法构建签名")
+        header_center = self._get_box_center(modal.header_box)
+        if header_center is None:
+            raise ValueError(f"模态 '{modal.modal_title}' 的 header_box 无法读取中心点")
+        confirm_center = self._get_box_center(modal.confirm_button)
+        cancel_center = self._get_box_center(modal.cancel_button)
+        if confirm_center is None and cancel_center is None:
+            raise ValueError(f"模态 '{modal.modal_title}' 缺少可用的操作按钮，无法构建签名")
+        return (
+            modal.modal_title or "",
+            header_center,
+            confirm_center,
+            cancel_center,
+        )
+
+    @staticmethod
+    def _distance_between_centers(
+            center1: tuple[float, float] | None,
+            center2: tuple[float, float] | None,
+    ) -> float | None:
+        if center1 is None or center2 is None:
+            return None
+        return ((center1[0] - center2[0]) ** 2 + (center1[1] - center2[1]) ** 2) ** 0.5
+
+    def _modal_signature_matches(
+            self,
+            previous_signature: tuple | None,
+            current_signature: tuple | None,
+            *,
+            center_max_shift: float = 50.0,
+            require_same_title: bool = True,
+    ) -> bool:
+        if previous_signature is None or current_signature is None:
+            return previous_signature is current_signature
+
+        previous_title, previous_header, previous_confirm, previous_cancel = previous_signature
+        current_title, current_header, current_confirm, current_cancel = current_signature
+        if require_same_title and previous_title != current_title:
+            return False
+
+        comparable_centers = [
+            (previous_header, current_header),
+            (previous_confirm, current_confirm),
+            (previous_cancel, current_cancel),
+        ]
+        compared = 0
+        for previous_center, current_center in comparable_centers:
+            distance = self._distance_between_centers(previous_center, current_center)
+            if distance is None:
+                continue
+            compared += 1
+            if distance > center_max_shift:
+                return False
+        return compared > 0 or not require_same_title
+
+    def _wait_for_stable_modal_match(
+            self,
+            modal_title,
+            *,
+            timeout: float,
+            interval: float,
+            no_body: bool,
+            match_config: MatchConfig,
+            require_header: bool,
+            stable_count: int = 2,
+            title_upward_threshold: float = 8.0,
+    ) -> Optional[Modal]:
+        """
+        等待模态框稳定出现。
+
+        稳定判定优先看模态标题区域的纵向位置：如果标题还在持续上移，
+        说明弹窗还处在入场动画里，不应立刻返回。
+        """
+        wait_time = 0.0
+        last_seen_id = None
+        stable_hits = 0
+        miss_streak = 0
+        miss_tolerance = 1
+        previous_header_top = None
+        stable_modal = None
+        while wait_time <= timeout:
+            current = self._app_processor.latest_results
+            if current is None or id(current) == last_seen_id:
+                sleep(0.1)
+                wait_time += 0.1
+                continue
+            last_seen_id = id(current)
+
+            modal = self.try_get_modal(no_body=no_body, require_header=require_header)
+            if modal is None:
+                miss_streak += 1
+                if miss_streak > miss_tolerance:
+                    stable_hits = 0
+                    previous_header_top = None
+                    stable_modal = None
+                    miss_streak = 0
+                sleep(interval)
+                wait_time += interval
+                continue
+
+            if modal_title is not None and not string_match(modal.modal_title, modal_title, match_config):
+                stable_hits = 0
+                miss_streak = 0
+                previous_header_top = None
+                stable_modal = None
+                logger.debug(f"Modal title '{modal.modal_title}' does not match '{modal_title}'")
+                sleep(interval)
+                wait_time += interval
+                continue
+
+            current_header_top = self._get_modal_header_top(modal)
+            if (
+                previous_header_top is not None
+                and current_header_top < previous_header_top - title_upward_threshold
+            ):
+                stable_hits = 0
+                stable_modal = None
+                logger.debug(
+                    f"Modal '{modal.modal_title}' title still moving upward: "
+                    f"{previous_header_top:.1f} -> {current_header_top:.1f}"
+                )
+            else:
+                stable_hits += 1
+                stable_modal = modal
+            miss_streak = 0
+            previous_header_top = current_header_top
+            logger.debug(
+                f"Modal '{modal.modal_title}' stable hit {stable_hits}/{stable_count}"
+            )
+            if stable_hits >= stable_count:
+                return stable_modal
+            sleep(interval)
+            wait_time += interval
+        return None
 
     def wait_for_label(self, label, timeout=15, interval=1, continuous=1):
         """
@@ -187,7 +353,10 @@ class GameUtils:
             require_header: bool = True,
     ) -> Optional[Modal]:
         """
-        等待指定标题的模态框出现
+        等待指定标题的模态框出现，并对同一模态做多帧稳定确认。
+
+        稳定确认优先观察模态标题区域的纵向位置：如果标题还在持续上移，
+        说明入场动画尚未结束，不应过早返回。
         :param modal_title: 模态框标题
         :param timeout: 超时时间
         :param interval: 轮询间隔
@@ -197,38 +366,102 @@ class GameUtils:
         :return:
         """
         logger.debug(f"Waiting for modal with title: {modal_title}")
-        wait_time = 0
         match_config = match_config if match_config is not None else MatchConfig(fuzz_threshold=80)
-        while wait_time < timeout:
-            modal = self.try_get_modal(no_body=no_body, require_header=require_header)
-            if modal:
-                if modal_title is None or string_match(modal.modal_title, modal_title, match_config):
-                    logger.debug(f"Modal found: {modal.modal_title}")
-                    return modal
-                logger.debug(f"Modal title '{modal.modal_title}' does not match '{modal_title}'")
-            else:
-                logger.debug(f"No visible modal found, waiting... ({wait_time}/{timeout})")
-
-            sleep(interval)
-            wait_time += interval
-            logger.debug(f"Waiting... {wait_time}/{timeout}s")
-
+        modal = self._wait_for_stable_modal_match(
+            modal_title,
+            timeout=timeout,
+            interval=interval,
+            no_body=no_body,
+            match_config=match_config,
+            require_header=require_header,
+        )
+        if modal is not None:
+            logger.debug(f"Modal found: {modal.modal_title}")
+            return modal
         logger.warning(f"Timeout reached ({timeout}s): Modal with title '{modal_title}' not found.")
         return None
 
-    def wait_modal_transition(self, previous_modal_title: str | None = None, timeout: float = 5.0, interval: float = 0.2) -> bool:
+    def wait_modal_transition(
+            self,
+            previous_modal_title: str | None = None,
+            previous_modal_signature: tuple | None = None,
+            timeout: float = 5.0,
+            interval: float = 0.2,
+            stable_count: int = 2,
+    ) -> bool:
         """
-        等待当前模态框关闭，或切换为另一个模态框。
+        等待当前模态框关闭，或稳定切换为另一个模态框。
 
-        当 previous_modal_title 为 None 时，只要当前模态消失就返回 True；
-        当 previous_modal_title 有值时，模态消失或标题变化都视为状态切换成功。
+        关闭与切换都需要基于新帧做重复确认，避免单帧漏检或标题抖动导致误判。
         """
         wait_time = 0.0
+        last_seen_id = None
+        missing_hits = 0
+        changed_hits = 0
+        last_changed_signature = None
+        baseline_signature = previous_modal_signature
+        if baseline_signature is None and previous_modal_title is not None:
+            current_modal = self.try_get_modal(no_body=True)
+            if current_modal is not None and current_modal.modal_title == previous_modal_title:
+                baseline_signature = self._build_modal_signature(current_modal)
+
         while wait_time <= timeout:
+            current = self._app_processor.latest_results
+            if current is None or id(current) == last_seen_id:
+                sleep(0.1)
+                wait_time += 0.1
+                continue
+            last_seen_id = id(current)
+
             modal = self.try_get_modal(no_body=True)
             if modal is None:
-                return True
-            if previous_modal_title is not None and modal.modal_title != previous_modal_title:
+                missing_hits += 1
+                if missing_hits >= stable_count:
+                    logger.debug(
+                        f"Modal '{previous_modal_title}' disappeared stably {missing_hits}/{stable_count}."
+                    )
+                    return True
+                sleep(interval)
+                wait_time += interval
+                continue
+
+            current_signature = self._build_modal_signature(modal)
+            same_as_previous = self._modal_signature_matches(
+                baseline_signature,
+                current_signature,
+                center_max_shift=50.0,
+                require_same_title=previous_modal_title is not None,
+            )
+            if same_as_previous:
+                missing_hits = 0
+                changed_hits = 0
+                last_changed_signature = None
+                sleep(interval)
+                wait_time += interval
+                continue
+
+            missing_hits = 0
+            if previous_modal_title is not None and modal.modal_title == previous_modal_title:
+                changed_hits = 0
+                last_changed_signature = None
+                sleep(interval)
+                wait_time += interval
+                continue
+
+            if self._modal_signature_matches(
+                    last_changed_signature,
+                    current_signature,
+                    center_max_shift=50.0,
+                    require_same_title=False,
+            ):
+                changed_hits += 1
+            else:
+                changed_hits = 1
+            last_changed_signature = current_signature
+            logger.debug(
+                f"Modal transitioned from '{previous_modal_title}' to '{modal.modal_title}' stable hit {changed_hits}/{stable_count}"
+            )
+            if changed_hits >= stable_count:
                 return True
             sleep(interval)
             wait_time += interval
@@ -251,15 +484,22 @@ class GameUtils:
         返回 False 表示按钮点击后，原模态仍停留在当前画面。
         """
         baseline_title = previous_modal_title
+        baseline_signature = None
         if baseline_title is None:
             modal = self.try_get_modal(no_body=True)
             baseline_title = None if modal is None else modal.modal_title
+            baseline_signature = self._build_modal_signature(modal)
+        else:
+            modal = self.try_get_modal(no_body=True)
+            if modal is not None and modal.modal_title == baseline_title:
+                baseline_signature = self._build_modal_signature(modal)
 
         if not self.click_element_and_wait_trigger(button, retries=retries, timeout=min(timeout, 1.5), interval=0.1):
             self._app_processor.device.click_element(button)
 
         return self.wait_modal_transition(
             previous_modal_title=baseline_title,
+            previous_modal_signature=baseline_signature,
             timeout=timeout,
             interval=interval,
         )
@@ -459,7 +699,7 @@ class GameUtils:
         baseline_frame = baseline_frame.copy()
 
         region_reference = None
-        if element is not None and getattr(element, "frame", None) is not None and element.frame.size > 0:
+        if element is not None and element.frame is not None and element.frame.size > 0:
             region_reference = element.frame.copy()
 
         wait_time = 0.0
@@ -513,7 +753,9 @@ class GameUtils:
                     region_threshold=region_threshold,
             ):
                 return True
-            logger.warning(f"Click did not trigger visible UI change ({attempt}/{retries}): {getattr(element, 'label', type(element).__name__)}")
+            logger.warning(
+                f"Click did not trigger visible UI change ({attempt}/{retries}): {element.label}"
+            )
         return False
 
 
@@ -585,12 +827,12 @@ class GameUtils:
     def _try_exit_special_page(self, current_location: str | None) -> bool:
         results = self._app_processor.latest_results
         candidates: list = []
-        if current_location == GamePageTypes.PRODUCER__MEMORY_DETAIL:
+        if current_location == GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_DETAIL:
             if cancel_button := self._find_button_by_text("キャンセル", fuzz_threshold=60):
                 candidates.append(cancel_button)
         elif current_location in {
-            GamePageTypes.PRODUCER__MEMORY_CANDIDATE_LIST,
-            GamePageTypes.PRODUCER__FORMATION_DETAILS,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__MEMORY_CANDIDATE_LIST,
+            GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FORMATION_DETAIL,
         }:
             close_buttons = results.filter_by_label(BaseUILabels.CLOSE_BUTTON)
             if close_buttons:
@@ -598,7 +840,7 @@ class GameUtils:
             back_buttons = results.filter_by_label(BaseUILabels.BACK_BTN)
             if back_buttons:
                 candidates.append(back_buttons.first())
-            if current_location == GamePageTypes.PRODUCER__FORMATION_DETAILS:
+            if current_location == GamePageTypes.HOME_TAB.PRODUCER_SUB_PAGE.PRODUCER__FORMATION_DETAIL:
                 if close_button := self._find_button_by_text(ButtonText.CLOSE, fuzz_threshold=65):
                     candidates.append(close_button)
                 if top_right_button := self._get_top_right_action_button():
@@ -613,12 +855,12 @@ class GameUtils:
             if candidate is None:
                 continue
             key = (
-                getattr(candidate, "x", None),
-                getattr(candidate, "y", None),
-                getattr(candidate, "w", None),
-                getattr(candidate, "h", None),
-                getattr(candidate, "text", None),
-                getattr(candidate, "label", None),
+                candidate.x,
+                candidate.y,
+                candidate.w,
+                candidate.h,
+                candidate.text,
+                candidate.label,
             )
             if key in seen:
                 continue
@@ -667,7 +909,7 @@ class GameUtils:
                     if not self.click_element_and_wait_trigger(candidate, retries=3, timeout=2.5, interval=0.1):
                         logger.warning(
                             "Navigation click did not trigger visible UI change during go_home: {}",
-                            getattr(candidate, "label", type(candidate).__name__),
+                            candidate.label,
                         )
                         continue
                     self._wait_loading_safely(timeout=8)

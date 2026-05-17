@@ -36,7 +36,6 @@ from .decision_support import (
     _clean_description_text,
     _compute_remaining_weeks,
     _description_text,
-    _describe_candidate_operation,
     _enrich_card_metadata,
     _enrich_drink_metadata,
     _enrich_item_metadata,
@@ -45,7 +44,6 @@ from .decision_support import (
     _extract_noisy_hud_value,
     _extract_planning_parameter_value,
     _get_parameter_seed_value,
-    _humanize_runtime_text,
     _learn_card_clip_from_db_id,
     _learn_drink_clip_from_db_id,
     _learn_item_clip_from_db_id,
@@ -104,10 +102,26 @@ _SNAPSHOT_RESOURCE_KEY_BY_LABEL = {
     ProduceText.FULL_POWER_POINT: "full_power_point",
 }
 _SNAPSHOT_CARD_CATEGORY_NAMES = {
-    "ProduceCardCategory_ActiveSkill": ProduceText.CARD_TYPE_ACTIVE,
-    "ProduceCardCategory_MentalSkill": ProduceText.CARD_TYPE_MENTAL,
-    "ProduceCardCategory_Trouble": ProduceText.CARD_TYPE_TROUBLE,
+    "ProduceCardCategory_ActiveSkill": "Active",
+    "ProduceCardCategory_MentalSkill": "Mental",
+    "ProduceCardCategory_Trouble": "Trouble",
 }
+
+_SNAPSHOT_DESCRIPTION_NOISE_PATTERN = re.compile(r"\s*[；;]\s*")
+_SNAPSHOT_DESCRIPTION_PARENS_PATTERN = re.compile(r"\s*[（(]\s*")
+_SNAPSHOT_DESCRIPTION_PARENS_CLOSE_PATTERN = re.compile(r"\s*[）)]\s*")
+_SNAPSHOT_DESCRIPTION_PLUS_PATTERN = re.compile(r"\s*[＋+]\s*")
+_SNAPSHOT_DESCRIPTION_MULTI_SPACE_PATTERN = re.compile(r"\s+")
+
+_CARD_CATEGORY_DISPLAY_OVERRIDES = {
+    ProduceText.CARD_TYPE_ACTIVE: "Active",
+    ProduceText.CARD_TYPE_MENTAL: "Mental",
+    ProduceText.CARD_TYPE_TROUBLE: "Trouble",
+}
+
+_DECK_SUMMARY_EMPTY_TEXT = "未知"
+
+
 _OFFENSIVE_EFFECT_KEYWORDS = (
     "ExamLesson",
     "ExamLessonFix",
@@ -309,8 +323,20 @@ def _resolve_card_from_clip(app: "AppProcessor", box: Any) -> CandidateResolutio
     skill_card_clip = getattr(clip_manager, "skill_card_clip", None)
     if skill_card_clip is None:
         return None
+    matched = None
+    similarity_thresholds = (0.98, 0.94)
     try:
-        matched = skill_card_clip.retrieve(box.frame)
+        for threshold in similarity_thresholds:
+            matched = skill_card_clip.retrieve(box.frame, similarity_threshold=threshold)
+            if matched is not None:
+                if threshold < similarity_thresholds[0]:
+                    logger.info(
+                        "producer decision: 技能卡 CLIP 通过放宽阈值命中 threshold={} card_id={} name={!r}",
+                        threshold,
+                        getattr(matched, "id", ""),
+                        getattr(matched, "name", ""),
+                    )
+                break
     except Exception as exc:  # noqa: BLE001
         logger.debug(f"producer decision: 技能卡 CLIP 识别失败，回退 OCR: {exc}")
         return None
@@ -320,12 +346,7 @@ def _resolve_card_from_clip(app: "AppProcessor", box: Any) -> CandidateResolutio
     card_id = str(getattr(matched, "id", "") or "")
     upgrade_count = int(getattr(matched, "upgradeCount", 0) or 0)
     metadata = _enrich_card_metadata(card_id, upgrade_count=upgrade_count)
-    display_name = (
-        metadata.get("display_name")
-        or getattr(getattr(matched, "localization", None), "name", None)
-        or getattr(matched, "name", "")
-        or card_id
-    )
+    display_name = metadata.get("raw_name") or getattr(matched, "name", "") or ""
     return CandidateResolution(
         action_id=f"produce_card:{card_id}:{upgrade_count}",
         candidate_type="produce_card",
@@ -355,12 +376,7 @@ def _resolve_drink_from_clip(app: "AppProcessor", box: Any) -> CandidateResoluti
 
     drink_id = str(getattr(matched, "id", "") or "")
     metadata = _enrich_drink_metadata(drink_id)
-    display_name = (
-        metadata.get("display_name")
-        or getattr(getattr(matched, "localization", None), "name", None)
-        or getattr(matched, "name", "")
-        or drink_id
-    )
+    display_name = metadata.get("raw_name") or getattr(matched, "name", "") or ""
     return CandidateResolution(
         action_id=f"produce_drink:{drink_id}",
         candidate_type="produce_drink",
@@ -390,12 +406,7 @@ def _resolve_item_from_clip(app: "AppProcessor", box: Any) -> CandidateResolutio
 
     item_id = str(getattr(matched, "id", "") or "")
     metadata = _enrich_item_metadata(item_id)
-    display_name = (
-        metadata.get("display_name")
-        or getattr(getattr(matched, "localization", None), "name", None)
-        or getattr(matched, "name", "")
-        or item_id
-    )
+    display_name = metadata.get("raw_name") or getattr(matched, "name", "") or ""
     return CandidateResolution(
         action_id=f"produce_item:{item_id}",
         candidate_type="produce_item",
@@ -433,7 +444,7 @@ def resolve_produce_card_identity(
     if matched is not None:
         card_id = str(matched["id"])
         metadata = _enrich_card_metadata(card_id, upgrade_count=0)
-        display_name = metadata.get("display_name") or matched.get("name") or title or card_id
+        display_name = metadata.get("raw_name") or str(matched.get("raw_name") or matched.get("name") or "")
         _learn_card_clip_from_db_id(app, getattr(box, "frame", None), card_id, upgrade_count=0)
         return CandidateResolution(
             action_id=f"produce_card:{card_id}:0",
@@ -505,7 +516,7 @@ def resolve_produce_drink_identity(
                 metadata={"unresolved": True},
             )
         metadata = _enrich_drink_metadata(drink_id)
-        display_name = metadata.get("display_name") or matched.get("name") or title or drink_id
+        display_name = metadata.get("raw_name") or str(matched.get("raw_name") or matched.get("name") or "")
         if app is not None and box is not None:
             _learn_drink_clip_from_db_id(app, getattr(box, "frame", None), drink_id)
         return CandidateResolution(
@@ -565,10 +576,9 @@ def resolve_produce_item_identity(
             "matched_text": str(matched.get("matched_text") or ""),
         }
         display_name = (
-            metadata.get("display_name")
-            or matched.get("name")
-            or next((text for text in match_inputs if text), "")
-            or item_id
+            metadata.get("raw_name")
+            or str(matched.get("raw_name") or matched.get("name") or "")
+            or ""
         )
         if app is not None and box is not None:
             _learn_item_clip_from_db_id(app, getattr(box, "frame", None), item_id)
@@ -1565,6 +1575,16 @@ def sync_visible_planning_context(
     return hud_state
 
 
+def _canonical_entity_name(entity: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
+    """返回非 UI 决策链路使用的实体原始名称。"""
+    metadata = metadata if metadata is not None else dict(entity.get("metadata", {}) or {})
+    return str(
+        metadata.get("raw_name")
+        or entity.get("name")
+        or ""
+    )
+
+
 def _build_hand_snapshot(resolved_entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """构建hand、snapshot并返回结果。
 
@@ -1577,16 +1597,14 @@ def _build_hand_snapshot(resolved_entities: list[dict[str, Any]]) -> list[dict[s
     entries: list[dict[str, Any]] = []
     for entity in resolved_entities:
         metadata = dict(entity.get("metadata", {}) or {})
-        entries.append({
-            "name": entity.get("name") or metadata.get("display_name") or entity.get("label") or "",
-            "db_id": entity.get("db_id") or "",
-            "category": metadata.get("category") or "",
-            "rarity": metadata.get("rarity") or "",
-            "upgrade_count": int(metadata.get("upgrade_count") or 0),
-            "cost": metadata.get("cost") or 0,
-            "description": metadata.get("description") or "",
-            "effect_types": list(metadata.get("effect_types", []) or []),
-        })
+        payload = _snapshot_card_payload(
+            card_id=str(entity.get("db_id") or ""),
+            name=_canonical_entity_name(entity, metadata),
+            metadata=metadata,
+        )
+        payload["db_id"] = entity.get("db_id") or ""
+        payload["rarity"] = metadata.get("rarity") or ""
+        entries.append(payload)
     return entries
 
 
@@ -1607,14 +1625,13 @@ def _build_initial_deck_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
             continue
         card_id = str(entry.get("id") or "")
         metadata = _enrich_card_metadata(card_id, upgrade_count=0)
-        deck_entries.append({
-            "id": card_id,
-            "name": metadata.get("display_name") or entry.get("name") or card_id,
-            "description": metadata.get("description") or "",
-            "category": metadata.get("category") or "",
-            "cost": metadata.get("cost") or 0,
-            "effect_types": list(metadata.get("effect_types", []) or []),
-        })
+        deck_entries.append(
+            _snapshot_card_payload(
+                card_id=card_id,
+                name=str(entry.get("name") or ""),
+                metadata=metadata,
+            )
+        )
     return deck_entries
 
 
@@ -1647,11 +1664,12 @@ def _build_current_deck_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
             if cid in enhance_map:
                 uc = min(enhance_map[cid], 3)
                 metadata = _enrich_card_metadata(cid, upgrade_count=uc)
-                entry["name"] = metadata.get("display_name") or entry.get("name", cid)
-                entry["description"] = metadata.get("description") or ""
-                entry["category"] = metadata.get("category") or entry.get("category", "")
-                entry["cost"] = metadata.get("cost") or entry.get("cost", 0)
-                entry["effect_types"] = list(metadata.get("effect_types", []) or [])
+                updated_entry = _snapshot_card_payload(
+                    card_id=cid,
+                    name=str(entry.get("name") or ""),
+                    metadata=metadata,
+                )
+                entry.update(updated_entry)
                 entry["upgrade_count"] = uc
 
     # 应用削除
@@ -1664,14 +1682,13 @@ def _build_current_deck_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
         if card_id in removed_ids:
             continue
         metadata = _enrich_card_metadata(card_id, upgrade_count=0)
-        deck.append({
-            "id": card_id,
-            "name": metadata.get("display_name") or m.get("name") or card_id,
-            "description": metadata.get("description") or "",
-            "category": metadata.get("category") or "",
-            "cost": metadata.get("cost") or 0,
-            "effect_types": list(metadata.get("effect_types", []) or []),
-        })
+        deck.append(
+            _snapshot_card_payload(
+                card_id=card_id,
+                name=str(m.get("name") or ""),
+                metadata=metadata,
+            )
+        )
 
     return deck
 
@@ -1695,7 +1712,7 @@ def _build_produce_item_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
         metadata = _enrich_item_metadata(sid)
         items.append({
             "id": sid,
-            "name": metadata.get("display_name") or sid,
+            "name": str(metadata.get("raw_name") or ""),
             "description": metadata.get("description") or "",
             "rarity": metadata.get("rarity") or "",
         })
@@ -1708,7 +1725,7 @@ def _build_produce_item_snapshot(ctx: "ProduceContext") -> list[dict[str, Any]]:
                 metadata = _enrich_item_metadata(mid)
                 items.append({
                     "id": mid,
-                    "name": metadata.get("display_name") or m.get("name") or mid,
+                    "name": str(metadata.get("raw_name") or m.get("name") or ""),
                     "description": metadata.get("description") or "",
                     "rarity": metadata.get("rarity") or "",
                 })
@@ -1770,7 +1787,7 @@ def _build_drink_snapshot(drink_entities: list[dict[str, Any]]) -> list[dict[str
         metadata = dict(entity.get("metadata", {}) or {})
         drinks.append({
             "id": entity.get("db_id") or "",
-            "name": entity.get("name") or metadata.get("display_name") or "",
+            "name": _canonical_entity_name(entity, metadata),
             "description": metadata.get("description") or "",
             "rarity": metadata.get("rarity") or "",
             "effect_types": list(metadata.get("effect_types", []) or []),
@@ -1780,10 +1797,48 @@ def _build_drink_snapshot(drink_entities: list[dict[str, Any]]) -> list[dict[str
 
 def _snapshot_card_category_name(value: Any) -> str:
     """构建快照`snapshot_card_category_name`。"""
-    category = str(value or "")
+    category = str(value or "").strip()
     if category in _SNAPSHOT_CARD_CATEGORY_NAMES:
         return _SNAPSHOT_CARD_CATEGORY_NAMES[category]
+    if category in _CARD_CATEGORY_DISPLAY_OVERRIDES:
+        return _CARD_CATEGORY_DISPLAY_OVERRIDES[category]
+    if category.startswith("ProduceCardCategory_"):
+        suffix = category.removeprefix("ProduceCardCategory_")
+        suffix = suffix.removesuffix("Skill")
+        return suffix or "未知"
     return category or "未知"
+
+
+def _format_snapshot_description(value: Any) -> str:
+    """清理快照里的卡牌说明文本，减少 OCR/数据库拼接噪声。"""
+    text = normalize_ocr_jp(fullwidth_to_halfwidth(str(value or ""))).strip()
+    if not text:
+        return ""
+    text = _SNAPSHOT_DESCRIPTION_PARENS_PATTERN.sub("(", text)
+    text = _SNAPSHOT_DESCRIPTION_PARENS_CLOSE_PATTERN.sub(")", text)
+    text = _SNAPSHOT_DESCRIPTION_PLUS_PATTERN.sub("+", text)
+    text = _SNAPSHOT_DESCRIPTION_NOISE_PATTERN.sub(" ", text)
+    text = _SNAPSHOT_DESCRIPTION_MULTI_SPACE_PATTERN.sub(" ", text)
+    return text.strip(" ;；")
+
+
+
+def _snapshot_card_payload(
+    *,
+    card_id: str,
+    name: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """统一构建快照中的技能卡载荷。"""
+    return {
+        "id": card_id,
+        "name": str(metadata.get("raw_name") or name or ""),
+        "description": _format_snapshot_description(metadata.get("description") or ""),
+        "category": _snapshot_card_category_name(metadata.get("category") or ""),
+        "cost": metadata.get("cost") or 0,
+        "effect_types": list(metadata.get("effect_types", []) or []),
+        "upgrade_count": int(metadata.get("upgrade_count") or 0),
+    }
 
 
 def _is_offensive_snapshot_card(card: dict[str, Any]) -> bool:
@@ -1825,7 +1880,7 @@ def _build_snapshot_deck_summary(cards: list[dict[str, Any]]) -> str:
         str: 处理后的文本结果。
     """
     if not cards:
-        return "(空)"
+        return _DECK_SUMMARY_EMPTY_TEXT
 
     category_counts: Counter[str] = Counter()
     total_cost = 0.0
@@ -1898,15 +1953,14 @@ def _observe_bottom_inventory_drinks(
         )
         metadata = dict(resolution.metadata or {})
         display_name = (
-            resolution.display_name
-            or metadata.get("display_name")
-            or resolution.db_id
+            metadata.get("raw_name")
+            or resolution.display_name
             or f"Pドリンク#{index + 1}"
         )
         observed.append({
             "action_id": resolution.action_id,
             "db_id": resolution.db_id,
-            "name": display_name,
+            "name": str(metadata.get("raw_name") or resolution.display_name or ""),
             "source": resolution.source,
             "confidence": resolution.confidence,
             "metadata": metadata,
@@ -1927,6 +1981,533 @@ def _observe_bottom_inventory_drinks(
             font_size=18,
         )
     return observed, True
+
+
+def _summarize_exam_criteria(ctx: "ProduceContext") -> list[str]:
+    """将育成页采集到的审查基准压缩为适合提示词的摘要行。"""
+    criteria = dict(getattr(ctx, "exam_criteria", {}) or {})
+    if not criteria:
+        return []
+    lines: list[str] = []
+    for key in ("vocal", "dance", "visual"):
+        value = criteria.get(key)
+        if value in (None, "", 0):
+            continue
+        label = {
+            "vocal": "ボーカル",
+            "dance": "ダンス",
+            "visual": "ビジュアル",
+        }.get(key, key)
+        lines.append(f"{label}: {value}")
+    for key in ("special", "note", "summary"):
+        value = str(criteria.get(key) or "").strip()
+        if value:
+            lines.append(value)
+    return lines[:4]
+
+
+def _summarize_training_tasks(ctx: "ProduceContext") -> list[str]:
+    """将育成课题列表压缩为简短摘要，避免整段 OCR 原文撑爆 prompt。"""
+    tasks = list(getattr(ctx, "training_tasks", []) or [])
+    summaries: list[str] = []
+    for task in tasks:
+        if isinstance(task, str):
+            text = task.strip()
+            if text:
+                summaries.append(text)
+            continue
+        if not isinstance(task, dict):
+            continue
+        parts: list[str] = []
+        title = str(task.get("title") or task.get("label") or task.get("name") or "").strip()
+        if title:
+            parts.append(title)
+        condition = str(task.get("condition") or task.get("target") or task.get("summary") or "").strip()
+        if condition and condition not in parts:
+            parts.append(condition)
+        reward = str(task.get("reward") or "").strip()
+        if reward:
+            parts.append(f"报酬: {reward}")
+        status = str(task.get("status") or "").strip()
+        if status:
+            parts.append(f"状态: {status}")
+        if parts:
+            summaries.append(" | ".join(parts))
+    return summaries[:5]
+
+
+def _build_produce_goal_snapshot(ctx: "ProduceContext") -> dict[str, Any]:
+    """构建主流程长期目标摘要，供所有阶段共享。"""
+    exam_criteria = _summarize_exam_criteria(ctx)
+    training_tasks = _summarize_training_tasks(ctx)
+    summary_parts: list[str] = []
+    if exam_criteria:
+        summary_parts.append(f"審査基準: {' / '.join(exam_criteria)}")
+    if training_tasks:
+        summary_parts.append(f"育成課題: {' / '.join(training_tasks[:2])}")
+    return {
+        "exam_criteria": exam_criteria,
+        "training_tasks": training_tasks,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _build_schedule_context_snapshot(ctx: "ProduceContext") -> dict[str, Any]:
+    """整理周流程历史与未来日程，帮助模型理解长期规划压力。"""
+    history = [str(item or "").strip() for item in (ctx.schedule_history or []) if str(item or "").strip()]
+    notebook_entries = list(ctx.handler_state.get("p_notebook_schedule") or [])
+    future_schedule: list[str] = []
+    raw_entries: list[dict[str, Any]] = []
+    for entry in notebook_entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("completed"):
+            continue
+        actions = [str(item or "").strip() for item in (entry.get("actions") or []) if str(item or "").strip()]
+        special_event = str(entry.get("special_event") or "").strip()
+        week = int(entry.get("week") or 0)
+        label = str(entry.get("label") or entry.get("week_label") or entry.get("title") or "").strip()
+        if not label and week > 0:
+            label = f"第{week}周"
+        parts = [part for part in [label, special_event] if part]
+        if actions:
+            parts.append(" / ".join(actions[:3]))
+        if parts:
+            future_schedule.append(" | ".join(parts))
+        raw_entries.append({
+            "week": week,
+            "label": label,
+            "actions": actions,
+            "special_event": special_event,
+            "raw_text": str(entry.get("raw_text") or "").strip(),
+        })
+    return {
+        "history": history[-8:],
+        "future_schedule": future_schedule[:8],
+        "history_summary": " → ".join(history[-5:]) if history else "",
+        "raw_entries": raw_entries[:8],
+    }
+
+
+def _scenario_rule_payload(ctx: "ProduceContext") -> dict[str, Any]:
+    """构建剧本制度约束摘要。"""
+    scenario = str(ctx.scenario or "").strip().lower()
+    produce_group_type = str((ctx.produce_metadata or {}).get("produce_group_type") or "")
+    handler_state = dict(getattr(ctx, "handler_state", {}) or {})
+    rest_limit_total: int | None = None
+    rest_limit_used: int | None = _optional_int(
+        handler_state.get("rest_limit_used")
+        or handler_state.get("nia_rest_used")
+        or getattr(ctx, "rest_limit_used", None)
+    )
+    rest_rule = ""
+    if scenario == "nia":
+        rest_limit_total = 4
+        if rest_limit_used is None:
+            rest_limit_used = _infer_rest_used_from_history(ctx)
+        rest_rule = "NIA 中休息总次数上限为 4，前四周不可休息。"
+    elif scenario == "hajime" and str(ctx.difficulty or "").strip().lower() == "master":
+        rest_rule = "初 Master 前四周不可休息。"
+    rest_limit_remaining = (
+        max(int(rest_limit_total) - int(rest_limit_used or 0), 0)
+        if rest_limit_total is not None and rest_limit_used is not None
+        else None
+    )
+    fan_votes_current = _optional_int(
+        handler_state.get("fan_votes_current")
+        or handler_state.get("fan_vote_current")
+        or handler_state.get("nia_fan_votes")
+        or getattr(ctx, "fan_votes_current", None)
+        or getattr(ctx, "fan_votes", None)
+    )
+    audition_stage_current = str(
+        getattr(ctx, "current_exam_type", "")
+        or handler_state.get("audition_stage_current")
+        or ""
+    )
+    audition_stage_next = str(handler_state.get("audition_stage_next") or "")
+    fan_votes_next_threshold = None
+    fan_votes_gap = None
+    if scenario == "nia":
+        fan_votes_next_threshold = _next_nia_fan_vote_threshold(
+            fan_votes_current=fan_votes_current,
+            audition_stage=audition_stage_current or audition_stage_next,
+        )
+        if fan_votes_current is not None and fan_votes_next_threshold is not None:
+            fan_votes_gap = max(int(fan_votes_next_threshold) - int(fan_votes_current), 0)
+    scenario_label = {
+        "nia": "N.I.A",
+        "hajime": "定期公演『初』",
+    }.get(scenario, scenario or "未知")
+    summary_parts = [rest_rule] if rest_rule else []
+    if fan_votes_current is not None:
+        summary_parts.append(f"fan vote={fan_votes_current}")
+    if fan_votes_next_threshold is not None:
+        summary_parts.append(f"下个 fan vote 门槛={fan_votes_next_threshold}")
+    if rest_limit_remaining is not None:
+        summary_parts.append(f"休息剩余={rest_limit_remaining}/{rest_limit_total}")
+    return {
+        "scenario": scenario,
+        "scenario_label": scenario_label,
+        "produce_group_type": produce_group_type,
+        "rest_limit_total": rest_limit_total,
+        "rest_limit_used": rest_limit_used,
+        "rest_limit_remaining": rest_limit_remaining,
+        "fan_votes_current": fan_votes_current,
+        "fan_votes_next_threshold": fan_votes_next_threshold,
+        "fan_votes_gap": fan_votes_gap,
+        "audition_stage_current": audition_stage_current,
+        "audition_stage_next": audition_stage_next,
+        "weeks_until_gate": _compute_remaining_weeks(ctx),
+        "summary": "；".join(part for part in summary_parts if part),
+    }
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    match = re.search(r"\d+", str(value))
+    return int(match.group()) if match else None
+
+
+def _infer_rest_used_from_history(ctx: "ProduceContext") -> int:
+    count = 0
+    for entry in list(getattr(ctx, "schedule_history", []) or []):
+        text = str(entry or "")
+        if ProduceText.REST_ACTION in text or ProduceText.REST in text or "休息" in text or "お休み" in text:
+            count += 1
+    return count
+
+
+def _next_nia_fan_vote_threshold(
+    *,
+    fan_votes_current: int | None,
+    audition_stage: str,
+) -> int | None:
+    stage = str(audition_stage or "").lower()
+    if "final" in stage or "finale" in stage or "最終" in stage:
+        thresholds = (28000, 40000, 57000)
+    elif "second" in stage or "2" in stage or "二" in stage:
+        thresholds = (14000, 25000)
+    elif "first" in stage or "1" in stage or "一" in stage:
+        thresholds = (4000, 9000)
+    else:
+        thresholds = (4000, 9000, 14000, 25000, 28000, 40000, 57000)
+    if fan_votes_current is None:
+        return thresholds[0] if thresholds else None
+    for threshold in thresholds:
+        if int(fan_votes_current) < int(threshold):
+            return int(threshold)
+    return None
+
+
+def _build_next_gate_snapshot(
+    ctx: "ProduceContext",
+    *,
+    remaining_weeks: int | None,
+    exam_criteria: list[str],
+    training_tasks: list[str],
+) -> dict[str, Any]:
+    """构建下一道门槛摘要。"""
+    scenario = str(ctx.scenario or "").strip().lower()
+    current_exam_type = str(getattr(ctx, "current_exam_type", "") or "").strip()
+    gate_type = ""
+    gate_label = ""
+    if current_exam_type:
+        gate_type = current_exam_type
+        gate_label = current_exam_type
+    elif scenario == "nia":
+        gate_type = "audition"
+        gate_label = "下一次 audition / finale 门槛"
+    else:
+        gate_type = "exam"
+        gate_label = "下一次审查门槛"
+    requirements = [*exam_criteria[:3], *training_tasks[:2]]
+    blocking_gaps = requirements[:3]
+    readiness_parts: list[str] = []
+    if remaining_weeks is not None:
+        readiness_parts.append(f"距下个门槛约剩{remaining_weeks}周")
+    if blocking_gaps:
+        readiness_parts.append(f"当前主要约束: {' / '.join(blocking_gaps[:2])}")
+    return {
+        "gate_type": gate_type,
+        "gate_label": gate_label,
+        "weeks_until_gate": remaining_weeks,
+        "requirements": requirements,
+        "readiness_summary": "；".join(readiness_parts),
+        "blocking_gaps": blocking_gaps,
+    }
+
+
+def _build_resource_pressure_snapshot(
+    ctx: "ProduceContext",
+    *,
+    hud_state: dict[str, Any],
+    known_drinks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """构建资源压力摘要。"""
+    stamina = int(hud_state.get("stamina") or ctx.hud_stamina or 0)
+    max_stamina = int(hud_state.get("max_stamina") or ctx.hud_max_stamina or 0)
+    p_point = int(hud_state.get("p_point") or ctx.hud_p_point or 0)
+    stamina_ratio = (stamina / max(max_stamina, 1)) if max_stamina > 0 else None
+    stamina_pressure = "unknown"
+    if stamina_ratio is not None:
+        if stamina_ratio <= 0.35:
+            stamina_pressure = "high"
+        elif stamina_ratio <= 0.65:
+            stamina_pressure = "medium"
+        else:
+            stamina_pressure = "low"
+    p_point_pressure = "low" if p_point >= 60 else "medium" if p_point >= 20 else "high"
+    drink_pressure = "low" if known_drinks else "medium"
+    summary_parts: list[str] = []
+    if stamina_ratio is not None:
+        summary_parts.append(f"体力压力={stamina_pressure}({stamina}/{max_stamina or '?'})")
+    if p_point >= 0:
+        summary_parts.append(f"P点压力={p_point_pressure}({p_point})")
+    summary_parts.append(f"饮料余量={'有库存' if known_drinks else '无库存'}")
+    return {
+        "stamina_pressure": stamina_pressure,
+        "p_point_pressure": p_point_pressure,
+        "drink_pressure": drink_pressure,
+        "stamina_ratio": round(stamina_ratio, 3) if stamina_ratio is not None else None,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _build_time_pressure_snapshot(
+    ctx: "ProduceContext",
+    *,
+    phase_key: str,
+    remaining_weeks: int | None,
+    remaining_turns: int | None,
+) -> dict[str, Any]:
+    """构建时间窗口压力摘要。"""
+    pressure = "unknown"
+    summary_parts: list[str] = []
+    if phase_key in {GameplayPhase.LESSON, GameplayPhase.EXAM} and remaining_turns is not None:
+        if remaining_turns <= 1:
+            pressure = "high"
+        elif remaining_turns <= 3:
+            pressure = "medium"
+        else:
+            pressure = "low"
+        summary_parts.append(f"回合窗口={pressure}(剩余{remaining_turns}回合)")
+    elif remaining_weeks is not None:
+        if remaining_weeks <= 2:
+            pressure = "high"
+        elif remaining_weeks <= 5:
+            pressure = "medium"
+        else:
+            pressure = "low"
+        summary_parts.append(f"周窗口={pressure}(剩余{remaining_weeks}周)")
+    if str(ctx.current_exam_type or "").strip():
+        summary_parts.append(f"当前考试阶段={ctx.current_exam_type}")
+    return {
+        "pressure": pressure,
+        "remaining_weeks": remaining_weeks,
+        "remaining_turns": remaining_turns,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _build_build_plan_snapshot(
+    ctx: "ProduceContext",
+    *,
+    parameter_priority: str,
+    parameter_stats: dict[str, Any],
+    next_gate: dict[str, Any],
+) -> dict[str, Any]:
+    """构建属性成长/毕业面板导向规划。"""
+    focus_stats: list[str] = []
+    for key, label in (("vocal", "Vo"), ("dance", "Da"), ("visual", "Vi")):
+        value = parameter_stats.get(key, "")
+        if value not in (None, ""):
+            max_value = parameter_stats.get(f"{key}_max", "")
+            focus_stats.append(f"{label}={value}{f'/{max_value}' if max_value not in (None, '') else ''}")
+    summary_parts: list[str] = []
+    if parameter_priority:
+        summary_parts.append(f"成长优先级={parameter_priority}")
+    if focus_stats:
+        summary_parts.append(f"当前面板={' / '.join(focus_stats)}")
+    blocking_gaps = list(next_gate.get("blocking_gaps") or [])
+    if blocking_gaps:
+        summary_parts.append(f"近期门槛缺口={' / '.join(blocking_gaps[:2])}")
+    return {
+        "priority": parameter_priority,
+        "current_stats": focus_stats,
+        "blocking_gaps": blocking_gaps,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _build_deck_plan_snapshot(
+    *,
+    deck_cards: list[dict[str, Any]],
+    offensive_counts: dict[str, int],
+    hand_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """构建牌组结构规划。"""
+    total_cards = len(deck_cards)
+    offensive_total = int(offensive_counts.get("deck", 0)) + int(offensive_counts.get("hand", 0))
+    support_total = max(total_cards - int(offensive_counts.get("deck", 0)), 0)
+    needs: list[str] = []
+    if offensive_total <= max(2, total_cards // 4):
+        needs.append("补直接得分/火力")
+    if support_total <= max(2, total_cards // 5):
+        needs.append("补启动或资源铺垫")
+    if total_cards >= 18:
+        needs.append("避免继续稀释牌组")
+    if not needs:
+        needs.append("维持当前牌组结构，优先补兑现链完整度")
+    hand_names = [str(card.get("name") or "") for card in hand_entries[:4] if str(card.get("name") or "").strip()]
+    return {
+        "deck_count": total_cards,
+        "offensive_total": offensive_total,
+        "support_total": support_total,
+        "current_hand_focus": hand_names,
+        "needs": needs,
+        "summary": "；".join(needs[:3]),
+    }
+
+
+def _build_inventory_plan_snapshot(
+    *,
+    known_drinks: list[dict[str, Any]],
+    produce_items: list[dict[str, Any]],
+    remaining_weeks: int | None,
+) -> dict[str, Any]:
+    """构建饮料 / P物品使用窗口规划。"""
+    needs: list[str] = []
+    if not known_drinks:
+        needs.append("库存缺少可立即兑现的饮料")
+    if remaining_weeks is not None and remaining_weeks <= 2:
+        needs.append("优先保留能在短窗口内直接兑现的库存")
+    if produce_items:
+        needs.append("比较 P物品长期收益与当前门槛压力是否一致")
+    if not needs:
+        needs.append("优先保留泛用爆发或保命资源")
+    return {
+        "drink_count": len(known_drinks),
+        "item_count": len(produce_items),
+        "needs": needs,
+        "summary": "；".join(needs[:3]),
+    }
+
+
+def _build_recent_outcomes_snapshot(ctx: "ProduceContext") -> list[str]:
+    """压缩最近几步已发生的关键操作，用作短期规划参照。"""
+    result: list[str] = []
+    for op in list(ctx.operation_history or [])[-5:]:
+        action = str(getattr(op, "action", "") or "").strip()
+        if not action:
+            continue
+        target = str(getattr(op, "target", "") or "").strip()
+        phase = str(getattr(op, "phase", "") or "").strip()
+        line = f"{phase}:{action}"
+        if target:
+            line = f"{line}({target})"
+        result.append(line)
+    return result
+
+
+def _build_planning_snapshot(
+    ctx: "ProduceContext",
+    *,
+    phase_key: str,
+    hud_state: dict[str, Any],
+    known_drinks: list[dict[str, Any]],
+    produce_items: list[dict[str, Any]],
+    parameter_stats: dict[str, Any],
+    hand_entries: list[dict[str, Any]],
+    deck_cards: list[dict[str, Any]],
+    offensive_counts: dict[str, int],
+    produce_goals: dict[str, Any],
+    schedule_context: dict[str, Any],
+    remaining_weeks: int | None,
+    remaining_turns: int | None,
+    parameter_priority: str,
+) -> dict[str, Any]:
+    """构建统一长线规划结构。"""
+    scenario_rules = _scenario_rule_payload(ctx)
+    next_gate = _build_next_gate_snapshot(
+        ctx,
+        remaining_weeks=remaining_weeks,
+        exam_criteria=list(produce_goals.get("exam_criteria") or []),
+        training_tasks=list(produce_goals.get("training_tasks") or []),
+    )
+    resource_pressure = _build_resource_pressure_snapshot(
+        ctx,
+        hud_state=hud_state,
+        known_drinks=known_drinks,
+    )
+    time_pressure = _build_time_pressure_snapshot(
+        ctx,
+        phase_key=phase_key,
+        remaining_weeks=remaining_weeks,
+        remaining_turns=remaining_turns,
+    )
+    build_plan = _build_build_plan_snapshot(
+        ctx,
+        parameter_priority=parameter_priority,
+        parameter_stats=parameter_stats,
+        next_gate=next_gate,
+    )
+    deck_plan = _build_deck_plan_snapshot(
+        deck_cards=deck_cards,
+        offensive_counts=offensive_counts,
+        hand_entries=hand_entries,
+    )
+    inventory_plan = _build_inventory_plan_snapshot(
+        known_drinks=known_drinks,
+        produce_items=produce_items,
+        remaining_weeks=remaining_weeks,
+    )
+    route_bias = {
+        "idol_plan_type": _current_idol_plan_payload(ctx)["type"],
+        "idol_plan_label": _current_idol_plan_payload(ctx)["label"],
+        "parameter_priority": parameter_priority,
+        "summary": "；".join(
+            part for part in [
+                _current_idol_plan_payload(ctx)["label"],
+                f"属性成长优先级={parameter_priority}" if parameter_priority else "",
+            ] if part
+        ),
+    }
+    current_objectives = {
+        "produce_goal_summary": str(produce_goals.get("summary") or ""),
+        "training_tasks": list(produce_goals.get("training_tasks") or []),
+        "exam_criteria": list(produce_goals.get("exam_criteria") or []),
+        "summary": str(produce_goals.get("summary") or ""),
+    }
+    recent_outcomes = _build_recent_outcomes_snapshot(ctx)
+    schedule_future = list(schedule_context.get("future_schedule") or [])
+    summary_parts = [
+        str(build_plan.get("summary") or ""),
+        str(deck_plan.get("summary") or ""),
+        str(inventory_plan.get("summary") or ""),
+        str(next_gate.get("readiness_summary") or ""),
+    ]
+    return {
+        "scenario_rules": scenario_rules,
+        "current_objectives": current_objectives,
+        "next_gate": next_gate,
+        "resource_pressure": resource_pressure,
+        "time_pressure": time_pressure,
+        "route_bias": route_bias,
+        "build_plan": build_plan,
+        "deck_plan": deck_plan,
+        "inventory_plan": inventory_plan,
+        "recent_outcomes": recent_outcomes,
+        "future_schedule": schedule_future,
+        "schedule_history_summary": str(schedule_context.get("history_summary") or ""),
+        "consult_session": _build_consult_session_summary(ctx) if phase_key == GameplayPhase.CONSULT else None,
+        "summary": "；".join([part for part in summary_parts if part]),
+    }
 
 
 def _build_llm_actions(
@@ -2032,8 +2613,8 @@ def _build_llm_actions(
             )
         elif is_outing_entity:
             # 外出活動: DB 描述 + P 成本
-            display_name = str(
-                metadata.get("display_name")
+            canonical_name = str(
+                metadata.get("raw_name")
                 or payload.get("name")
                 or ""
             )
@@ -2041,7 +2622,7 @@ def _build_llm_actions(
             # DB 匹配成功时使用 DB 描述，失败时使用 OCR 效果描述。
             outing_db_desc = str(metadata.get("outing_db_description") or "")
             outing_effect = str(metadata.get("outing_effect") or "")
-            parts: list[str] = [display_name] if display_name else []
+            parts: list[str] = [canonical_name] if canonical_name else []
             if p_cost is not None:
                 parts.append(f"消耗: {p_cost}P")
             else:
@@ -2052,9 +2633,8 @@ def _build_llm_actions(
             description = " | ".join(parts)
         elif is_entity:
             # 实体类: 所有描述/属性均从数据库查询结果获取，不使用 OCR 原文
-            display_name = str(
-                metadata.get("display_name")
-                or metadata.get("raw_name")
+            raw_name = str(
+                metadata.get("raw_name")
                 or payload.get("name")
                 or ""
             )
@@ -2093,7 +2673,7 @@ def _build_llm_actions(
                 if next_uc <= 3:
                     next_meta = _enrich_card_metadata(db_id, upgrade_count=next_uc)
                     next_desc = str(next_meta.get("description") or "")
-                    next_name = str(next_meta.get("display_name") or "")
+                    next_name = str(next_meta.get("raw_name") or "")
                     if next_desc and next_desc != db_description:
                         description = f"{description}；【強化後→{next_name}】{next_desc}"
                     elif next_name:
@@ -2104,7 +2684,6 @@ def _build_llm_actions(
             # 非实体类（强化/削除/退出按钮等 + 周行动）: 保持原有逻辑
             description = (
                 metadata.get("description")
-                or metadata.get("display_name")
                 or payload.get("name")
                 or ""
             )
@@ -2116,15 +2695,15 @@ def _build_llm_actions(
             lesson_effect = str(metadata.get("lesson_effect") or "").strip()
             if lesson_effect and not effect_text:
                 effect_text = lesson_effect
-            display_name = str(
-                metadata.get("display_name")
+            schedule_name = str(
+                metadata.get("raw_name")
                 or payload.get("name")
                 or ""
             ).strip()
             rl_type = str(metadata.get("rl_action_type") or "").strip()
             sched_parts: list[str] = []
-            if display_name and display_name != description:
-                sched_parts.append(display_name)
+            if schedule_name and schedule_name != description:
+                sched_parts.append(schedule_name)
             if rl_type:
                 sched_parts.append(f"类型: {rl_type}")
             # 授業選項: 附加体力消耗
@@ -2144,72 +2723,254 @@ def _build_llm_actions(
                 if description
                 else unavailable_reason
             )
-        effect_hint_source = "；".join(
-            value
-            for value in (
-                description,
-                " / ".join(str(item or "") for item in metadata.get("effect_types", []) or []),
-            )
-            if str(value or "").strip()
-        )
-        effect_hints = (
-            _build_effect_term_hints(effect_hint_source)
-            if phase_key in {
-                GameplayPhase.LESSON,
-                GameplayPhase.EXAM,
-                GameplayPhase.P_DRINK,
-                GameplayPhase.SKILL_REWARD,
-                GameplayPhase.CONSULT,
-            }
-            else []
-        )
-        if effect_hints:
-            effect_hint_text = "；".join(effect_hints[:4])
-            description = (
-                f"{description}；术语提示：{effect_hint_text}"
-                if description
-                else f"术语提示：{effect_hint_text}"
-            )
-
         # ── 标签: 实体类用 db_id（RL 对接），外出用可读名（LLM 不需要内部 ID） ──
         if is_outing_entity:
             # 外出: LLM 看到可读名称，db_id 仅供 RL 外部消费
             label = str(
-                metadata.get("display_name")
+                metadata.get("raw_name")
                 or payload.get("name")
                 or payload.get("label")
-                or db_id
+                or ""
             )
         elif is_entity:
             # 战斗卡/实体类: label 用可读名称（LLM 需要看懂卡名），db_id 已在 payload 中保留供 RL 使用
             label = str(
-                metadata.get("display_name")
-                or metadata.get("raw_name")
+                metadata.get("raw_name")
                 or payload.get("name")
                 or payload.get("label")
-                or db_id
+                or ""
             )
         elif phase_key == GameplayPhase.CONSULT:
             label = str(payload.get("id") or payload.get("name") or payload.get("label") or "")
         else:
             label = str(payload.get("name") or payload.get("label") or "")
 
+        decision_tags = _infer_action_decision_tags(
+            phase_key=phase_key,
+            payload=payload,
+            metadata=metadata,
+            description=description,
+        )
+        cost_summary = _build_action_cost_summary(metadata, description)
+        gain_summary = _build_action_gain_summary(metadata, description, decision_tags)
         actions.append({
             "index": int(payload.get("index", 0)),
             "kind": consult_action if phase_key == GameplayPhase.CONSULT else payload.get("type", ""),
+            "canonical_name": label,
             "label": label,
             "description": description,
-            "recommended": bool(payload.get("recommended", False)),
-            "selected": bool(payload.get("selected", False)),
             "available": bool(payload.get("available", True)),
-            "operation_meaning": _describe_candidate_operation(
-                payload,
-                phase=phase,
-                position=position,
-                stage_context=stage_context,
-            ),
+            "availability_reason": unavailable_reason,
+            "decision_tags": decision_tags,
+            "cost_summary": cost_summary,
+            "gain_summary": gain_summary,
         })
     return actions
+
+
+def _infer_action_decision_tags(
+    *,
+    phase_key: str,
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    description: str,
+) -> list[str]:
+    """把候选动作抽象成可复用的功能维度，供日志和复盘检索使用。"""
+    text = "；".join(
+        part
+        for part in (
+            str(payload.get("type") or ""),
+            str(metadata.get("candidate_type") or ""),
+            str(metadata.get("rl_action_type") or ""),
+            str(metadata.get("category") or ""),
+            str(description or ""),
+            " / ".join(str(item or "") for item in metadata.get("effect_types", []) or []),
+        )
+        if part
+    )
+    tags: list[str] = []
+
+    def add(tag: str, *needles: str) -> None:
+        if tag in tags:
+            return
+        if not needles or any(needle and needle in text for needle in needles):
+            tags.append(tag)
+
+    if phase_key == GameplayPhase.SCHEDULE:
+        add("parameter_growth_value", "lesson", "レッスン", "授業", "vocal", "dance", "visual")
+        add("stamina_recovery_value", ProduceText.REST, ProduceText.REST_ACTION, ProduceText.OUTING, ProduceText.GO_OUT, "回復")
+        add("p_point_economy_value", "Pポイント", "P点", "P")
+        add("fan_vote_progress_value", ProduceText.BUSINESS, "営業", "fan", "投票")
+        add("deck_quality_value", ProduceText.CONSULT, "相談", "強化", "削除")
+    elif phase_key == GameplayPhase.SKILL_REWARD:
+        add("deck_quality_value")
+    elif phase_key == GameplayPhase.CONSULT:
+        add("deck_quality_value", "consult", "強化", "削除", "ProduceCard", "skill")
+        add("inventory_flexibility_value", "ProduceDrink", "P飲料", "Pドリンク")
+        add("p_point_economy_value", "価格", "price", "P")
+    elif phase_key in {GameplayPhase.P_DRINK, GameplayPhase.ITEM_SELECT}:
+        add("inventory_flexibility_value")
+
+    add("immediate_score_gain", "Score", ProduceText.PARAMETER_UP_INCREASE, "スコア", "得分", "パラメータ")
+    add("engine_setup_value", ProduceText.GOOD_CONDITION, ProduceText.CONCENTRATION, ProduceText.GOOD_IMPRESSION, ProduceText.YARUKI, ProduceText.FULL_POWER_POINT, ProduceText.FULL_POWER)
+    add("stability_value", ProduceText.GENKI, ProduceText.STAMINA_RECOVERY, ProduceText.BLOCK, "回復", "軽減", "削減")
+    add("stamina_recovery_value", ProduceText.STAMINA_RECOVERY, "体力回復", "回復")
+    add("deck_quality_value", "強化", "削除", "交換", "生成", "draw", "手札")
+    add("gate_preparation_value", "gate", "門", "試験", "オーディション", "audition", "選抜", "投票")
+    return tags
+
+
+def _build_action_cost_summary(metadata: dict[str, Any], description: str) -> str:
+    parts: list[str] = []
+    price = str(metadata.get("price") or "").strip()
+    if price:
+        parts.append(f"{price}P")
+    cost = metadata.get("cost")
+    if cost:
+        parts.append(f"体力{int(cost)}")
+    stamina_cost = metadata.get("stamina_cost")
+    if stamina_cost is not None:
+        parts.append(f"体力{stamina_cost}")
+    if not parts and ("消耗" in description or "消費" in description):
+        parts.append("描述中含资源消耗")
+    return " / ".join(parts)
+
+
+def _build_action_gain_summary(
+    metadata: dict[str, Any],
+    description: str,
+    decision_tags: list[str],
+) -> str:
+    if not description:
+        return ""
+    tag_text = " / ".join(decision_tags[:4])
+    rarity = str(metadata.get("rarity") or "")
+    prefix = rarity.rsplit("_", 1)[-1] if rarity else ""
+    parts = [part for part in (prefix, tag_text) if part]
+    return "；".join(parts)
+
+
+def _decision_family_for_phase(phase: str) -> str:
+    phase_key = phase.value if hasattr(phase, "value") else str(phase)
+    if phase_key == GameplayPhase.SCHEDULE:
+        return "schedule"
+    if phase_key == GameplayPhase.SKILL_REWARD:
+        return "reward"
+    if phase_key in {GameplayPhase.P_DRINK, GameplayPhase.ITEM_SELECT}:
+        return "inventory"
+    if phase_key == GameplayPhase.CONSULT:
+        return "consult"
+    if phase_key in {GameplayPhase.LESSON, GameplayPhase.EXAM}:
+        return "combat"
+    return phase_key or "unknown"
+
+
+def _build_decision_explanation(
+    *,
+    phase: str,
+    position: str,
+    llm_snapshot: dict[str, Any],
+    stage_context: dict[str, Any],
+    llm_actions: list[dict[str, Any]],
+    legal_actions: list[int],
+) -> dict[str, Any]:
+    """构建解释型日志字段；这是决策输入摘要，不伪造模型事后理由。"""
+    planning = dict(llm_snapshot.get("planning", {}) or {})
+    next_gate = dict(planning.get("next_gate", {}) or {})
+    resource_pressure = dict(planning.get("resource_pressure", {}) or {})
+    time_pressure = dict(planning.get("time_pressure", {}) or {})
+    build_plan = dict(planning.get("build_plan", {}) or {})
+    deck_plan = dict(planning.get("deck_plan", {}) or {})
+    inventory_plan = dict(planning.get("inventory_plan", {}) or {})
+
+    available = [action for action in llm_actions if bool(action.get("available", True))]
+    unavailable = [action for action in llm_actions if not bool(action.get("available", True))]
+    candidate_roles: dict[str, int] = {}
+    for action in available:
+        for tag in list(action.get("decision_tags") or []):
+            candidate_roles[tag] = candidate_roles.get(tag, 0) + 1
+
+    goal_parts = [
+        str(dict(planning.get("current_objectives", {}) or {}).get("summary") or ""),
+        str(next_gate.get("readiness_summary") or ""),
+        str(stage_context.get("label") or ""),
+    ]
+    conditions = {
+        "phase": phase,
+        "position": position,
+        "week": llm_snapshot.get("week"),
+        "remaining_weeks": llm_snapshot.get("remaining_weeks"),
+        "remaining_turns": llm_snapshot.get("remaining"),
+        "stamina": llm_snapshot.get("stamina"),
+        "max_stamina": llm_snapshot.get("max_stamina"),
+        "p_point": llm_snapshot.get("p_point"),
+        "score": llm_snapshot.get("score"),
+        "target": llm_snapshot.get("target"),
+        "fan_votes": llm_snapshot.get("fan_votes"),
+        "next_gate": next_gate,
+        "candidate_role_counts": candidate_roles,
+    }
+    constraints: list[str] = []
+    if unavailable:
+        constraints.append(
+            "不可选动作: "
+            + " / ".join(
+                f"{action.get('index')}={action.get('availability_reason') or 'unavailable'}"
+                for action in unavailable[:8]
+            )
+        )
+    if legal_actions:
+        constraints.append("只能选择可选动作编号: " + ", ".join(str(index) for index in legal_actions))
+    if time_pressure.get("summary"):
+        constraints.append(str(time_pressure.get("summary")))
+    if resource_pressure.get("summary"):
+        constraints.append(str(resource_pressure.get("summary")))
+
+    comparison = [
+        {
+            "index": action.get("index"),
+            "canonical_name": action.get("canonical_name") or action.get("label"),
+            "decision_tags": list(action.get("decision_tags") or []),
+            "cost_summary": str(action.get("cost_summary") or ""),
+            "gain_summary": str(action.get("gain_summary") or ""),
+        }
+        for action in available[:12]
+    ]
+    trace = [
+        f"decision_family={_decision_family_for_phase(phase)}",
+        f"legal_count={len(legal_actions)}",
+        f"unavailable_count={len(unavailable)}",
+    ]
+    if next_gate.get("weeks_until_gate") is not None:
+        trace.append(f"weeks_until_gate={next_gate.get('weeks_until_gate')}")
+    if resource_pressure.get("key"):
+        trace.append(f"resource_pressure={resource_pressure.get('key')}")
+    if time_pressure.get("key"):
+        trace.append(f"time_pressure={time_pressure.get('key')}")
+
+    return {
+        "decision_family": _decision_family_for_phase(phase),
+        "decision_goal": "；".join(part for part in goal_parts if part),
+        "decision_constraints": constraints,
+        "decision_conditions": conditions,
+        "comparison_summary": comparison,
+        "why_this_action": "",
+        "why_not_others": "",
+        "decision_rule_trace": trace,
+        "effective_when": "当前目标、资源压力、时间窗口和候选功能角色相近时可参考。",
+        "ineffective_when": "候选可用性、剩余周/回合、下个门槛或资源压力明显不同时不应直接套用。",
+        "build_plan_key": str(build_plan.get("key") or build_plan.get("summary") or ""),
+        "deck_plan_key": str(deck_plan.get("key") or deck_plan.get("summary") or ""),
+        "inventory_plan_key": str(inventory_plan.get("key") or inventory_plan.get("summary") or ""),
+        "next_gate_key": str(next_gate.get("gate_type") or next_gate.get("gate_label") or ""),
+        "resource_pressure_key": str(resource_pressure.get("key") or resource_pressure.get("summary") or ""),
+        "route_bias_key": str(dict(planning.get("route_bias", {}) or {}).get("idol_plan_type") or ""),
+        "candidate_signature": "|".join(
+            str(action.get("canonical_name") or action.get("label") or action.get("index"))
+            for action in llm_actions
+        ),
+        "candidate_role_signature": "|".join(sorted(candidate_roles)),
+    }
 
 
 def _blocked_battle_card_keys(
@@ -2335,14 +3096,34 @@ def _annotate_battle_candidate_availability(
     phase_key = phase.value if hasattr(phase, "value") else str(phase)
     if phase_key not in {GameplayPhase.LESSON, GameplayPhase.EXAM}:
         return
-    play_limit_remaining = _parse_play_limit_remaining(llm_snapshot)
     blocked_keys = _blocked_battle_card_keys(ctx, phase=phase_key, llm_snapshot=llm_snapshot)
     resources = dict(llm_snapshot.get("resources", {}) or {})
     for payload in candidate_payloads:
         action_id = str(payload.get("id") or "")
+        metadata = dict(payload.get("metadata", {}) or {})
+        if is_produce_drink_action_id(action_id):
+            unavailable_reason = ""
+            if not str(payload.get("db_id") or "").strip():
+                unavailable_reason = str(metadata.get("unavailable_reason") or "未识别出饮料 db_id，当前不能使用该饮料").strip()
+            elif not bool(payload.get("available", True)):
+                unavailable_reason = str(metadata.get("unavailable_reason") or "当前饮料不可用").strip()
+            elif bool(metadata.get("identity_unresolved", False)):
+                unavailable_reason = str(metadata.get("unavailable_reason") or "饮料识别未完成，当前不能使用该饮料").strip()
+            elif bool(metadata.get("probe_failed", False)):
+                unavailable_reason = str(metadata.get("unavailable_reason") or "饮料详情探测失败，当前不能使用该饮料").strip()
+            elif bool(metadata.get("modal_open_timeout", False)):
+                unavailable_reason = str(metadata.get("unavailable_reason") or "未稳定检测到饮料详情模态，当前不能使用该饮料").strip()
+            elif bool(metadata.get("modal_title_mismatch", False)):
+                unavailable_reason = str(metadata.get("unavailable_reason") or "当前模态不是饮料详情，当前不能使用该饮料").strip()
+            if unavailable_reason:
+                payload["available"] = False
+                payload["unavailable_reason"] = unavailable_reason
+                metadata["available"] = False
+                metadata["unavailable_reason"] = unavailable_reason
+                payload["metadata"] = metadata
+            continue
         if not is_produce_card_action_id(action_id):
             continue
-        metadata = dict(payload.get("metadata", {}) or {})
         description = str(
             metadata.get("description")
             or payload.get("name")
@@ -2364,8 +3145,6 @@ def _annotate_battle_candidate_availability(
             unavailable_reason = "上一轮已确认当前条件下效果不会发动，本回合先不要再用这张牌"
         elif not bool(payload.get("available", True)):
             unavailable_reason = str(metadata.get("unavailable_reason") or "").strip()
-        elif play_limit_remaining <= 0:
-            unavailable_reason = "本回合已没有剩余出牌次数，当前不能再打出技能卡"
         else:
             unavailable_reason = _insufficient_cost_reason(
                 metadata,
@@ -2420,19 +3199,21 @@ def _build_llm_snapshot(
     if virtual_state is not None:
         hand_entries = list(virtual_state["zones"]["hand"])
     known_drinks = _build_drink_snapshot(ctx.recognized_p_drinks)
-    deck_cards = list(virtual_state["zones"]["deck"]) if virtual_state is not None else known_deck
+    current_deck_zone = list(virtual_state["zones"]["deck"]) if virtual_state is not None else known_deck
     grave_cards = list(virtual_state["zones"]["grave"]) if virtual_state is not None else []
     hold_cards = list(virtual_state["zones"]["hold"]) if virtual_state is not None else []
     lost_cards = list(virtual_state["zones"]["lost"]) if virtual_state is not None else []
+    deck_cards = known_deck
+    deck_cards_for_counts = current_deck_zone or known_deck
     offensive_counts = {
         "hand": _count_offensive_snapshot_cards(hand_entries),
-        "deck": _count_offensive_snapshot_cards(deck_cards),
+        "deck": _count_offensive_snapshot_cards(deck_cards_for_counts),
         "grave": _count_offensive_snapshot_cards(grave_cards),
         "hold": _count_offensive_snapshot_cards(hold_cards),
     }
     deck_summary = _build_snapshot_deck_summary(deck_cards)
     reshuffle_hint = _build_snapshot_reshuffle_hint(
-        deck_cards=deck_cards,
+        deck_cards=deck_cards_for_counts,
         grave_cards=grave_cards,
         offensive_counts=offensive_counts,
     )
@@ -2451,6 +3232,30 @@ def _build_llm_snapshot(
         remaining_to_clear = 0
         remaining_to_perfect = 0
 
+    produce_goals = _build_produce_goal_snapshot(ctx)
+    schedule_context = _build_schedule_context_snapshot(ctx)
+    remaining_weeks = _compute_remaining_weeks(ctx)
+    parameter_priority = _build_parameter_priority(ctx)
+    parameter_stats = _build_parameter_stats_payload(ctx)
+    produce_items = _build_produce_item_snapshot(ctx)
+    remaining_turns = int(hud_state.get("remaining_turns") or 0) if phase_key in {GameplayPhase.LESSON, GameplayPhase.EXAM} else None
+    planning = _build_planning_snapshot(
+        ctx,
+        phase_key=phase_key,
+        hud_state=hud_state,
+        known_drinks=known_drinks,
+        produce_items=produce_items,
+        parameter_stats=parameter_stats,
+        hand_entries=hand_entries,
+        deck_cards=current_deck_zone,
+        offensive_counts=offensive_counts,
+        produce_goals=produce_goals,
+        schedule_context=schedule_context,
+        remaining_weeks=remaining_weeks,
+        remaining_turns=remaining_turns,
+        parameter_priority=parameter_priority,
+    )
+
     snapshot = {
         "phase": phase_key,
         "position": position,
@@ -2458,12 +3263,20 @@ def _build_llm_snapshot(
         "scenario": ctx.scenario,
         "difficulty": ctx.difficulty,
         "week": ctx.current_week,
-        "remaining_weeks": _compute_remaining_weeks(ctx),
+        "remaining_weeks": remaining_weeks,
+        "produce_goals": produce_goals,
+        "planning": planning,
+        "exam_criteria": produce_goals["exam_criteria"],
+        "training_tasks": produce_goals["training_tasks"],
+        "schedule_context": schedule_context,
+        "schedule_history": schedule_context["history"],
+        "future_schedule": schedule_context["future_schedule"],
+        "schedule_history_summary": schedule_context["history_summary"],
         "idol_plan_type": idol_plan["type"],
         "idol_plan_label": idol_plan["label"],
         "idol_plan_focus": idol_plan["focus"],
         "idol_plan_description": idol_plan["description"],
-        "parameter_priority": _build_parameter_priority(ctx),
+        "parameter_priority": parameter_priority,
         "turn": virtual_state["turn_index"] if virtual_state is not None else (ctx.lesson_turns_played + 1 if hud_state.get("remaining_turns") else None),
         "remaining": hud_state.get("remaining_turns", 0),
         "max_turns": None,
@@ -2490,7 +3303,7 @@ def _build_llm_snapshot(
         "turn_color_display_label": hud_state.get("turn_color", ""),
         "score_bonus_multiplier": hud_state.get("score_bonus", ""),
         "exam_ranking": hud_state.get("exam_ranking", ""),
-        "parameter_stats": _build_parameter_stats_payload(ctx),
+        "parameter_stats": parameter_stats,
         "hand": hand_entries,
         "deck_count": len(deck_cards),
         "deck_summary": deck_summary,
@@ -2523,10 +3336,11 @@ def _build_llm_snapshot(
         "available_drink_count": len(known_drinks),
         "used_drink_count": 0,
         "drink_total_count": len(known_drinks),
-        "p_items": _build_produce_item_snapshot(ctx),
+        "p_items": produce_items,
         "formation_abilities": _build_formation_ability_snapshot(ctx),
         "formation_events": _build_formation_event_snapshot(ctx),
         "gimmicks": "",
+        "fan_votes": planning["scenario_rules"].get("fan_votes_current"),
         "total_counters": {
             "play_count": 0,
             "stamina_spent": "",
@@ -2733,12 +3547,26 @@ def build_decision_state(
         hud_state=hud_state,
         candidate_payloads=candidate_payloads,
     )
+    produce_goals = _build_produce_goal_snapshot(ctx)
+    schedule_context = _build_schedule_context_snapshot(ctx)
+    if produce_goals["summary"]:
+        stage_context["produce_goal_summary"] = produce_goals["summary"]
+    elif schedule_context["history_summary"]:
+        stage_context["produce_goal_summary"] = schedule_context["history_summary"]
+    if schedule_context["history_summary"]:
+        stage_context["schedule_history_summary"] = schedule_context["history_summary"]
+    if schedule_context["future_schedule"]:
+        stage_context["future_schedule"] = schedule_context["future_schedule"]
+    if schedule_context["history"]:
+        stage_context["schedule_history"] = schedule_context["history"]
     # 将 P 手账日程数据注入 stage_context（供 LLM 未来规划参考）。
     if phase == GameplayPhase.SCHEDULE:
         notebook_entries = list(ctx.handler_state.get("p_notebook_schedule") or [])
         if notebook_entries:
             stage_context["future_schedule"] = notebook_entries
             stage_context["schedule_history"] = list(ctx.schedule_history or [])
+            stage_context["schedule_history_summary"] = schedule_context["history_summary"]
+            stage_context["produce_goal_summary"] = produce_goals["summary"]
     snapshot["stage_context"] = stage_context
     snapshot["llm_snapshot"] = _build_llm_snapshot(
         ctx,
@@ -2799,6 +3627,14 @@ def build_decision_state(
         for payload in candidate_payloads
         if bool(payload.get("available", True))
     ]
+    snapshot["decision_explanation"] = _build_decision_explanation(
+        phase=phase,
+        position=position,
+        llm_snapshot=snapshot["llm_snapshot"],
+        stage_context=stage_context,
+        llm_actions=snapshot["llm_actions"],
+        legal_actions=snapshot["legal_actions"],
+    )
     snapshot["resolved_entities"] = resolved_entities
     snapshot["unresolved_entities"] = unresolved_entities
     ctx.handler_state["last_decision_state"] = snapshot
@@ -2830,6 +3666,22 @@ def build_followup_decision_state(
         candidate_payloads=candidate_payloads,
     )
 
+    produce_goals = _build_produce_goal_snapshot(ctx)
+    schedule_context = _build_schedule_context_snapshot(ctx)
+    if produce_goals["summary"]:
+        stage_context["produce_goal_summary"] = produce_goals["summary"]
+    elif schedule_context["history_summary"]:
+        stage_context["produce_goal_summary"] = schedule_context["history_summary"]
+    if schedule_context["history_summary"]:
+        stage_context["schedule_history_summary"] = schedule_context["history_summary"]
+    if schedule_context["future_schedule"]:
+        stage_context["future_schedule"] = schedule_context["future_schedule"]
+    if schedule_context["history"]:
+        stage_context["schedule_history"] = schedule_context["history"]
+
+    remaining_weeks = previous_snapshot.get("remaining_weeks") or _compute_remaining_weeks(ctx)
+    parameter_priority = _build_parameter_priority(ctx)
+    idol_plan = _current_idol_plan_payload(ctx)
     llm_snapshot = {
         **previous_snapshot,
         "phase": phase_key,
@@ -2838,17 +3690,101 @@ def build_followup_decision_state(
         "scenario": previous_snapshot.get("scenario", ctx.scenario),
         "difficulty": previous_snapshot.get("difficulty", ctx.difficulty),
         "week": previous_snapshot.get("week", ctx.current_week),
-        "remaining_weeks": previous_snapshot.get("remaining_weeks") or _compute_remaining_weeks(ctx),
+        "remaining_weeks": remaining_weeks,
+        "produce_goals": produce_goals,
+        "exam_criteria": produce_goals["exam_criteria"],
+        "training_tasks": produce_goals["training_tasks"],
+        "schedule_context": schedule_context,
+        "schedule_history": schedule_context["history"],
+        "future_schedule": schedule_context["future_schedule"],
+        "schedule_history_summary": schedule_context["history_summary"],
+        "idol_plan_type": previous_snapshot.get("idol_plan_type", idol_plan["type"]),
+        "idol_plan_label": previous_snapshot.get("idol_plan_label", idol_plan["label"]),
+        "idol_plan_focus": previous_snapshot.get("idol_plan_focus", idol_plan["focus"]),
+        "idol_plan_description": previous_snapshot.get("idol_plan_description", idol_plan["description"]),
+        "parameter_priority": previous_snapshot.get("parameter_priority", parameter_priority),
     }
-    idol_plan = _current_idol_plan_payload(ctx)
-    llm_snapshot.setdefault("idol_plan_type", idol_plan["type"])
-    llm_snapshot.setdefault("idol_plan_label", idol_plan["label"])
-    llm_snapshot.setdefault("idol_plan_focus", idol_plan["focus"])
-    llm_snapshot.setdefault("idol_plan_description", idol_plan["description"])
-    llm_snapshot.setdefault("parameter_priority", _build_parameter_priority(ctx))
+    llm_snapshot.setdefault("fan_votes", None)
+    previous_planning = dict(previous_snapshot.get("planning", {}) or {})
+    planning = {
+        **previous_planning,
+        "scenario_rules": {
+            **dict(previous_planning.get("scenario_rules", {}) or {}),
+            **_scenario_rule_payload(ctx),
+        },
+        "current_objectives": {
+            "produce_goal_summary": str(produce_goals.get("summary") or ""),
+            "training_tasks": list(produce_goals.get("training_tasks") or []),
+            "exam_criteria": list(produce_goals.get("exam_criteria") or []),
+            "summary": str(produce_goals.get("summary") or ""),
+        },
+        "next_gate": {
+            **dict(previous_planning.get("next_gate", {}) or {}),
+            **_build_next_gate_snapshot(
+                ctx,
+                remaining_weeks=remaining_weeks,
+                exam_criteria=list(produce_goals.get("exam_criteria") or []),
+                training_tasks=list(produce_goals.get("training_tasks") or []),
+            ),
+        },
+        "resource_pressure": dict(previous_planning.get("resource_pressure", {}) or {}),
+        "time_pressure": dict(previous_planning.get("time_pressure", {}) or {}),
+        "build_plan": dict(previous_planning.get("build_plan", {}) or {}),
+        "deck_plan": dict(previous_planning.get("deck_plan", {}) or {}),
+        "inventory_plan": dict(previous_planning.get("inventory_plan", {}) or {}),
+        "recent_outcomes": list(previous_planning.get("recent_outcomes", []) or []),
+        "future_schedule": list(schedule_context.get("future_schedule") or []),
+        "schedule_history_summary": str(schedule_context.get("history_summary") or ""),
+    }
+    planning["route_bias"] = {
+        **dict(previous_planning.get("route_bias", {}) or {}),
+        "idol_plan_type": llm_snapshot.get("idol_plan_type", ""),
+        "idol_plan_label": llm_snapshot.get("idol_plan_label", ""),
+        "parameter_priority": llm_snapshot.get("parameter_priority", ""),
+        "summary": "；".join(
+            part for part in [
+                str(llm_snapshot.get("idol_plan_label") or ""),
+                f"属性成长优先级={llm_snapshot.get('parameter_priority')}" if str(llm_snapshot.get("parameter_priority") or "") else "",
+            ] if part
+        ),
+    }
+    planning["scenario_rules"].setdefault("weeks_until_gate", remaining_weeks)
+    planning["scenario_rules"].setdefault("summary", "")
+    planning["next_gate"].setdefault("weeks_until_gate", remaining_weeks)
+    planning["next_gate"].setdefault("readiness_summary", "")
+    planning["time_pressure"].setdefault("remaining_weeks", remaining_weeks)
+    planning["time_pressure"].setdefault("summary", f"周窗口未知(剩余{remaining_weeks}周)" if remaining_weeks is not None else "")
+    planning["resource_pressure"].setdefault("summary", "")
+    planning["build_plan"].setdefault("summary", "")
+    planning["deck_plan"].setdefault("summary", "")
+    planning["inventory_plan"].setdefault("summary", "")
+    planning["scenario_rules"]["audition_stage_current"] = str(
+        getattr(ctx, "current_exam_type", "")
+        or planning["scenario_rules"].get("audition_stage_current")
+        or ""
+    )
+    planning["summary"] = "；".join(
+        [
+            part
+            for part in (
+                str(planning.get("current_objectives", {}).get("summary") or ""),
+                str(planning.get("next_gate", {}).get("readiness_summary") or ""),
+                str(planning.get("build_plan", {}).get("summary") or ""),
+                str(planning.get("deck_plan", {}).get("summary") or ""),
+                str(planning.get("inventory_plan", {}).get("summary") or ""),
+            )
+            if part
+        ]
+    )
+    llm_snapshot["planning"] = planning
+    llm_snapshot["fan_votes"] = planning["scenario_rules"].get("fan_votes_current")
     # 相談 session 摘要传递
     if phase_key == GameplayPhase.CONSULT:
-        llm_snapshot.setdefault("consult_session", _build_consult_session_summary(ctx))
+        llm_snapshot["consult_session"] = _build_consult_session_summary(ctx)
+        llm_snapshot["planning"]["consult_session"] = llm_snapshot["consult_session"]
+    else:
+        llm_snapshot.setdefault("consult_session", previous_snapshot.get("consult_session"))
+        llm_snapshot["planning"]["consult_session"] = llm_snapshot.get("consult_session")
     if phase_key in {GameplayPhase.LESSON, GameplayPhase.EXAM}:
         llm_snapshot.setdefault(
             "battle_kind",
@@ -2948,6 +3884,7 @@ def build_followup_decision_state(
         }
         llm_snapshot["observability"] = observability
 
+
     snapshot = {
         **previous_state,
         "phase": phase_key,
@@ -2967,6 +3904,14 @@ def build_followup_decision_state(
         for payload in candidate_payloads
         if bool(payload.get("available", True))
     ]
+    snapshot["decision_explanation"] = _build_decision_explanation(
+        phase=phase_key,
+        position=position_key,
+        llm_snapshot=llm_snapshot,
+        stage_context=stage_context,
+        llm_actions=snapshot["llm_actions"],
+        legal_actions=snapshot["legal_actions"],
+    )
     ctx.last_sync_reason = reason
     ctx.handler_state["last_decision_state"] = snapshot
     return snapshot

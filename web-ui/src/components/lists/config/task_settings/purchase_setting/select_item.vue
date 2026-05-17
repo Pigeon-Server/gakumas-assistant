@@ -3,14 +3,15 @@ import apis from "@/scripts/apis.js";
 import app from "@/main.js";
 import { useAppStore } from "@/stores/app.ts";
 import { ref } from "vue";
+import { translateAny } from '@/scripts/i18n/translate'
 
 const store = useAppStore()
 
 const props = defineProps({
   data: Object,
   label: {
-    type: String,
-    default: "物品选择"
+    type: [String, Object],
+    default: ""
   }
 })
 
@@ -38,7 +39,7 @@ function itemImageSrc(item) {
     v-model="data.daily_buy_list.value"
     :items="items"
     item-value="id"
-    :label="label"
+    :label="translateAny(label) || translateAny(data.daily_buy_list.ui.label)"
     multiple
     clearable
     :custom-filter="filter"
@@ -115,25 +116,25 @@ function itemImageSrc(item) {
 .item-title {
   font-size: 15px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.95);
+  color: rgba(var(--v-theme-on-surface), 0.95);
 }
 
 .item-subtitle {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.65);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   margin-left: 4px;
 }
 
 .item-description {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(var(--v-theme-on-surface), 0.75);
   line-height: 1.3;
   word-break: break-word;
 }
 
 .item-route {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(var(--v-theme-on-surface), 0.55);
   line-height: 1.2;
   word-break: break-word;
 }

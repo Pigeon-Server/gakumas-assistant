@@ -23,16 +23,14 @@ from typing import TYPE_CHECKING
 
 from src.constants.game.producer_gameplay import GameplayPhase
 from src.constants.game.text.button_text import ButtonText
-from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
-from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.constants.yolo.model_type import YoloModelType
 from src.core.tasks.producer_challenge.shared.common import click_relative_point
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
+from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import LLMStrategy
 from src.core.tasks.producer_challenge.ui import (
     click_modal_action_with_retry,
     detect_gameplay_phase,
     is_final_confirm_page,
-    wait_for_final_confirm_page,
 )
 from src.utils.logger import logger
 from src.utils.string_tools import MatchConfig
@@ -46,6 +44,13 @@ class HandleStartupModalsStep(ProduceStep):
     """处理开局设置弹窗，并把模型切换到 gameplay 可识别状态。"""
 
     step_name = "handle_startup_modals"
+
+    @staticmethod
+    def _flush_llm_session(ctx: "ProduceContext") -> None:
+        """启动阶段异常退出时也收尾当前局内会话。"""
+        strategy = getattr(ctx, "schedule_strategy", None)
+        if isinstance(strategy, LLMStrategy):
+            strategy.flush_session(ctx)
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """处理开局弹窗链，并确保真正切入 gameplay 阶段。
@@ -202,8 +207,25 @@ class HandleStartupModalsStep(ProduceStep):
         Returns:
             str: 成功时返回检测到的 phase 字符串；超时则返回空字符串。
         """
+        observed_frames = 0
+        last_phase = GameplayPhase.UNKNOWN
+        last_labels: list[str] = []
+
         for wait in range(timeout):
             phase = detect_gameplay_phase(app, ctx)
+            last_phase = phase
+            results = getattr(app, "latest_results", None)
+            if results is not None:
+                observed_frames += 1
+                last_labels = sorted({str(getattr(box, "label", "")) for box in results if getattr(box, "label", "")})
+                if wait == 0 or (wait + 1) % 5 == 0:
+                    logger.debug(
+                        "等待 gameplay phase: wait={}/{} phase={} labels={}",
+                        wait + 1,
+                        timeout,
+                        phase,
+                        last_labels[:12],
+                    )
             if phase not in {
                 GameplayPhase.UNKNOWN,
                 GameplayPhase.MODAL,
@@ -227,5 +249,13 @@ class HandleStartupModalsStep(ProduceStep):
 
             sleep(1)
 
-        logger.warning(f"等待 gameplay 首帧超时 ({timeout}s)")
+        if observed_frames <= 0:
+            logger.warning(f"等待 PRODUCER 首帧超时 ({timeout}s)")
+        else:
+            logger.warning(
+                "等待可接管 gameplay phase 超时 ({}s)，最后 phase={}，最后 labels={}",
+                timeout,
+                last_phase,
+                last_labels[:20],
+            )
         return ""

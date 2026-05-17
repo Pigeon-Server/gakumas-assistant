@@ -197,6 +197,8 @@ def _set_connection_error_retry(ctx: "ProduceContext") -> None:
 
 def _set_exam_retry_transition_retry(ctx: "ProduceContext") -> None:
     """设置`exam_retry_transition_retry`。"""
+    # 再挑战时清空战斗状态，避免上一轮的出牌计数器残留导致无法出牌
+    ctx.handler_state.pop("virtual_battle_state", None)
     ctx.handler_state["unknown_retry_override"] = {
         "reason": "exam_retry_confirm_modal",
         "retry_limit": int(
@@ -572,7 +574,7 @@ class ModalHandler(GameplayHandler):
             if retry_result is not None:
                 return retry_result
             logger.warning(f"modal: 连续 {stuck_count} 次未消失，尝试备用关闭策略")
-            # 尝试 Close Button
+            # 仅对显式关闭类控件做兜底，避免在未知弹窗上误点取消导致退回标题/放弃流程
             close_boxes = list(results.filter_by_label(ProducerLabels.CLOSE_BUTTON))
             if close_boxes:
                 app.device.click_element(close_boxes[0])
@@ -581,16 +583,6 @@ class ModalHandler(GameplayHandler):
                                      details={"stuck_count": stuck_count})
                 time.sleep(0.8)
                 return HandlerResult.ok("modal: close button fallback", sleep_after=0.5)
-            # 尝试取消按钮（某些弹窗只有取消）
-            cancel_boxes = list(results.filter_by_label(ProducerLabels.CANCEL_BUTTON))
-            if cancel_boxes:
-                target = max(cancel_boxes, key=lambda b: b.cy)
-                app.device.click_element(target)
-                logger.debug("modal: 尝试取消按钮（stuck fallback）")
-                ctx.record_operation("handle_modal", target="cancel_fallback",
-                                     details={"stuck_count": stuck_count})
-                time.sleep(0.8)
-                return HandlerResult.ok("modal: cancel fallback", sleep_after=0.5)
 
         # ── P_DRINK_DETAIL 安全处理 ──
         # P饮料详情模态不应默认点击“使う”（会消耗饮料），

@@ -1,8 +1,8 @@
 <script setup>
-import apis from "@/scripts/apis.js";
-import message from "@/scripts/utils/message.js";
 import app from "@/main.js";
 import {useAppStore} from "@/stores/app.ts";
+import { translateAny } from '@/scripts/i18n/translate'
+import SelectChallengeOrder from "@/components/lists/config/task_settings/auto_contest/select_challenge_order.vue";
 
 const props = defineProps({
   task: Object,
@@ -18,15 +18,15 @@ let task_config = store.get_task_config(props.task_name)
     <v-row dense>
       <v-col cols="12">
         <v-switch
-          label="挑战前自动重新配置队伍"
-          hint="如果队伍中有空位仍会触发自动配置"
+          :label="translateAny(task_config.auto_reconfigure_team_before_challenge.ui.label)"
+          :hint="translateAny(task_config.auto_reconfigure_team_before_challenge.ui.hint)"
           :color="app.config.globalProperties.$theme.color"
           persistent-hint
           v-model="task_config.auto_reconfigure_team_before_challenge.value"
         />
       </v-col>
       <v-col cols="12">
-        <select_challenge_order :data="task_config"/>
+        <SelectChallengeOrder :data="task_config"/>
       </v-col>
     </v-row>
   </v-form>

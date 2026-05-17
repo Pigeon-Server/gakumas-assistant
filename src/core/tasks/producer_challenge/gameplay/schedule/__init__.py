@@ -10,7 +10,6 @@ from src.constants.game.text.produce_text import ProduceText
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.inference.ocr_engine import OCRService
 from src.core.tasks.producer_challenge.shared.common import (
-    first_matching_index,
     infer_param_kind,
     invoke_decision_strategy,
     ocr_text,
@@ -69,10 +68,17 @@ _SCHEDULE_SCREEN_OCR = OCRService()
 _PRESENT_SUPPORT_BONUS_RE = re.compile(r"\+\d+")
 _SCHEDULE_LOOKUP_NOISE_TOKENS = ProduceText.SCHEDULE_LOOKUP_NOISE_TOKENS
 _ACTION_INFO_OCR = OCRService()
+_SCHEDULE_PENDING_CLICK_COUNT_KEY = "pending_schedule_click_count"
+_SCHEDULE_ACTION_DOUBLE_TAP_INTERVAL = 0.2
 _SCHEDULE_ACTION_DECISION_POSITIONS = frozenset({
     GameplayPosition.SCHEDULE_IDLE,
     GameplayPosition.SCHEDULE_RECOMMEND,
 })
+
+
+def _detect_recommended_kind(app: "AppProcessor") -> str:
+    """兼容旧测试入口，实际语义为周行动预览提示属性。"""
+    return _detect_preview_hint_kind(app)
 
 
 def _is_schedule_action_decision_position(position: str) -> bool:
@@ -111,6 +117,50 @@ def _has_decided_schedule_action_this_week(ctx: "ProduceContext") -> bool:
 def _mark_schedule_action_decided(ctx: "ProduceContext") -> None:
     """标记`mark_schedule_action_decided`。"""
     ctx.handler_state["schedule_action_decided_week"] = int(ctx.current_week)
+
+
+def _get_pending_schedule_click_count(ctx: "ProduceContext") -> int:
+    """读取当前待确认行程动作已经点击了几次。"""
+    try:
+        return max(0, int(ctx.handler_state.get(_SCHEDULE_PENDING_CLICK_COUNT_KEY) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_pending_schedule_target(ctx: "ProduceContext", candidate: "ScheduleActionCandidate", *, click_count: int = 0) -> None:
+    """记录当前待确认的行程动作。"""
+    ctx.pending_schedule_index = candidate.index
+    ctx.pending_schedule_label = (
+        candidate.title or candidate.kind or candidate.action_id or f"action_{candidate.index + 1}"
+    )
+    ctx.handler_state["pending_schedule_action_id"] = str(candidate.action_id or "").strip()
+    ctx.handler_state[_SCHEDULE_PENDING_CLICK_COUNT_KEY] = max(0, int(click_count))
+
+
+def _resolve_pending_schedule_target(
+    candidates: list["ScheduleActionCandidate"],
+    ctx: "ProduceContext",
+) -> "ScheduleActionCandidate" | None:
+    """根据上下文中的 pending 信息找回当前要确认的日程动作。"""
+    pending_action_id = str(ctx.handler_state.get("pending_schedule_action_id") or "").strip()
+    if pending_action_id:
+        for candidate in candidates:
+            if str(candidate.action_id or "").strip() == pending_action_id:
+                return candidate
+
+    pending_label = _normalize_schedule_text(ctx.pending_schedule_label)
+    if pending_label:
+        for candidate in candidates:
+            if pending_label in {
+                _normalize_schedule_text(candidate.title),
+                _normalize_schedule_text(candidate.action_id),
+            }:
+                return candidate
+
+    if ctx.pending_schedule_index is not None and 0 <= ctx.pending_schedule_index < len(candidates):
+        return candidates[ctx.pending_schedule_index]
+
+    return None
 
 
 def _should_read_p_notebook_before_decision(
@@ -561,8 +611,8 @@ def _collect_schedule_action_boxes(app: "AppProcessor") -> list:
     return ordered
 
 
-def _detect_recommended_kind(app: "AppProcessor") -> str:
-    """检测recommended、kind并返回结果。
+def _detect_preview_hint_kind(app: "AppProcessor") -> str:
+    """检测周行动预览提示对应的属性类型。
 
     Args:
         app: 应用处理器实例，负责截图、检测结果访问与点击/滑动交互。
@@ -570,10 +620,10 @@ def _detect_recommended_kind(app: "AppProcessor") -> str:
     Returns:
         str: 处理后的文本结果。
     """
-    recommend_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_RECOMMEND_ACTION)
-    if not recommend_boxes:
+    preview_boxes = app.latest_results.filter_by_label(ProducerLabels.PC_RECOMMEND_ACTION)
+    if not preview_boxes:
         return "unknown"
-    return infer_param_kind(ocr_text(recommend_boxes.first().frame))
+    return infer_param_kind(ocr_text(preview_boxes.first().frame))
 
 
 def _looks_like_present_support_line(text: str) -> bool:
@@ -702,7 +752,7 @@ def collect_schedule_action_candidates(
         return _collect_lesson_option_candidates(app, ctx, position=position)
 
     action_boxes = _collect_schedule_action_boxes(app)
-    recommended_kind = _detect_recommended_kind(app)
+    preview_hint_kind = _detect_preview_hint_kind(app)
     selected_index = ctx.pending_schedule_index if position == "schedule_selected" else None
     pending_action_id = (
         str(ctx.handler_state.get("pending_schedule_action_id") or "").strip()
@@ -750,7 +800,7 @@ def collect_schedule_action_candidates(
                     index=index,
                     title=action_id,
                     kind=param_kind,
-                    recommended=param_kind == recommended_kind and param_kind != "unknown",
+                    recommended=param_kind == preview_hint_kind and param_kind != "unknown",
                     selected=selected_index == index,
                     box=box,
                     action_id=action_id,
@@ -777,7 +827,7 @@ def collect_schedule_action_candidates(
                 index=index,
                 title=title,
                 kind=kind,
-                recommended=kind == recommended_kind and kind != "unknown",
+                recommended=kind == preview_hint_kind and kind != "unknown",
                 selected=selected_index == index,
                 box=box,
                 metadata={
@@ -938,17 +988,11 @@ def decide_schedule_action(
         fallback_reason = "pending 索引"
 
     if fallback_index is None:
-        recommended_index = first_matching_index(candidates, kind=_detect_recommended_kind(app))
-        if recommended_index is not None:
-            fallback_index = recommended_index
-            fallback_reason = "推荐类型"
-
-    if fallback_index is None:
-        for index, candidate in enumerate(candidates):
-            if candidate.recommended:
-                fallback_index = index
-                fallback_reason = "推荐候选"
-                break
+        local_preference = dict(decision_state.get("local_preference", {}) or {})
+        preferred_index = local_preference.get("index")
+        if isinstance(preferred_index, int) and 0 <= preferred_index < len(candidates):
+            fallback_index = preferred_index
+            fallback_reason = str(local_preference.get("reason") or "本地偏好")
 
     if fallback_index is None:
         fallback_index = 0
@@ -1018,35 +1062,62 @@ def execute_schedule_step(
     if not candidates:
         return None
 
+    pending_target = _resolve_pending_schedule_target(candidates, ctx)
+    pending_click_count = _get_pending_schedule_click_count(ctx)
+
     target_index: int
+    target = pending_target
     if position == GameplayPosition.SCHEDULE_SELECTED:
         # 确认态应直接确认当前已选中的行动，避免再次触发策略决策。
-        selected_candidate = next((candidate for candidate in candidates if candidate.selected), None)
-        if selected_candidate is not None:
-            target = selected_candidate
-            target_index = target.index
-        elif (
-            ctx.pending_schedule_index is not None
-            and 0 <= ctx.pending_schedule_index < len(candidates)
-        ):
-            target_index = ctx.pending_schedule_index
-            target = candidates[target_index]
-            logger.debug(
-                "schedule: schedule_selected 未检测到 selected 标记，回退 pending 索引 {}",
-                target_index,
-            )
+        if target is None:
+            selected_candidate = next((candidate for candidate in candidates if candidate.selected), None)
+            if selected_candidate is not None:
+                target = selected_candidate
+                target_index = target.index
+            elif (
+                ctx.pending_schedule_index is not None
+                and 0 <= ctx.pending_schedule_index < len(candidates)
+            ):
+                target_index = ctx.pending_schedule_index
+                target = candidates[target_index]
+                logger.debug(
+                    "schedule: schedule_selected 未检测到 selected 标记，回退 pending 索引 {}",
+                    target_index,
+                )
+            else:
+                logger.warning("schedule: schedule_selected 缺少已选中候选，回退到策略决策")
+                target_index = decide_schedule_action(app, ctx, candidates, position=position)
+                target = candidates[target_index]
         else:
-            logger.warning("schedule: schedule_selected 缺少已选中候选，回退到策略决策")
+            target_index = target.index
+        if target is not None:
+            _set_pending_schedule_target(ctx, target, click_count=pending_click_count)
+        if target is not None and target.box is not None and pending_click_count < 2:
+            app.device.click_element(target.box)
+            pending_click_count += 1
+            ctx.handler_state[_SCHEDULE_PENDING_CLICK_COUNT_KEY] = pending_click_count
+    else:
+        if target is None:
             target_index = decide_schedule_action(app, ctx, candidates, position=position)
             target = candidates[target_index]
-    else:
-        target_index = decide_schedule_action(app, ctx, candidates, position=position)
-        target = candidates[target_index]
+            _set_pending_schedule_target(ctx, target, click_count=0)
+            pending_click_count = 0
+        else:
+            target_index = target.index
+        if target.box is not None and target.metadata.get("is_vacation") is not True and pending_click_count < 2:
+            app.device.click_element(target.box)
+            pending_click_count += 1
+            ctx.handler_state[_SCHEDULE_PENDING_CLICK_COUNT_KEY] = pending_click_count
+        elif target.box is not None and target.metadata.get("is_vacation") is not True:
+            logger.debug(
+                "schedule: pending action 已完成双击，等待进入确认页 index={}",
+                target.index,
+            )
     if _is_schedule_action_decision_position(position):
         _mark_schedule_action_decided(ctx)
 
     logger.debug(
-        "schedule step: position={}, target_index={}, title={!r}, kind={}, recommended={}",
+        "schedule step: position={}, target_index={}, title={!r}, kind={}, preview_hint_match={}",
         position,
         target_index,
         target.title,
@@ -1054,9 +1125,8 @@ def execute_schedule_step(
         target.recommended,
     )
 
-    app.device.click_element(target.box)
-
     if target.metadata.get("is_vacation"):
+        app.device.click_element(target.box)
         confirmed = _confirm_vacation_modal(app)
         ctx.record_operation(
             "confirm_vacation",
@@ -1121,18 +1191,14 @@ def execute_schedule_step(
             details={
                 "index": target.index,
                 "kind": target.kind,
-                "recommended": target.recommended,
+                "preview_hint_match": target.recommended,
                 "action_id": target.action_id,
                 "db_id": target.db_id,
             },
         )
         return ScheduleStepResult(status="confirmed", candidate=target)
 
-    ctx.pending_schedule_index = target.index
-    ctx.pending_schedule_label = (
-        target.title or target.kind or target.action_id or f"action_{target.index + 1}"
-    )
-    ctx.handler_state["pending_schedule_action_id"] = str(target.action_id or "").strip()
+    _set_pending_schedule_target(ctx, target, click_count=pending_click_count)
     ctx.record_operation(
         "select_schedule_action",
         target=ctx.pending_schedule_label,

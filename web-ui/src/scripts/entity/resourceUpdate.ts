@@ -1,5 +1,7 @@
+import type { I18nText } from '@/scripts/i18n/types'
+
 export interface ResourceRepositoryStatus {
-  name: string
+  name: I18nText | string
   path: string
   exists: boolean
   dirty: boolean
@@ -12,7 +14,7 @@ export interface ResourceRepositoryStatus {
 }
 
 export interface ResourceBootstrapMissingResource {
-  name: string
+  name: I18nText | string
   path: string
   required_count: number
   missing_count: number
@@ -22,9 +24,9 @@ export interface ResourceBootstrapMissingResource {
 export interface ResourceUpdateProgress {
   active: boolean
   phase: string
-  title: string
-  message: string
-  repository: string
+  title: I18nText | string
+  message: I18nText | string
+  repository: I18nText | string
   repository_path: string
   current_step: number
   total_steps: number
@@ -47,7 +49,7 @@ export interface ResourceUpdateStatus {
   has_update: boolean
   last_checked_at: string | null
   next_check_at: string | null
-  last_error: string
+  last_error: I18nText | string
   update_signature: string
   required_resources_ready: boolean
   bootstrap_required: boolean

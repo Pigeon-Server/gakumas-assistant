@@ -27,3 +27,30 @@
 > DMM模式下Gakumas Assistant会自动申请管理员权限用于屏幕点击  
 
 此外，**必须关闭汉化插件**，当前版本仍未支持汉化版本。
+
+## 命令行模式
+如果只想通过命令行使用程序，可以运行根目录下的 `app.py`，它不会启动 WebUI 或 HttpAPI，也不是 TUI 界面。
+
+常用命令：
+```bash
+python app.py --cli status
+python app.py --cli tasks list
+python app.py --cli tasks run
+python app.py --cli tasks run auto_purchase
+python app.py --cli tasks run --from dispatch_work
+python app.py --cli config get base.run_mode
+python app.py --cli config set base.adb_connect_mode USB
+python app.py --cli config export -o config.backup.json
+python app.py --cli config import config.backup.json
+python app.py --cli resources status
+python app.py --cli resources check
+python app.py --cli resources apply
+python app.py --cli adb devices --usb
+```
+
+补充说明：
+- `tasks run` 不传任务 ID 时执行全部已启用的自动任务。
+- `tasks run <任务ID>` 只执行单个任务。
+- `tasks run --from <任务ID>` 从指定任务开始执行后续自动任务。
+- `status` 默认不会初始化设备和模型；需要完整状态时使用 `status --full`。
+- 需要脚本集成时给命令加 `--json`，输出会使用 JSON 格式。

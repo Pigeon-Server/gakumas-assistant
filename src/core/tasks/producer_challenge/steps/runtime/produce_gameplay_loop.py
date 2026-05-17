@@ -31,16 +31,20 @@ from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.produce_text import ProduceText
 from src.constants.game.text.general_text import GeneralText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
+from src.constants.yolo.labels.producer_Labels import ProducerLabels
+from src.core.tasks.producer_challenge.gameplay.modal import _is_connection_error_modal, _click_modal_action_direct
 from src.constants.yolo.model_type import YoloModelType
 from src.core.tasks.base_ui.start_game import action__wait_enter_home
 from src.core.tasks.producer_challenge.context import GameplayPhase
 from src.core.tasks.producer_challenge.shared.common import (
     click_relative_point,
     normalize_text,
+    ocr_text,
     probe_fast_forward_enabled_state,
 )
 from src.core.tasks.producer_challenge.gameplay.decision import sync_visible_planning_context
 from src.core.tasks.producer_challenge.gameplay import build_default_dispatcher
+from src.core.tasks.producer_challenge.gameplay.strategy.llm_strategy import LLMStrategy
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.steps.entry.navigate_to_produce import (
     open_produce_entry_from_home,
@@ -52,6 +56,7 @@ from src.core.tasks.producer_challenge.ui import (
     find_button,
 )
 from src.entity.Game.Page.Types.index import GamePageTypes
+from src.utils.debug_tools import DebugTools
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -61,6 +66,11 @@ if TYPE_CHECKING:
 
 _STORY_JP_TEXT_RE = re.compile(r"[ぁ-んァ-ヶ一-龯]")
 _STORY_EPISODE_RE = re.compile(r"\d+\s*話")
+
+# ── 弹窗中间件常量 ──
+_MODAL_GLOBAL_POLL_SLEEP = 0.4   # 中间件轮询间歇
+_MODAL_GLOBAL_MAX_POLLS = 10     # 最大轮询次数（4秒，足够覆盖大多数弹窗出现）
+_MODAL_GLOBAL_STABLE_POLLS = 2   # 目标状态连续命中次数
 
 # ── 培育收尾：结果链推进直到回到主页 ──
 _FINISHING_MAX_ITERATIONS = 120   # 最多轮询次数（约2分钟）
@@ -84,8 +94,7 @@ def _finish_produce_with_base_ui(
       4. 连续多次确认主页后返回 True
     """
     logger.info("produce_finishing: 切换到 BASE_UI 模型，开始推进结果链")
-    app.yolo_engine.load_model(YoloModelType.BASE_UI)
-    sleep(1.0)
+    app.switch_yolo_model(YoloModelType.BASE_UI, settle_seconds=1.0)
 
     home_count = 0  # 连续检测到主页的次数
 
@@ -171,9 +180,7 @@ def _switch_model_for_recovery(
 ) -> None:
     """切换 YOLO 模型，并等待首帧稳定，供外页恢复流程复用。"""
     logger.info(f"recovery: 切换 YOLO 模型到 {model_type}")
-    app.yolo_engine.load_model(model_type)
-    if settle_seconds > 0:
-        sleep(settle_seconds)
+    app.switch_yolo_model(model_type, settle_seconds=settle_seconds)
 
 
 def _looks_like_external_recovery_page(frame_text: str) -> bool:
@@ -200,6 +207,8 @@ def _should_fast_poll_unknown_retry(ctx: "ProduceContext") -> bool:
     reason = str(retry_override.get("reason", ""))
     return reason.startswith("result_memory_generate_recovery") or reason.startswith(
         "result_chain_tap_recovery"
+    ) or reason.startswith("result_reward_overlay_recovery") or reason.startswith(
+        "result_closeout_summary_recovery"
     )
 
 
@@ -652,6 +661,13 @@ class ProduceGameplayLoopStep(ProduceStep):
     """驱动 gameplay 主循环，在各 phase handler 之间持续调度直到退出。"""
 
     step_name = "produce_gameplay_loop"
+
+    @staticmethod
+    def _flush_llm_session(ctx: "ProduceContext") -> None:
+        """在主循环退出前尽量写回局内会话摘要。"""
+        strategy = getattr(ctx, "schedule_strategy", None)
+        if isinstance(strategy, LLMStrategy):
+            strategy.flush_session(ctx)
 
     def execute(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         logger.info("进入培育主循环")

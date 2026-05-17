@@ -1,7 +1,10 @@
 <script setup>
+import { computed } from "vue";
+
 import app from "@/main.js";
 import BaseAdbDevices from "@/components/lists/config/base/base__adb_devices.vue";
 import BaseDisabledTaskList from "@/components/lists/config/base/base__disabled_task_list.vue";
+import { formatLocalizedList, translateAny, translateKey, translateOptionTitle } from '@/scripts/i18n/translate'
 
 const props = defineProps({
   config: {
@@ -32,17 +35,22 @@ const componentType = computed(() => {
 
 const isTextField = computed(() => ["text", "number"].includes(componentType.value))
 const selectHint = computed(() => {
-  const baseHint = props.item?.ui?.hint
+  const baseHint = translateAny(props.item?.ui?.hint)
   const disabledMessages = selectItems.value
     .filter(option => option?.disabled && option?.disabled_reason)
-    .map(option => `${option.title}：${option.disabled_reason}`)
+    .map(option => translateKey('config.optionDisabledItem', {
+      title: translateAny(option.title),
+      reason: translateAny(option.disabled_reason),
+    }))
 
   if (!disabledMessages.length) {
     return baseHint
   }
 
-  const unavailableHint = `当前不可选：${disabledMessages.join("；")}`
-  return [baseHint, unavailableHint].filter(Boolean).join(" ")
+  const unavailableHint = translateKey('config.unavailableOptionsPrefix', {
+    items: formatLocalizedList(disabledMessages, { style: 'long', type: 'conjunction' }),
+  })
+  return [baseHint, unavailableHint].filter(Boolean).join(' ')
 })
 
 function cloneValue(value) {
@@ -70,8 +78,8 @@ function selectItemProps(option) {
     <v-switch
       class="config-auto-field config-auto-field--switch"
       v-model="item.value"
-      :label="item.ui?.label"
-      :hint="item.ui?.hint"
+      :label="translateAny(item.ui?.label)"
+      :hint="translateAny(item.ui?.hint)"
       :color="themeColor"
       density="comfortable"
       persistent-hint
@@ -82,12 +90,12 @@ function selectItemProps(option) {
       class="config-auto-field"
       v-model="item.value"
       :items="selectItems"
-      :label="item.ui?.label"
+      :label="translateAny(item.ui?.label)"
       :hint="selectHint"
       :color="themeColor"
       :item-color="themeColor"
       :item-props="selectItemProps"
-      item-title="title"
+      :item-title="translateOptionTitle"
       item-value="value"
       density="comfortable"
       persistent-hint
@@ -95,9 +103,12 @@ function selectItemProps(option) {
       <template #item="{ props: optionProps, item: optionItem }">
         <v-list-item
           v-bind="optionProps"
-          :title="optionItem.raw?.title"
-          :subtitle="optionItem.raw?.disabled_reason || optionItem.raw?.description"
+          :title="translateAny(optionItem.raw?.title)"
+          :subtitle="translateAny(optionItem.raw?.disabled_reason || optionItem.raw?.description)"
         />
+      </template>
+      <template #selection="{ item: optionItem }">
+        <span>{{ translateAny(optionItem.raw?.title) }}</span>
       </template>
     </v-select>
   </v-list-item>
@@ -105,8 +116,8 @@ function selectItemProps(option) {
     <v-text-field
       class="config-auto-field"
       v-model="item.value"
-      :label="item.ui?.label"
-      :hint="item.ui?.hint"
+      :label="translateAny(item.ui?.label)"
+      :hint="translateAny(item.ui?.hint)"
       :color="themeColor"
       prepend-inner-icon="md:schedule"
       density="comfortable"
@@ -126,8 +137,8 @@ function selectItemProps(option) {
     <v-text-field
       class="config-auto-field"
       v-model="item.value"
-      :label="item.ui?.label"
-      :hint="item.ui?.hint"
+      :label="translateAny(item.ui?.label)"
+      :hint="translateAny(item.ui?.hint)"
       :type="componentType === 'number' ? 'number' : 'text'"
       :append-icon="item.ui?.resettable ? 'md:replay' : undefined"
       :prepend-inner-icon="item.ui?.readonly ? 'md:lock_outline' : undefined"
