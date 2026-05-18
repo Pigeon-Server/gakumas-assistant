@@ -15,6 +15,7 @@ from src.entity.Game.Page.Types.index import GamePageTypes
 from src.entity.Yolo import Yolo_Box
 from src.utils.debug_tools import DebugTools
 from src.utils.game_database_tools import GakumasDatabase_ProduceCardDataUtils
+from src.utils.i18n_tools import i18n_text
 from src.utils.opencv_tools import check_frame_change
 from src.utils.string_tools import string_match
 from src.utils.ui_message_tools import UIMessage
@@ -33,7 +34,7 @@ def __navigate_to_page(app: "AppProcessor") -> bool:
     current_location = app.game_utils.update_current_location()
     while current_location != GamePageTypes.SUB_MENU.PRODUCER_ILLUSTRATED:
         logger.warning(f"Skill storage refresh requires P図鑑 page, current location: {current_location}")
-        message_tools.info("任务已挂起，请手动切换到图鉴页面", 30)
+        message_tools.info(i18n_text("backend.task.suspendSwitchToAlbum", fallback="任务已挂起，请手动切换到图鉴页面"), 30)
         app.task_queue.suspend_running_task()
         current_location = app.game_utils.update_current_location()
 
@@ -44,13 +45,13 @@ def __navigate_to_page(app: "AppProcessor") -> bool:
                 app.device.click_element(tab_item)
                 return True
 
-    message_tools.error("无法找到TabBar，刷新失败")
+    message_tools.error(i18n_text("backend.task.tabBarNotFound", fallback="无法找到TabBar，刷新失败"))
     return False
 
 def __validate_environment(app: "AppProcessor") -> bool:
     """验证环境"""
     if not app.game_utils.wait_for_label(BaseUILabels.BUTTON):
-        message_tools.error("无法找到任务所需的按钮，刷新失败")
+        message_tools.error(i18n_text("backend.task.requiredButtonNotFound", fallback="无法找到任务所需的按钮，刷新失败"))
         return False
 
     buttons = ButtonList(app.latest_results)
@@ -61,10 +62,10 @@ def __validate_environment(app: "AppProcessor") -> bool:
     idol_switch = buttons.get_button_by_text("切り替え")
 
     if not enhance_btn:
-        message_tools.error("无法找到卡属性切换按钮，刷新失败")
+        message_tools.error(i18n_text("backend.task.cardAttributeSwitchNotFound", fallback="无法找到卡属性切换按钮，刷新失败"))
         return False
     if not idol_switch:
-        message_tools.error("无法找到偶像切换按钮，刷新失败")
+        message_tools.error(i18n_text("backend.task.idolSwitchNotFound", fallback="无法找到偶像切换按钮，刷新失败"))
         return False
     return True
 

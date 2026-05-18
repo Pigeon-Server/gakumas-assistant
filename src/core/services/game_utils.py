@@ -12,6 +12,7 @@ from src.entity.Game.Page.Types.index import GamePageTypes
 from src.entity.Yolo import Yolo_Box
 from src.utils.debug_tools import DebugTools
 from src.utils.game_tools import get_current_location, get_modal
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.opencv_tools import compute_ssim_score
 from src.utils.performance_tools import timeit
@@ -54,30 +55,30 @@ class GameUtils:
         模态缺少标题框时直接抛出异常，避免把结构异常伪装成“未稳定”。
         """
         if modal is None:
-            raise ValueError("无法读取模态标题位置：modal 为空")
+            raise ValueError(i18n_text("backend.gameUtils.modalHeaderTopEmpty", fallback="无法读取模态标题位置：modal 为空"))
         header_box = modal.header_box
         if header_box is None:
-            raise ValueError(f"模态 '{modal.modal_title}' 缺少 header_box，无法判断稳定性")
+            raise ValueError(i18n_text("backend.gameUtils.modalMissingHeaderBox", fallback=f"模态 '{modal.modal_title}' 缺少 header_box，无法判断稳定性", title=modal.modal_title or ""))
         header_y = header_box.y
         if header_y is not None:
             return float(header_y)
         header_cy = header_box.cy
         if header_cy is not None:
             return float(header_cy)
-        raise ValueError(f"模态 '{modal.modal_title}' 的 header_box 缺少 y/cy 坐标，无法判断稳定性")
+        raise ValueError(i18n_text("backend.gameUtils.modalHeaderMissingCoords", fallback=f"模态 '{modal.modal_title}' 的 header_box 缺少 y/cy 坐标，无法判断稳定性", title=modal.modal_title or ""))
 
     def _build_modal_signature(self, modal: Optional[Modal]) -> tuple | None:
         if modal is None:
-            raise ValueError("无法构建模态签名：modal 为空")
+            raise ValueError(i18n_text("backend.gameUtils.modalSignatureEmpty", fallback="无法构建模态签名：modal 为空"))
         if modal.header_box is None:
-            raise ValueError(f"模态 '{modal.modal_title}' 缺少 header_box，无法构建签名")
+            raise ValueError(i18n_text("backend.gameUtils.modalSignatureMissingHeader", fallback=f"模态 '{modal.modal_title}' 缺少 header_box，无法构建签名", title=modal.modal_title or ""))
         header_center = self._get_box_center(modal.header_box)
         if header_center is None:
-            raise ValueError(f"模态 '{modal.modal_title}' 的 header_box 无法读取中心点")
+            raise ValueError(i18n_text("backend.gameUtils.modalHeaderNoCenter", fallback=f"模态 '{modal.modal_title}' 的 header_box 无法读取中心点", title=modal.modal_title or ""))
         confirm_center = self._get_box_center(modal.confirm_button)
         cancel_center = self._get_box_center(modal.cancel_button)
         if confirm_center is None and cancel_center is None:
-            raise ValueError(f"模态 '{modal.modal_title}' 缺少可用的操作按钮，无法构建签名")
+            raise ValueError(i18n_text("backend.gameUtils.modalNoActionButtons", fallback=f"模态 '{modal.modal_title}' 缺少可用的操作按钮，无法构建签名", title=modal.modal_title or ""))
         return (
             modal.modal_title or "",
             header_center,

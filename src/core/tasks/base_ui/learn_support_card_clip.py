@@ -14,6 +14,7 @@ from src.entity.Game.Components.SupportCard import (
 )
 from src.utils.debug_tools import DebugTools
 from src.utils.game_database_tools import GakumasDatabase_SupportCardDataUtils
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.opencv_tools import check_frame_change
 from src.utils.string_tools import MatchConfig
@@ -81,7 +82,7 @@ def action__learn_support_card_clip(app: "AppProcessor") -> bool:
     max_scroll_attempts = 50
     scroll_count = 0
 
-    message_tools.info("开始支援卡 CLIP 学习，请确保已进入支援卡列表页面", 5)
+    message_tools.info(i18n_text("backend.task.startSupportCardCLIP", fallback="开始支援卡 CLIP 学习，请确保已进入支援卡列表页面"), 5)
     sleep(2)
 
     while scroll_count < max_scroll_attempts:

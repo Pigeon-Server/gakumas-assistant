@@ -27,6 +27,7 @@ from src.core.tasks.producer_challenge.ui import (
 )
 from src.entity.Yolo import Yolo_Box, Yolo_Results
 from src.utils.debug_tools import DebugTools
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.opencv_tools import compute_ssim_score
 from src.utils.string_tools import MatchConfig
@@ -1078,7 +1079,7 @@ class CollectIdolPageInfoStep(ProduceStep):
         modal = app.game_utils.try_get_modal(no_body=True)
         dismiss_point = _resolve_modal_overlay_dismiss_point(modal, app.latest_frame.shape) if modal else None
         if dismiss_point is None:
-            raise RuntimeError("未找到育成情報关闭按钮，也无法推导蒙层关闭点")
+            raise RuntimeError(i18n_text("backend.task.trainingInfoCloseButtonNotFound", fallback="未找到育成情報关闭按钮，也无法推导蒙层关闭点"))
         app.device.click(dismiss_point[0], dismiss_point[1], "close-training-info-fallback")
         sleep(0.5)
         wait_frame_stable(app, timeout=2.0)

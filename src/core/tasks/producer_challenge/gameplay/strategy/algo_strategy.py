@@ -25,6 +25,7 @@ from src.utils.game_database_tools import (
     GakumasDatabase_ProduceDrinkDataUtils,
     GakumasDatabase_ProduceItemDataUtils,
 )
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 
 from .algo_effect_evaluator import EffectEvaluator
@@ -114,7 +115,7 @@ def _build_idol_plan_info(ctx: ProduceContext) -> IdolPlanInfo:
             except Exception:
                 idol_card = None
     if idol_card is None:
-        raise ValueError("无法获取偶像卡信息")
+        raise ValueError(i18n_text("backend.task.idolCardInfoNotFound", fallback="无法获取偶像卡信息"))
     return IdolPlanInfo(
         plan_type=_parse_plan_type(getattr(idol_card, "planType", "")),
         vocal_growth_permil=_coerce_int(getattr(idol_card, "produceVocalGrowthRatePermil", 0)),

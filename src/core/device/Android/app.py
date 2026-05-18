@@ -414,7 +414,7 @@ class Android_App(BaseDevice):
         logger.warning("Touch service unavailable, reinitializing Android touch runtime once")
         self._reset_runtime_services()
         if not self.__connect_ADB():
-            raise RuntimeError(self.__unavailable_reason or "重新连接 ADB 设备失败")
+            raise RuntimeError(self.__unavailable_reason or i18n_text("backend.adb.reconnectFailed", fallback="重新连接 ADB 设备失败"))
         self.__init_capture_service()
         self.__init_touch_service()
         if (
@@ -424,7 +424,10 @@ class Android_App(BaseDevice):
             self.__connect_uiautomator2()
         service = self.__get_touch_service()
         if service is None:
-            self._set_unavailable("touch_service_unavailable", "点击失败：触摸服务不可用")
+            self._set_unavailable("touch_service_unavailable", i18n_text(
+                    "backend.adb.touchServiceUnavailable",
+                    fallback="点击失败：触摸服务不可用",
+                ))
             raise RuntimeError(self.__unavailable_reason)
         return service
 

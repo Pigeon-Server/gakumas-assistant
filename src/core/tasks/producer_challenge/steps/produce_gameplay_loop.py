@@ -33,6 +33,7 @@ from src.core.tasks.producer_challenge.ui import (
     detect_gameplay_phase,
     get_pipeline_position,
 )
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -93,7 +94,7 @@ class ProduceGameplayLoopStep(ProduceStep):
             # 连续无法识别画面安全阈值
             if ctx.consecutive_unknowns >= max_unknown:
                 logger.error(f"连续 {max_unknown} 次无法识别画面，安全退出循环")
-                raise RuntimeError("培育主循环: 连续无法识别画面阈值超出")
+                raise RuntimeError(i18n_text("backend.task.consecutiveUnknownsExceeded", fallback="培育主循环: 连续无法识别画面阈值超出"))
 
             # 分发到对应 handler
             result = dispatcher.dispatch(app, ctx, phase, position)

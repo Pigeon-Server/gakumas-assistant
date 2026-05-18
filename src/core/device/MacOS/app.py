@@ -10,6 +10,7 @@ from src.core.device.MacOS.playtools_adapter import MacPlayToolsAdapter
 from src.core.services.config_service import ConfigService
 from src.entity.BaseDevice import BaseDevice
 from src.utils.debug_tools import DebugTools
+from src.utils.i18n_tools import I18nText, i18n_text
 from src.utils.logger import logger
 from src.utils.task_debug_tools import (
     record_task_click,
@@ -30,14 +31,14 @@ class MacOS_App(BaseDevice):
     _host: str = "localhost"
     _port: int = 0
     _adapter: Optional[MacPlayToolsAdapter] = None
-    _unavailable_reason: str = ""
+    _unavailable_reason: I18nText | str = ""
     _unavailable_code: str = ""
 
     def __init__(self, host: str = "localhost", port: int = 0):
         self._host = host
         self._port = port
         self._adapter = None
-        self._unavailable_reason = ""
+        self._unavailable_reason: I18nText | str = ""
         self._unavailable_code = ""
 
         config_service = ConfigService()
@@ -45,8 +46,10 @@ class MacOS_App(BaseDevice):
             port = int(config_service.base.playtools_port or 0)
         if port == 0:
             raise ValueError(
-                "MacPlayTools 端口未配置。请在 PlayCover 中启动游戏后，"
-                "从窗口标题栏获取 [localhost:端口号] 并填入配置。"
+                i18n_text(
+                    "backend.device.mac.unavailable.port_not_configured",
+                    fallback="MacPlayTools 端口未配置。请在 PlayCover 中启动游戏后，从窗口标题栏获取 [localhost:端口号] 并填入配置。",
+                )
             )
 
         self._host = host
@@ -56,9 +59,11 @@ class MacOS_App(BaseDevice):
         self._unavailable_code = ""
 
         if not self._adapter.connect():
-            self._unavailable_reason = (
-                f"无法连接到 MacPlayTools ({host}:{port})。"
-                "请确认 PlayCover 中的游戏已启动且 MaaTools 已启用。"
+            self._unavailable_reason = i18n_text(
+                "backend.device.mac.unavailable.connect_failed",
+                fallback=f"无法连接到 MacPlayTools ({host}:{port})。请确认 PlayCover 中的游戏已启动且 MaaTools 已启用。",
+                host=host,
+                port=port,
             )
             self._unavailable_code = "playtools_connect_failed"
             logger.warning(self._unavailable_reason)
@@ -75,7 +80,7 @@ class MacOS_App(BaseDevice):
     def __bool__(self) -> bool:
         return bool(self._adapter and self._adapter.connected)
 
-    def get_unavailable_reason(self) -> str:
+    def get_unavailable_reason(self) -> I18nText | str:
         return self._unavailable_reason
 
     def get_unavailable_code(self) -> str:

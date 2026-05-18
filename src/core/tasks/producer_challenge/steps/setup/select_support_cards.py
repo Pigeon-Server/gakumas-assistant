@@ -17,6 +17,7 @@ from src.core.tasks.producer_challenge.ui import (
 )
 from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Page.Types.index import GamePageTypes
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.string_tools import MatchConfig
 
@@ -64,7 +65,7 @@ class SelectSupportCardsStep(ProduceStep):
                 continue
             flag = True
         if not flag:
-            raise RuntimeError("未能完成支援卡选择")
+            raise RuntimeError(i18n_text("backend.task.supportCardSelectionFailed", fallback="未能完成支援卡选择"))
         self._advance_to_memory_selection(app)
         return True
 
@@ -78,7 +79,7 @@ class SelectSupportCardsStep(ProduceStep):
             self._preset_select(app, ctx)
             return True
         else:
-            raise ValueError(f"未知支援卡编成模式: {mode!r}")
+            raise ValueError(i18n_text("backend.task.unknownSupportCardMode", fallback=f"未知支援卡编成模式: {mode!r}", mode=mode))
 
     def _auto_select(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """执行支援卡自动编成，并关闭过程中出现的确认弹窗。

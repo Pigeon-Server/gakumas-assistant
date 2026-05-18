@@ -9,6 +9,7 @@ from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.entity.Yolo import Yolo_Box, Yolo_Results
 from src.core.inference.ocr_engine import OCRService, OCR_Result
 from src.utils.debug_tools import DebugTools
+from src.utils.i18n_tools import i18n_text
 from src.utils.opencv_tools import gen_color_mask
 from src.utils.string_tools import string_match, MatchConfig
 from src.utils.logger import logger
@@ -39,7 +40,7 @@ class ContestItem(Yolo_Box):
             None,
         )
         if not power_anchor:
-            raise ValueError("找不到[総合力合計]锚点")
+            raise ValueError(i18n_text("backend.game.combatPowerAnchorNotFound", fallback="找不到[総合力合計]锚点"))
 
         # 2. pt：最靠右上角的一个（y 最小，其次 x 最大）
         pt_result = min(ocr_results, key=lambda r: (r.y, -r.x))

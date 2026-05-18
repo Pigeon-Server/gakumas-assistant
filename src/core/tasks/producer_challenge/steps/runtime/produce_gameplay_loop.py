@@ -57,6 +57,7 @@ from src.core.tasks.producer_challenge.ui import (
 )
 from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.debug_tools import DebugTools
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -574,7 +575,7 @@ def _try_external_page_recovery(app: "AppProcessor", ctx: "ProduceContext") -> b
             action__wait_enter_home(app)
             open_produce_entry_from_home(app, timeout=10)
             if not resume_resumable_produce(app, timeout=8.0):
-                raise RuntimeError("外页恢复失败：已回到主页并打开 Produce，但未命中未完成培育再开弹窗")
+                raise RuntimeError(i18n_text("backend.task.externalPageRecoveryFailed", fallback="外页恢复失败：已回到主页并打开 Produce，但未命中未完成培育再开弹窗"))
             logger.success("recovery: 已通过主页入口恢复未完成培育")
 
         ctx.handler_state["unknown_retry_override"] = {
@@ -684,7 +685,7 @@ class ProduceGameplayLoopStep(ProduceStep):
                 if _finish_produce_with_base_ui(app, ctx):
                     logger.success("培育收尾完成，已检测到主页，退出主循环")
                     return True
-                raise RuntimeError("培育收尾失败：推进结果链超时仍未回到主页")
+                raise RuntimeError(i18n_text("backend.task.produceFinishTimeout", fallback="培育收尾失败：推进结果链超时仍未回到主页"))
 
             loop_sleep = 0.8
             if _should_fast_poll_unknown_retry(ctx):
@@ -792,7 +793,7 @@ class ProduceGameplayLoopStep(ProduceStep):
             # 连续无法识别画面安全阈值
             if ctx.consecutive_unknowns >= max_unknown:
                 logger.error(f"连续 {max_unknown} 次无法识别画面，安全退出循环")
-                raise RuntimeError("培育主循环: 连续无法识别画面阈值超出")
+                raise RuntimeError(i18n_text("backend.task.consecutiveUnknownsExceeded", fallback="培育主循环: 连续无法识别画面阈值超出"))
 
             # 分发到对应 handler
             result = dispatcher.dispatch(app, ctx, phase, position)
@@ -805,7 +806,12 @@ class ProduceGameplayLoopStep(ProduceStep):
                 logger.warning(f"无 handler 匹配: phase={phase}, position={position}")
                 if ctx.handler_state.get("pause_on_unknown"):
                     raise RuntimeError(
-                        f"培育主循环: 当前页面无可用 handler，已暂停等待分析 (phase={phase}, position={position})"
+                        i18n_text(
+                            "backend.task.noHandlerPause",
+                            fallback=f"培育主循环: 当前页面无可用 handler，已暂停等待分析 (phase={phase}, position={position})",
+                            phase=phase,
+                            position=position,
+                        )
                     )
                 # 优先尝试 Back Button 恢复（可能误入手牌库等子画面）
                 if _try_back_button_recovery(app):
@@ -818,4 +824,4 @@ class ProduceGameplayLoopStep(ProduceStep):
 
             total_actions += 1
 
-        raise RuntimeError(f"培育主循环: 达到最大循环次数 {ctx.max_gameplay_loops}")
+        raise RuntimeError(i18n_text("backend.task.maxGameplayLoopsExceeded", fallback=f"培育主循环: 达到最大循环次数 {ctx.max_gameplay_loops}", max_loops=ctx.max_gameplay_loops))

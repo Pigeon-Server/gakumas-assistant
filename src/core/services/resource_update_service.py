@@ -1427,7 +1427,7 @@ class ResourceUpdateService:
             if len(parts) >= 2 and parts[-1] == "HEAD":
                 commit_sha = parts[0]
         if not commit_sha:
-            raise RuntimeError("无法获取远端 HEAD")
+            raise RuntimeError(i18n_text("resource.progress.remoteHeadNotFound", fallback="无法获取远端 HEAD"))
         return {
             "commit": commit_sha,
             "branch": branch_name,
@@ -1552,7 +1552,7 @@ class ResourceUpdateService:
 
     def _run_git(self, args: list[str], timeout: int = 30):
         if not self._git_executable:
-            raise RuntimeError("未找到 git，可执行文件")
+            raise RuntimeError(i18n_text("resource.progress.gitNotFound", fallback="未找到 git，可执行文件"))
         result = subprocess.run(
             [self._git_executable, *args],
             cwd=str(get_runtime_root()),

@@ -496,10 +496,21 @@ class AppProcessor:
                 try:
                     device = create_mac_device()
                 except Exception as exc:
-                    device = UnavailableDevice(f"MacPlayTools 设备初始化失败：{exc}", "mac_playtools_init_failed")
+                    device = UnavailableDevice(
+                        i18n_text(
+                            "backend.device.mac.unavailable.init_failed",
+                            fallback=f"MacPlayTools 设备初始化失败：{exc}",
+                            message=str(exc),
+                        ),
+                        "mac_playtools_init_failed",
+                    )
                 if not device:
                     device = UnavailableDevice(
-                        getattr(device, "get_unavailable_reason", lambda: "MacPlayTools 设备不可用。")(),
+                        getattr(
+                            device,
+                            "get_unavailable_reason",
+                            lambda: i18n_text("backend.device.mac.unavailable.unknown", fallback="MacPlayTools 设备不可用。"),
+                        )(),
                         getattr(device, "get_unavailable_code", lambda: "mac_playtools_unavailable")(),
                     )
                 self._update_device_state(device)
@@ -509,10 +520,21 @@ class AppProcessor:
             try:
                 device = Android_App()
             except Exception as exc:
-                device = UnavailableDevice(f"Android 设备初始化失败：{exc}", "android_init_failed")
+                device = UnavailableDevice(
+                    i18n_text(
+                        "backend.adb.initFailed",
+                        fallback=f"Android 设备初始化失败：{exc}",
+                        message=str(exc),
+                    ),
+                    "android_init_failed",
+                )
             if not device:
                 device = UnavailableDevice(
-                    getattr(device, "get_unavailable_reason", lambda: "Android 设备不可用。")(),
+                    getattr(
+                        device,
+                        "get_unavailable_reason",
+                        lambda: i18n_text("backend.adb.unavailable", fallback="Android 设备不可用。"),
+                    )(),
                     getattr(device, "get_unavailable_code", lambda: "android_unavailable")(),
                 )
             self._update_device_state(device)
@@ -522,7 +544,14 @@ class AppProcessor:
             try:
                 device = create_windows_device()
             except Exception as exc:
-                device = UnavailableDevice(str(exc), "windows_device_unavailable")
+                device = UnavailableDevice(
+                    i18n_text(
+                        "backend.device.windows.unavailable.init_failed",
+                        fallback=f"Windows 设备初始化失败：{exc}",
+                        message=str(exc),
+                    ),
+                    "windows_device_unavailable",
+                )
             self._update_device_state(device)
             return device
         raise ValueError(f"Invalid device type: {mode}")

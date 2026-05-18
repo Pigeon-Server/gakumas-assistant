@@ -15,6 +15,7 @@ from src.entity.Game.Components.SupportCard import (
 )
 from src.utils.debug_tools import DebugTools
 from src.utils.game_database_tools import GakumasDatabase_SupportCardDataUtils
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.opencv_tools import check_frame_change
 from src.utils.string_tools import MatchConfig
@@ -790,7 +791,7 @@ def action__auto_enhance_support_cards(app: "AppProcessor") -> bool:
     auto_convert = task_config.auto_convert.value
 
     if not any(cfg["enabled"] for cfg in enhancement_config.values()):
-        message_tools.info("未配置任何需要强化的品级", 10)
+        message_tools.info(i18n_text("backend.task.noEnhancementConfigured", fallback="未配置任何需要强化的品级"), 10)
         return True
 
     width, _ = app.device.get_window_size()

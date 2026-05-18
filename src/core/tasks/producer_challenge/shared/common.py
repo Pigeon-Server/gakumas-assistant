@@ -8,6 +8,7 @@ import cv2
 
 from src.constants.game.text.produce_text import ProduceText
 from src.core.inference.ocr_engine import OCRService
+from src.utils.i18n_tools import i18n_text
 from src.utils.opencv_tools import check_status_detection
 from src.utils.string_tools import fullwidth_to_halfwidth, normalize_ocr_jp
 
@@ -448,7 +449,7 @@ def resolve_candidate_index(
         这样可以兼容 LLM、规则策略和 RL 策略返回的不同结构。
     """
     if not candidates:
-        raise ValueError("候选列表为空")
+        raise ValueError(i18n_text("backend.task.candidateListEmpty", fallback="候选列表为空"))
 
     if isinstance(decision, int):
         if 0 <= decision < len(candidates):

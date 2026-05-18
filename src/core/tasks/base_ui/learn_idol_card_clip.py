@@ -21,6 +21,7 @@ from src.core.services.idol_card_ui import (
 )
 from src.entity.Game.Components.Button import ButtonList
 from src.utils.game_database_tools import GakumasDatabase_IdolCardDataUtils
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.opencv_tools import check_frame_change, compute_ssim_score
 from src.utils.string_tools import MatchConfig, fullwidth_to_halfwidth, normalize_ocr_jp, string_match
@@ -673,12 +674,12 @@ def _learn_idol_card_variants_from_list(app: "AppProcessor") -> tuple[int, int]:
 
 def action__learn_idol_card_clip(app: "AppProcessor") -> bool:
     if app.clip_manager is None or not hasattr(app.clip_manager, "idol_card_clip"):
-        raise RuntimeError("CLIP 服务未初始化，无法学习偶像卡 CLIP")
+        raise RuntimeError(i18n_text("backend.task.clipNotInitialized", fallback="CLIP 服务未初始化，无法学习偶像卡 CLIP"))
 
     if not getattr(app, "latest_results", None) or not app.latest_results.exists_label(BaseUILabels.PRODUCT_CARD_SELECTED):
-        raise RuntimeError("当前不在偶像卡养成页面，未检测到 PRODUCT_CARD_SELECTED")
+        raise RuntimeError(i18n_text("backend.task.notOnIdolCardPage", fallback="当前不在偶像卡养成页面，未检测到 PRODUCT_CARD_SELECTED"))
 
-    message_tools.info("开始偶像卡 CLIP 学习，将按底部卡条逐张遍历", 5)
+    message_tools.info(i18n_text("backend.task.startIdolCardCLIP", fallback="开始偶像卡 CLIP 学习，将按底部卡条逐张遍历"), 5)
     wait_for_idol_card_carousel_stable(app, stable_count=2, timeout=2.5)
 
     rewound = _rewind_to_head(app)
