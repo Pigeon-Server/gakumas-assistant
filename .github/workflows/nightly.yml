@@ -10,10 +10,49 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  check-new-commits:
+    runs-on: ubuntu-latest
+    outputs:
+      has_new_commits: ${{ steps.check.outputs.has_new_commits }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new commits since last nightly release
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          # push 和 workflow_dispatch 总是执行构建
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "Triggered by ${{ github.event_name }}, proceeding with build"
+            echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 定时构建：检查上次 nightly 标签后是否有新提交
+          LAST_TAG="$(git tag -l 'nightly-*' --sort=-version:refname | head -1 || true)"
+          if [[ -z "${LAST_TAG}" ]]; then
+            echo "No previous nightly tag found, building"
+            echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          NEW_COMMITS="$(git rev-list "${LAST_TAG}..HEAD" --count)"
+          if [[ "${NEW_COMMITS}" -gt 0 ]]; then
+            echo "Found ${NEW_COMMITS} new commits since ${LAST_TAG}"
+            echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new commits since ${LAST_TAG}, skipping nightly build"
+            echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
+          fi
+
   prepare-android-touch-resources:
+    needs: check-new-commits
+    if: needs.check-new-commits.outputs.has_new_commits == 'true'
     # NDK r14b's bundled clang needs libncurses.so.5, which is not available on ubuntu-24.04.
     runs-on: ubuntu-22.04
     strategy:
@@ -123,6 +162,8 @@ jobs:
           retention-days: 1
 
   prepare-clip-model:
+    needs: check-new-commits
+    if: needs.check-new-commits.outputs.has_new_commits == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -193,8 +234,10 @@ jobs:
 
   build:
     needs:
+      - check-new-commits
       - prepare-android-touch-resources
       - prepare-clip-model
+    if: needs.check-new-commits.outputs.has_new_commits == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -332,3 +375,73 @@ jobs:
           path: ${{ env.ZIP_PATH }}
           retention-days: 1
           overwrite: true
+
+  create-release:
+    needs:
+      - check-new-commits
+      - build
+    if: needs.check-new-commits.outputs.has_new_commits == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gakumas-assistant_nightly_*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate release tag and body
+        id: release_info
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATE="$(date +%Y%m%d)"
+          COMMIT="${GITHUB_SHA::8}"
+          TAG="nightly-${DATE}-${COMMIT}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+
+          LAST_TAG="$(git tag -l 'nightly-*' --sort=-version:refname | head -1 || true)"
+          {
+            echo "## What's Changed"
+            echo ""
+            if [[ -n "${LAST_TAG}" ]]; then
+              git log "${LAST_TAG}..HEAD" --format="- %s (%h) by @%an" --no-merges || echo "- (unable to list commits)"
+            else
+              git log -30 --format="- %s (%h) by @%an" --no-merges || echo "- (unable to list commits)"
+            fi
+            echo ""
+            echo "---"
+            echo ""
+            echo "**Branch:** \`${GITHUB_REF_NAME}\`  "
+            echo "**Commit:** \`${GITHUB_SHA}\`  "
+            echo "**Date:** $(date +%Y-%m-%d)"
+            echo ""
+            if [[ -n "${LAST_TAG}" ]]; then
+              echo "**Full Changelog:** [\`${LAST_TAG}\`...\`${TAG}\`](https://github.com/${GITHUB_REPOSITORY}/compare/${LAST_TAG}...${TAG})"
+            fi
+          } > release_body.md
+
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(release-assets/*.zip)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No build artifacts found, skipping release creation"
+            exit 0
+          fi
+          gh release create "${{ steps.release_info.outputs.tag }}" \
+            --title "Nightly ${{ steps.release_info.outputs.date }} (${{ steps.release_info.outputs.commit }})" \
+            --notes-file release_body.md \
+            --prerelease \
+            "${files[@]}"
