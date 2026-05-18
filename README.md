@@ -53,7 +53,7 @@
 ## 注意事项
 > 现已支持 `Windows`、`macOS`、`Linux` 启动与打包；其中 `PC / DMM` 模式仅支持 `Windows`，`PlayCover+MaaTools`仅支持MacOS平台。  
 
-> 安卓模拟器开发是基于 `MuMu12` 模拟器测试的，因此推荐使用 MuMu12 运行游戏。 其他模拟器若出现问题，请第一时间把脚本根目录下`logs`中的最新的日志文件和相关的`dump`文件上传并截图进行反馈。
+> 安卓模拟器使用 `MuMu12` ｜ `MuMu Pro（Mac）` 模拟器测试的。 其他模拟器若出现问题，请第一时间把脚本根目录下`logs`中的最新的日志文件和相关的`dump`文件上传并截图进行反馈。
 
 > 安卓实体机测试已使用小米9完成
 
@@ -215,6 +215,12 @@ python build_app.py --merged
 - Windows 下：`--portable` 产物带控制台，`--merged` 默认不带控制台
 - macOS 下：`--portable` 为浏览器版，不内置 WebView，输出普通文件夹；`--merged` 继续输出原生 `.app`
 
+## 联系方式
+Email: **skyfsj@qq.com**  
+QQ群: **328346267**  
+爱发电：[Link](https://afdian.com/a/fsj_mc)
+![](./docs/qq_group.jpg)
+
 ## 许可证
 Copyright © 2020-2025 Pigeon Server Team, All rights reserved.
 
@@ -252,11 +258,6 @@ Android 控制、触控与投屏相关能力
 Web UI 基础设施
 
 随包分发的二进制依赖来源与版权说明见 [bin/THIRD_PARTY_NOTICES.md](./bin/THIRD_PARTY_NOTICES.md)。
-
-## 联系方式
-Email: **skyfsj@qq.com**  
-QQ Group: **328346267**
-![](./docs/qq_group.jpg)
 
 ## Star History
 
