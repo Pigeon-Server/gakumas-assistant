@@ -401,6 +401,8 @@ jobs:
 
       - name: Generate release tag and body
         id: release_info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -412,13 +414,52 @@ jobs:
           echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
 
           LAST_TAG="$(git tag -l 'nightly-*' --sort=-version:refname | head -1 || true)"
+
+          format_commit_author() {
+            local commit_sha="$1"
+            local author_name="$2"
+            local author_login
+
+            author_login="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${commit_sha}" --jq '.author.login // .committer.login // empty' 2>/dev/null || true)"
+            if [[ -n "${author_login}" ]]; then
+              printf '@%s' "${author_login}"
+              return
+            fi
+
+            if [[ -n "${author_name}" ]]; then
+              printf '%s' "${author_name}"
+              return
+            fi
+
+            printf 'unknown'
+          }
+
+          write_commit_list() {
+            local has_commit=0
+            local commit_sha
+            local short_sha
+            local subject
+            local author_name
+            local author_display
+
+            while IFS=$'\x1f' read -r commit_sha short_sha subject author_name; do
+              has_commit=1
+              author_display="$(format_commit_author "${commit_sha}" "${author_name}")"
+              echo "- ${subject} (${short_sha}) by ${author_display}"
+            done < <(git log "$@" --format='%H%x1f%h%x1f%s%x1f%an' --no-merges)
+
+            if [[ "${has_commit}" -eq 0 ]]; then
+              echo "- (no commits)"
+            fi
+          }
+
           {
             echo "## What's Changed"
             echo ""
             if [[ -n "${LAST_TAG}" ]]; then
-              git log "${LAST_TAG}..HEAD" --format="- %s (%h) by @%an" --no-merges || echo "- (unable to list commits)"
+              write_commit_list "${LAST_TAG}..HEAD" || echo "- (unable to list commits)"
             else
-              git log -30 --format="- %s (%h) by @%an" --no-merges || echo "- (unable to list commits)"
+              write_commit_list -30 || echo "- (unable to list commits)"
             fi
             echo ""
             echo "---"
