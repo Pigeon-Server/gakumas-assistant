@@ -25,7 +25,7 @@ def _ensure_windows_loaded():
                 try:
                     os.add_dll_directory(p32)
                 except Exception as e:
-            logger.debug(f"WindowsCompat: 操作失败: {e}")
+                    logger.debug(f"WindowsCompat: 添加DLL目录失败: {e}")
 
     try:
         from src.core.device.Windows.app import Windows_App as _cls

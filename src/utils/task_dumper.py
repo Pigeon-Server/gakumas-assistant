@@ -373,7 +373,7 @@ def dump_task_failure(
                     annotated = raw.plot()
                     cv2.imwrite(str(dump_dir / "annotated_frame.png"), annotated)
                 except Exception as e:
-            logger.debug(f"TaskDumper: 操作失败: {e}")
+                    logger.debug(f"TaskDumper: 保存标注帧失败: {e}")
 
 
         recent_steps = _dump_recent_steps(dump_dir, app)

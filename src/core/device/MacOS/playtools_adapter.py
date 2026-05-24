@@ -134,7 +134,7 @@ class MacPlayToolsAdapter:
             try:
                 self._sock.close()
             except Exception as e:
-            logger.debug(f"PlayTools: 操作失败: {e}")
+                logger.debug(f"PlayTools: 关闭socket失败: {e}")
 
             self._sock = None
 
