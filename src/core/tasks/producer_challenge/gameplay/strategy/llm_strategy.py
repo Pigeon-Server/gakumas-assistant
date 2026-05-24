@@ -816,8 +816,8 @@ class LLMStrategy:
             store = get_insight_store()
             for insight in insights:
                 store.record_usage(insight.id, outcome_type)
-        except Exception:
-            pass  # 忽略异常
+        except Exception as e:
+            logger.debug(f"LLMStrategy: 操作失败: {e}")
 
 
     # ── 决策 Dump ───────────────────────────────────────

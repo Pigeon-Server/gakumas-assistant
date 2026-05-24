@@ -68,8 +68,8 @@ def _cleanup_old_dumps(dumps_root: str):
         for _, path in entries[: len(entries) - MAX_DUMPS]:
             import shutil
             shutil.rmtree(path, ignore_errors=True)
-    except Exception:
-        pass  # 忽略异常
+    except Exception as e:
+            logger.debug(f"TaskDumper: 操作失败: {e}")
 
 
 
@@ -111,8 +111,8 @@ def _serialize_button_snapshot(results: "Yolo_Results") -> tuple[list, str | Non
         disabled = None
         try:
             disabled = button.is_disabled()
-        except Exception:
-            pass  # 忽略异常
+        except Exception as e:
+            logger.debug(f"TaskDumper: 操作失败: {e}")
 
         items.append({
             "text": button.text,
@@ -372,8 +372,8 @@ def dump_task_failure(
                 try:
                     annotated = raw.plot()
                     cv2.imwrite(str(dump_dir / "annotated_frame.png"), annotated)
-                except Exception:
-                    pass  # 忽略异常
+                except Exception as e:
+            logger.debug(f"TaskDumper: 操作失败: {e}")
 
 
         recent_steps = _dump_recent_steps(dump_dir, app)

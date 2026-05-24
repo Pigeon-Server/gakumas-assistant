@@ -229,8 +229,8 @@ class ScrcpyAdapter:
                 data = stream.recv(4096)
                 if not data:
                     break
-        except Exception:
-            pass  # 忽略异常
+        except Exception as e:
+            logger.debug(f"Scrcpy: 操作失败: {e}")
 
         self._server_died.set()
 

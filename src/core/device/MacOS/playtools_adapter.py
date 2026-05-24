@@ -133,8 +133,8 @@ class MacPlayToolsAdapter:
         if self._sock is not None:
             try:
                 self._sock.close()
-            except Exception:
-                pass  # 忽略异常
+            except Exception as e:
+            logger.debug(f"PlayTools: 操作失败: {e}")
 
             self._sock = None
 

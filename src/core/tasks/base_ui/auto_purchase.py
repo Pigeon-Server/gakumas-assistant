@@ -1155,7 +1155,6 @@ def _reset_daily_exchange_to_top(app: "AppProcessor"):
 def _handle_tabbar__manny_exchange(app: "AppProcessor", commodity_target):
     refresh_shop = app.config_service().task__auto_purchase.refresh_shop.value
     use_gem_refresh = app.config_service().task__auto_purchase.use_gem_refresh.value
-    height, width = app.latest_frame.shape[:2]
     remaining_attempts: Optional[int] = None
     remaining_attempts_match = re.compile(r".*更新可能回数 {,3}あと(\d+)回.*")
     while True:

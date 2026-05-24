@@ -155,8 +155,8 @@ class _BaseYamlDatabase(metaclass=_SingletonByFileMeta):
         try:
             with open(cache_path, "wb") as f:
                 pickle.dump(data, f)
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"GameDatabase: 保存缓存失败: {e}")
 
         return data
 
@@ -620,8 +620,8 @@ def build_support_card_skill_descriptions() -> dict[str, list[dict]]:
         try:
             db = utils_cls()
             all_skill_levels.extend(db.get_all_item())
-        except Exception:
-            pass  # 忽略异常
+        except Exception as e:
+            logger.debug(f"GameDatabase: 操作失败: {e}")
 
 
     # 按 (supportCardId, order, produceSkillId) 收集各等级

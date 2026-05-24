@@ -219,8 +219,8 @@ def _build_parameter_priority(ctx: "ProduceContext") -> str:
                 if idol_card is not None:
                     # 同时回填 ctx，后续调用不再重复查询
                     ctx.selected_idol_card = idol_card
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Decision: 查询偶像卡失败: {e}")
 
     if idol_card is None:
         return ""
@@ -961,31 +961,6 @@ def _extract_hud_state(app: "AppProcessor") -> dict[str, Any]:
         if not boxes:
             return ""
         return ocr_text(boxes.first().frame)
-
-    def _ocr_region(x1_ratio: float, y1_ratio: float, x2_ratio: float, y2_ratio: float) -> str:
-        """处理OCR、region并返回结果。
-
-        Args:
-            x1_ratio: 用于提供x1、ratio相关输入。
-            y1_ratio: 用于提供y1、ratio相关输入。
-            x2_ratio: 用于提供x2、ratio相关输入。
-            y2_ratio: 用于提供y2、ratio相关输入。
-
-        Returns:
-            str: 处理后的文本结果。
-        """
-        frame = getattr(app, "latest_frame", None)
-        if frame is None or frame.size == 0:
-            return ""
-        h, w = frame.shape[:2]
-        x1 = int(w * x1_ratio)
-        y1 = int(h * y1_ratio)
-        x2 = int(w * x2_ratio)
-        y2 = int(h * y2_ratio)
-        crop = frame[y1:y2, x1:x2]
-        if crop.size == 0:
-            return ""
-        return ocr_text(crop)
 
     debugger = getattr(app, "debug_tools", None) or DebugTools()
 

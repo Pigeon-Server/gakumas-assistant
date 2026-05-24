@@ -353,7 +353,7 @@ class ProduceContext:
     def consume_recognized_drink(self, index: int) -> None:
         """课内使用饮料后，从已知库存中移除对应饮料。"""
         if 0 <= index < len(self.recognized_p_drinks):
-            removed = self.recognized_p_drinks.pop(index)
+            self.recognized_p_drinks.pop(index)
             # 同步 inventory_state
             inv_drinks = self.inventory_state.get("p_drinks")
             if isinstance(inv_drinks, list) and 0 <= index < len(inv_drinks):

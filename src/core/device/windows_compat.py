@@ -24,8 +24,8 @@ def _ensure_windows_loaded():
             if os.path.isdir(p32):
                 try:
                     os.add_dll_directory(p32)
-                except Exception:
-                    pass  # 忽略异常
+                except Exception as e:
+            logger.debug(f"WindowsCompat: 操作失败: {e}")
 
     try:
         from src.core.device.Windows.app import Windows_App as _cls

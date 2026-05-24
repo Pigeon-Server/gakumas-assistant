@@ -90,8 +90,8 @@ class MinitouchAdapter:
         if self._socket is not None:
             try:
                 self._socket.sendall(b"r\n")
-            except Exception:
-                pass  # 忽略异常
+            except Exception as e:
+            logger.debug(f"Minitouch: 操作失败: {e}")
 
             try:
                 self._socket.close()
@@ -102,8 +102,8 @@ class MinitouchAdapter:
         if self._pid is not None:
             try:
                 self._adb_device.shell(["kill", str(self._pid)])
-            except Exception:
-                pass  # 忽略异常
+            except Exception as e:
+            logger.debug(f"Minitouch: 操作失败: {e}")
 
         self._pid = None
 

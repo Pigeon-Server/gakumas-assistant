@@ -417,8 +417,8 @@ def _read_action_info_after_option_click(
                 game_utils.wait_frame_stable(stable_count=2, timeout=1.2)
             except TypeError:
                 game_utils.wait_frame_stable(stable_count=2)
-            except Exception:
-                pass  # 忽略异常
+            except Exception as e:
+                logger.debug(f"Dialogue: 等待帧稳定失败: {e}")
 
         time.sleep(0.12)
         desc = _extract_action_info_description(app)

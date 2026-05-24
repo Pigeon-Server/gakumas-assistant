@@ -117,8 +117,8 @@ class DMLManager:
             imgsz = json.loads(meta.get("imgsz", "null"))
             if isinstance(imgsz, list) and len(imgsz) == 2:
                 return int(imgsz[0]), int(imgsz[1])
-        except Exception:
-            pass  # 忽略异常
+        except Exception as e:
+            logger.debug(f"DMLManager: 操作失败: {e}")
 
         return None
 

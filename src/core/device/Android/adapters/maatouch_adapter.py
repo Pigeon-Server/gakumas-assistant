@@ -85,21 +85,21 @@ class MaaTouchAdapter:
         if self._stream is not None:
             try:
                 self._stream.send(b"r\n")
-            except Exception:
-                pass  # 忽略异常
+            except Exception as e:
+                logger.debug(f"MaaTouch: 发送重置命令失败: {e}")
 
             try:
                 self._stream.close()
             except Exception as e:
-                logger.debug(f"Failed to close MaaTouch stream cleanly: {e}")
+                logger.debug(f"MaaTouch: 关闭流失败: {e}")
         self._stream = None
         self._stdout_buffer = bytearray()
 
         for pid in self._find_process_ids():
             try:
                 self._adb_device.shell(["kill", pid])
-            except Exception:
-                pass  # 忽略异常
+            except Exception as e:
+                logger.debug(f"MaaTouch: 终止进程 {pid} 失败: {e}")
 
 
     def click(self, x, y):
@@ -201,8 +201,8 @@ class MaaTouchAdapter:
             )
             try:
                 stream.close()
-            except Exception:
-                pass  # 忽略异常
+            except Exception as e:
+                logger.debug(f"MaaTouch: 连接失败后关闭流失败: {e}")
 
             self._stream = None
             return False
@@ -272,8 +272,8 @@ class MaaTouchAdapter:
             width, height = self._adb_device.window_size()
             self._display_width = max(int(width), 1)
             self._display_height = max(int(height), 1)
-        except Exception:
-            pass  # 忽略异常
+        except Exception as e:
+            logger.debug(f"MaaTouch: 获取窗口大小失败: {e}")
 
 
     def _clamp_to_display(self, x: int, y: int) -> tuple[int, int]:
