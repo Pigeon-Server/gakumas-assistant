@@ -279,7 +279,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             ddm_cfg.pf_token.value = result.pf_token
             processor.config_service.save_config()
         except Exception as e:
-            return _api_return(False, translate_like_payload(i18n_text("backend.api.refreshDmmTokenFailed", fallback=f"提取游戏启动参数失败：{e}", error=str(e)), "backend.api.refreshDmmTokenFailed"))
+            logger.exception("刷新DDM Token失败")
+            return _api_return(False, translate_like_payload(i18n_text("backend.api.refreshDmmTokenFailed", fallback="提取游戏启动参数失败，请检查游戏是否正在运行"), "backend.api.refreshDmmTokenFailed"))
         return _api_return(True, translate_like_payload(None, "backend.api.ok"))
 
     @app.get("/api/config/{task_name:str}")
