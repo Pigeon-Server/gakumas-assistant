@@ -398,7 +398,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             items = _get_item_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
+            logger.warning("获取物品列表失败: {}", exc)
+            return _api_return(False, translate_like_payload(None, "backend.api.gameDatabaseNotReady"))
         all_items = []
         for item in items:
             all_items.append({
@@ -423,7 +424,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             produce_item_db = _get_produce_item_db()
             cards = _get_idol_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
+            logger.warning("获取偶像卡列表失败: {}", exc)
+            return _api_return(False, translate_like_payload(None, "backend.api.gameDatabaseNotReady"))
 
         def _primary_attribute(card):
             stats = {
@@ -520,7 +522,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
+            logger.warning("获取支援卡列表失败: {}", exc)
+            return _api_return(False, translate_like_payload(None, "backend.api.gameDatabaseNotReady"))
 
         # 构建支援卡技能描述映射（从 ProduceSkill 关联获取）
         from src.utils.game_database_tools import (
@@ -615,7 +618,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
+            logger.warning("获取支援卡列表失败: {}", exc)
+            return _api_return(False, translate_like_payload(None, "backend.api.gameDatabaseNotReady"))
 
         game_asset_service.download_support_card_images_async(
             card_db_list=cards,
@@ -640,7 +644,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
+            logger.warning("获取支援卡列表失败: {}", exc)
+            return _api_return(False, translate_like_payload(None, "backend.api.gameDatabaseNotReady"))
 
         from threading import Thread
         Thread(
@@ -663,7 +668,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
+            logger.warning("获取支援卡列表失败: {}", exc)
+            return _api_return(False, translate_like_payload(None, "backend.api.gameDatabaseNotReady"))
         card = next((c for c in cards if c.id == card_id), None)
         if not card:
             return _api_return(False, translate_like_payload(i18n_text("backend.api.cardNotFound", fallback=f"未找到卡牌：{card_id}", cardId=card_id), "backend.api.cardNotFound"))
@@ -692,7 +698,8 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         try:
             cards = _get_support_card_db().get_all_item()
         except RuntimeError as exc:
-            return _api_return(False, translate_like_payload(str(exc), "backend.api.gameDatabaseNotReady"))
+            logger.warning("获取支援卡列表失败: {}", exc)
+            return _api_return(False, translate_like_payload(None, "backend.api.gameDatabaseNotReady"))
 
         from threading import Thread
 
