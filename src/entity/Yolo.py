@@ -1,9 +1,7 @@
-from copy import copy
 from dataclasses import dataclass,field
 from typing import List, Tuple, Union, Optional, Any
 
 import numpy as np
-from src.core.inference.ONNX import ONNXYoloResult
 from src.utils.number import median
 from src.utils.opencv_tools import intersection_area
 

@@ -34,7 +34,7 @@ from src.core.tasks.producer_challenge.gameplay.exam_ranking import _extract_ord
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
-    from src.entity.Yolo import Yolo_Box, Yolo_Results
+    from src.entity.Yolo import Yolo_Results
     from src.core.tasks.producer_challenge.context import ProduceContext
 
 # ── 默认合格线：排名 <= 此值为合格（实际由 pass_condition 覆盖）──

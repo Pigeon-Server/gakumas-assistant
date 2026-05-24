@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from src.utils.logger import logger
 
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext

@@ -30,7 +30,6 @@ from src.core.tasks.producer_challenge.gameplay.handler_base import (
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
-    from src.core.tasks.producer_challenge.context import ProduceContext
     from src.main import AppProcessor
 
 _HUD_LABELS = (

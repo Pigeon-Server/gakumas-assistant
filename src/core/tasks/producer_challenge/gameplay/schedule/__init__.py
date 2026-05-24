@@ -25,36 +25,16 @@ from ..decision import (
     resolve_schedule_action_identity,
 )
 from .lesson_probe import (
-    _detect_lesson_stat_from_info,
-    _extract_lesson_stamina_cost,
     _collect_lesson_option_candidates,
-    _lesson_debugger,
-    _ocr_lesson_stamina_costs,
-    _probe_lesson_options,
-    _read_lesson_info_panel,
 )
 from .notebook import (
-    _NOTEBOOK_ICON_HUE_MAP,
-    _NOTEBOOK_SPECIAL_KEYWORDS,
-    _classify_icon_hue,
     _close_p_notebook,
     _detect_p_notebook_close_button,
-    _detect_notebook_icons,
-    _detect_p_notebook_button,
-    _group_icons_into_rows,
-    _identify_notebook_icons_with_clip,
-    _notebook_scroll_and_check,
-    _open_p_notebook,
-    _read_notebook_schedule_page,
     _retry_cached_notebook_icons,
-    _scroll_notebook_down,
-    _scroll_notebook_to_bottom,
-    _scroll_notebook_up,
     read_p_notebook,
 )
 from .recovery import (
     _annotate_low_stamina_recovery_preference,
-    _schedule_payload_family,
     _select_low_stamina_recovery_action,
 )
 from .types import ScheduleActionCandidate, ScheduleStepResult

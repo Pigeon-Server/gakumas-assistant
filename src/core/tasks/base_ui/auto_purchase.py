@@ -9,9 +9,6 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from src.constants.device.adb import ADBOperation
-from src.constants.game.text.general_text import GeneralText
-from src.constants.path.data_path import DataPath
 from src.constants.path.debug_path import DebugPath
 from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.modal_text import ModalText

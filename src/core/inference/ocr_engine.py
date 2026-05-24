@@ -1,4 +1,3 @@
-import re
 import threading
 from dataclasses import dataclass
 from typing import List

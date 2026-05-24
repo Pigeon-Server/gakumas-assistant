@@ -20,7 +20,6 @@ from src.core.tasks.producer_challenge.shared.common import (
     ocr_text,
 )
 from src.utils.debug_tools import DebugTools
-from src.utils.logger import logger
 from src.utils.string_tools import MatchConfig, string_match
 
 from .common import is_final_confirm_page

@@ -2,7 +2,6 @@ from time import sleep, time
 from typing import TYPE_CHECKING
 
 from src.constants.game.text.button_text import ButtonText
-from src.constants.game.text.modal_text import ModalText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Page.Types.index import GamePageTypes

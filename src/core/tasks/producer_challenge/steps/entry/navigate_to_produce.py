@@ -21,10 +21,8 @@ from src.core.tasks.producer_challenge.shared.common import (
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
 from src.core.tasks.producer_challenge.ui import (
     click_modal_action_with_retry,
-    detect_gameplay_phase,
     detect_gameplay_state,
     find_button,
-    get_pipeline_position,
     go_back_in_gameplay,
     wait_frame_stable,
 )

@@ -418,7 +418,8 @@ def _read_action_info_after_option_click(
             except TypeError:
                 game_utils.wait_frame_stable(stable_count=2)
             except Exception:
-                pass
+                pass  # 忽略异常
+
         time.sleep(0.12)
         desc = _extract_action_info_description(app)
         if not desc:

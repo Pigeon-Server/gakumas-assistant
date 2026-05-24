@@ -20,35 +20,26 @@ from src.core.tasks.producer_challenge.shared.common import (
 from src.utils.logger import logger
 from src.utils.debug_tools import DebugTools
 from src.utils.string_tools import fullwidth_to_halfwidth, normalize_ocr_jp
-from src.utils.clip_tools import CLIPTools, CLIPRetrieveData
 from src.core.tasks.producer_challenge.gameplay.exam_ranking import get_exam_ranking_value
 from .decision_support import (
     CandidateResolution,
-    ScheduleActionSpec,
     _auto_collect_unresolved_entity_image,
     _append_exam_snapshot_details,
     _apply_resolution,
     _build_stage_context,
     _build_unknown_action_id,
-    _build_noisy_hud_value_candidates,
-    _build_noisy_stamina_candidates,
     _build_parameter_stats_payload,
-    _clean_description_text,
     _compute_remaining_weeks,
-    _description_text,
     _enrich_card_metadata,
     _enrich_drink_metadata,
     _enrich_item_metadata,
     _extract_first_int,
-    _extract_first_int_from_texts,
     _extract_noisy_hud_value,
     _extract_planning_parameter_value,
     _get_parameter_seed_value,
     _learn_card_clip_from_db_id,
     _learn_drink_clip_from_db_id,
     _learn_item_clip_from_db_id,
-    _load_outing_activity_entries,
-    _match_any_variant,
     _match_catalog_entry,
     _match_catalog_entry_from_texts,
     _parse_progress_circle,
@@ -57,21 +48,9 @@ from .decision_support import (
     _serialize_box,
     _sync_virtual_battle_state,
     _resolve_repeated_digit_ocr_value,
-    detect_sp_badge,
-    hydrate_dialogue_candidates,
-    hydrate_lesson_candidates,
-    hydrate_outing_candidates,
-    hydrate_schedule_candidates,
-    is_end_turn_action_id,
     is_produce_card_action_id,
     is_produce_drink_action_id,
     register_realtime_resource_snapshot,
-    register_realtime_zone_snapshot,
-    resolve_dialogue_option_identity,
-    resolve_lesson_option_identity,
-    resolve_outing_option_identity,
-    resolve_schedule_action_identity,
-    score_produce_drink_metadata,
     serialize_candidate,
 )
 
@@ -217,7 +196,7 @@ def _current_idol_plan_payload(ctx: "ProduceContext") -> dict[str, str]:
                 idol_card = GakumasDatabase_IdolCardDataUtils().get_by_id(target_id)
                 if idol_card is not None:
                     ctx.selected_idol_card = idol_card
-            except Exception:
+            except Exception:  # 数据库查询失败时忽略
                 pass
     if idol_card is None:
         return _plan_type_payload("")

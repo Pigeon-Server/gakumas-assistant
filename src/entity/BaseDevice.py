@@ -24,14 +24,12 @@ class BaseDevice(abc.ABC):
         判断游戏进程是否正在运行
         :return:
         """
-        pass
 
     def start_game(self):
         """
         启动游戏
         :return:
         """
-        pass
 
     def capture(self) -> np.ndarray:
         """

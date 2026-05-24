@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-import numpy as np
 
 from src.core.inference.ocr_engine import OCRService
 from src.entity.Yolo import Yolo_Box

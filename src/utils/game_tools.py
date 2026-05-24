@@ -15,8 +15,8 @@ from src.utils.logger import logger
 from src.core.inference.ONNX import YoloModelFromONNX
 from src.core.inference.ocr_engine import OCRService
 from src.utils.contest_overlay_tools import detect_contest_grade_up_splash, detect_contest_season_overlay
-from src.utils.opencv_tools import check_status_detection, get_mask_contours, extract_roi_from_mask, check_color, \
-    filter_by_rectangle_shape, get_max_contour
+from src.utils.opencv_tools import check_status_detection, get_mask_contours, check_color, filter_by_rectangle_shape, \
+    get_max_contour
 from src.utils.performance_tools import timeit
 from src.utils.string_tools import string_match, MatchConfig
 

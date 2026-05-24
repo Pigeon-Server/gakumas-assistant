@@ -56,11 +56,6 @@ if TYPE_CHECKING:
     from src.main import AppProcessor
 
 
-_PLAN1 = ProducePlanType.PLAN1
-_PLAN2 = ProducePlanType.PLAN2
-_PLAN3 = ProducePlanType.PLAN3
-
-
 def _coerce_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)

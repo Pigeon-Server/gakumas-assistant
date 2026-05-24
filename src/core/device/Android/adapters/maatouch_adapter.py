@@ -86,7 +86,8 @@ class MaaTouchAdapter:
             try:
                 self._stream.send(b"r\n")
             except Exception:
-                pass
+                pass  # 忽略异常
+
             try:
                 self._stream.close()
             except Exception as e:
@@ -98,7 +99,8 @@ class MaaTouchAdapter:
             try:
                 self._adb_device.shell(["kill", pid])
             except Exception:
-                pass
+                pass  # 忽略异常
+
 
     def click(self, x, y):
         if not self.alive:
@@ -200,7 +202,8 @@ class MaaTouchAdapter:
             try:
                 stream.close()
             except Exception:
-                pass
+                pass  # 忽略异常
+
             self._stream = None
             return False
 
@@ -270,7 +273,8 @@ class MaaTouchAdapter:
             self._display_width = max(int(width), 1)
             self._display_height = max(int(height), 1)
         except Exception:
-            pass
+            pass  # 忽略异常
+
 
     def _clamp_to_display(self, x: int, y: int) -> tuple[int, int]:
         self._refresh_display_size()

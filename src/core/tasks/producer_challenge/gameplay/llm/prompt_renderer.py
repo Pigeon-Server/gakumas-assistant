@@ -24,6 +24,7 @@ def _get_env() -> jinja2.Environment:
         keep_trailing_newline=False,
         trim_blocks=True,
         lstrip_blocks=True,
+        autoescape=True,
     )
 
 

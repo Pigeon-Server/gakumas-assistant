@@ -13,8 +13,7 @@ import cv2
 import numpy as np
 
 from src.models.clip import CLIPayload_ScheduleAction, CLIPMemory
-from src.utils.clip_tools import CLIPTools, CLIPRetrieveData
-from src.utils.logger import logger
+from src.utils.clip_tools import CLIPTools
 
 
 @dataclass

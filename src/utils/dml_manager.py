@@ -118,7 +118,8 @@ class DMLManager:
             if isinstance(imgsz, list) and len(imgsz) == 2:
                 return int(imgsz[0]), int(imgsz[1])
         except Exception:
-            pass
+            pass  # 忽略异常
+
         return None
 
     @classmethod

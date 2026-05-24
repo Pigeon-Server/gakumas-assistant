@@ -22,7 +22,6 @@ from src.utils.runtime_paths import resolve_data_path
 
 if TYPE_CHECKING:
     from src.core.services.clip_services import CLIPServiceManager
-    from src.main import AppProcessor
 
 # ---------------------------------------------------------------------------
 # GkmasObjectManager vendor 路径注入

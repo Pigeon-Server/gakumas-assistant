@@ -91,7 +91,8 @@ class MinitouchAdapter:
             try:
                 self._socket.sendall(b"r\n")
             except Exception:
-                pass
+                pass  # 忽略异常
+
             try:
                 self._socket.close()
             except Exception as e:
@@ -102,7 +103,8 @@ class MinitouchAdapter:
             try:
                 self._adb_device.shell(["kill", str(self._pid)])
             except Exception:
-                pass
+                pass  # 忽略异常
+
         self._pid = None
 
         if self._process_stream is not None:

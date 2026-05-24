@@ -1,5 +1,4 @@
 import os
-import site
 import platform
 from typing import Any
 
@@ -26,7 +25,8 @@ def _ensure_windows_loaded():
                 try:
                     os.add_dll_directory(p32)
                 except Exception:
-                    pass
+                    pass  # 忽略异常
+
     try:
         from src.core.device.Windows.app import Windows_App as _cls
         _WINDOWS_APP_CLASS = _cls

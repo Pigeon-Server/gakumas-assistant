@@ -4,7 +4,7 @@ import os
 import json
 import threading
 from dataclasses import dataclass
-from typing import List, Tuple, Generator, Optional, Union, Dict
+from typing import Tuple, Optional, Dict
 
 import numpy as np
 import cv2

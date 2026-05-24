@@ -134,7 +134,8 @@ class MacPlayToolsAdapter:
             try:
                 self._sock.close()
             except Exception:
-                pass
+                pass  # 忽略异常
+
             self._sock = None
 
     # ── 底层收发 ──────────────────────────────────────────────

@@ -41,7 +41,6 @@ from src.core.tasks.producer_challenge.shared.common import (
 )
 from src.core.tasks.producer_challenge.gameplay.decision import (
     _apply_resolution,
-    _learn_card_clip_from_db_id,
     build_decision_state,
     hydrate_consult_candidates,
     resolve_produce_card_identity,

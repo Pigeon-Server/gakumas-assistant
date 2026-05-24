@@ -1,17 +1,15 @@
-import os.path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import lru_cache
 from threading import Lock
 from time import time
-from typing import Tuple, List, Optional, Union
+from typing import Tuple, List, Optional
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from src.entity.Base import SingletonMeta
-from src.utils.opencv_tools import draw_text
 from src.utils.runtime_paths import resolve_runtime_str
 
 
@@ -65,7 +63,6 @@ class DebugElement(ABC):
         :param final_img: 最终输出的图像（用于绘制不透明的实体线条或文字）
         :param pil_img: 可选的共享 PIL 图像，用于文字渲染（避免重复转换）
         """
-        pass
 
 
 @dataclass

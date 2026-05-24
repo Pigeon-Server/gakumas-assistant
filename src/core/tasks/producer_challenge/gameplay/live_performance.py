@@ -13,13 +13,11 @@ YOLO モデルは縦画面用にトレーニングされているため、
 from __future__ import annotations
 
 from dataclasses import dataclass
-from time import sleep, time
 from typing import TYPE_CHECKING
 
 from src.constants.game.producer_gameplay import GameplayPhase, GameplayPosition
 from src.constants.game.text.produce_text import ProduceText
 from src.core.tasks.producer_challenge.shared.common import (
-    click_relative_point,
     ocr_text,
 )
 from src.core.tasks.producer_challenge.gameplay.handler_base import (
@@ -29,8 +27,7 @@ from src.core.tasks.producer_challenge.gameplay.handler_base import (
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
-    from src.core.tasks.producer_challenge.context import ProduceContext
-    from src.main import AppProcessor
+    pass
 
 _LIVE_TAP_PROBE_INTERVAL = 5
 _LIVE_TAP_EARLY_PROBE_LIMIT = 3

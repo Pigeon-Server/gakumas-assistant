@@ -9,12 +9,10 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from src.utils.logger import logger
 
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
@@ -206,7 +204,6 @@ class SessionManager:
 
     def refresh_from_ctx(self, ctx: "ProduceContext | None") -> None:
         """按最近 summary id 回读最新结构化摘要。已迁移到洞察系统，此方法保留为空。"""
-        pass
 
     # ── 压缩 ────────────────────────────────────────
 

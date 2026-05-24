@@ -111,25 +111,25 @@ class Android_App(BaseDevice):
         if self.__maatouch_adapter is not None:
             try:
                 self.__maatouch_adapter.stop()
-            except Exception:
+            except Exception:  # 清理阶段忽略停止失败
                 pass
             self.__maatouch_adapter = None
         if self.__minitouch_adapter is not None:
             try:
                 self.__minitouch_adapter.stop()
-            except Exception:
+            except Exception:  # 清理阶段忽略停止失败
                 pass
             self.__minitouch_adapter = None
         if self.__scrcpy_adapter is not None:
             try:
                 self.__scrcpy_adapter.stop()
-            except Exception:
+            except Exception:  # 清理阶段忽略停止失败
                 pass
             self.__scrcpy_adapter = None
         if self.__capture_service_shell is not None:
             try:
                 self.__capture_service_shell.close()
-            except Exception:
+            except Exception:  # 清理阶段忽略关闭失败
                 pass
             self.__capture_service_shell = None
         self.__droidcast_service_status = False

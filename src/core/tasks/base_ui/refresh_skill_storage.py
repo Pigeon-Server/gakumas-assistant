@@ -1,5 +1,5 @@
 from time import sleep
-from typing import Optional, Tuple, List, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING
 import os
 import numpy as np
 

@@ -1,8 +1,6 @@
-from copy import copy
 from time import sleep, time
 from typing import TYPE_CHECKING, Optional
 
-import cv2
 import numpy as np
 from src.constants.game.text.button_text import ButtonText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
@@ -15,7 +13,6 @@ from src.utils.game_tools import get_current_location, get_modal
 from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.opencv_tools import compute_ssim_score
-from src.utils.performance_tools import timeit
 from src.utils.string_tools import string_match, MatchConfig
 
 if TYPE_CHECKING:

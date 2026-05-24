@@ -69,7 +69,8 @@ def _cleanup_old_dumps(dumps_root: str):
             import shutil
             shutil.rmtree(path, ignore_errors=True)
     except Exception:
-        pass
+        pass  # 忽略异常
+
 
 
 def _serialize_yolo_results(results: "Yolo_Results") -> list:
@@ -111,7 +112,8 @@ def _serialize_button_snapshot(results: "Yolo_Results") -> tuple[list, str | Non
         try:
             disabled = button.is_disabled()
         except Exception:
-            pass
+            pass  # 忽略异常
+
         items.append({
             "text": button.text,
             "x": int(button.x),
@@ -371,7 +373,8 @@ def dump_task_failure(
                     annotated = raw.plot()
                     cv2.imwrite(str(dump_dir / "annotated_frame.png"), annotated)
                 except Exception:
-                    pass
+                    pass  # 忽略异常
+
 
         recent_steps = _dump_recent_steps(dump_dir, app)
 

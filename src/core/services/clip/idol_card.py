@@ -8,7 +8,7 @@ from src.entity.Game.Database.IdolCard import IdolCard
 from src.models.clip import CLIPayload_IdolCard, CLIPMemory
 from src.utils.game_database_tools import GakumasDatabase_IdolCardDataUtils
 from src.utils.logger import logger
-from src.utils.clip_tools import CLIPTools, CLIPRetrieveData
+from src.utils.clip_tools import CLIPTools
 
 idol_card_db = GakumasDatabase_IdolCardDataUtils()
 

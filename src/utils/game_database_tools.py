@@ -621,7 +621,8 @@ def build_support_card_skill_descriptions() -> dict[str, list[dict]]:
             db = utils_cls()
             all_skill_levels.extend(db.get_all_item())
         except Exception:
-            pass
+            pass  # 忽略异常
+
 
     # 按 (supportCardId, order, produceSkillId) 收集各等级
     from collections import defaultdict
@@ -767,8 +768,6 @@ def build_support_card_event_items() -> dict[str, list[dict]]:
             ...
         ]}
     """
-    from src.entity.Game.Database.ProduceEventSupportCard import ProduceEventSupportCard as _ProduceEventSupportCard
-    from src.entity.Game.Database.ProduceStepEventDetail import ProduceStepEventDetail as _ProduceStepEventDetail
 
     # 加载 ProduceEventSupportCard（无 id 字段，用 AutoDataUtils 行号索引）
     event_sc_yaml = str(resolve_existing_resource_path("assets", "gakumasu-diff", "ProduceEventSupportCard.yaml"))
@@ -941,7 +940,6 @@ def build_support_card_events() -> dict[str, list[dict]]:
             ...
         ]}
     """
-    from src.entity.Game.Database.ProduceEventSupportCard import ProduceEventSupportCard as _PESC
 
     event_sc_yaml = str(resolve_existing_resource_path(
         "assets", "gakumasu-diff", "ProduceEventSupportCard.yaml"

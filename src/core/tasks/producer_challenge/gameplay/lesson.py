@@ -1011,7 +1011,6 @@ def _extract_battle_info_panel_name(
     """
     from src.utils.string_tools import normalize_ocr_jp
     from src.core.inference.ocr_engine import OCRService
-    import re
 
     # 1. 优先使用 YOLO 面板框，缺失时退化到版式检测。
     panel = None

@@ -25,7 +25,7 @@ from src.core.web.websocket import WebSocketManager
 from src.entity.Task import Task
 from src.entity.WebSocketData import WebSocketData
 from src.utils.debug_tools import DebugTools
-from src.utils.i18n_tools import i18n_text, serialize_i18n_value
+from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_runtime_str
 from src.utils.task_debug_tools import (

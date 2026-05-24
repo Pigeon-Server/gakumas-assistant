@@ -8,7 +8,7 @@ from src.entity.Game.Database.SupportCard import SupportCard
 from src.models.clip import CLIPayload_SupportCard, CLIPMemory
 from src.utils.game_database_tools import GakumasDatabase_SupportCardDataUtils
 from src.utils.logger import logger
-from src.utils.clip_tools import CLIPTools, CLIPRetrieveData
+from src.utils.clip_tools import CLIPTools
 
 support_card_db = GakumasDatabase_SupportCardDataUtils()
 

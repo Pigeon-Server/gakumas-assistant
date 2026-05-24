@@ -1,7 +1,4 @@
 from peewee import *
-import pickle
-import hashlib
-import numpy as np
 from uuid import uuid4
 
 from src.models.base import BaseModel

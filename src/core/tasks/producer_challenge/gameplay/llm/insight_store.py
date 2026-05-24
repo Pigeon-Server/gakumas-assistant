@@ -6,7 +6,6 @@ from datetime import datetime
 
 from src.models.strategy_insight import ProduceStrategyInsight
 from src.core.tasks.producer_challenge.gameplay.llm.insight_data import InsightData
-from src.utils.logger import logger
 
 
 class InsightStore:

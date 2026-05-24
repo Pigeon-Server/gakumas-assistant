@@ -13,7 +13,6 @@ from src.constants.game.produce_enums import (
     ProduceCardCategory,
     ProducePlanType,
 )
-from src.constants.game.producer_gameplay import ProduceExamType
 
 
 @dataclass(frozen=True)

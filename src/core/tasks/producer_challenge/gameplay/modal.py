@@ -18,7 +18,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from src.constants.game.producer_gameplay import GameplayPhase, GameplayPosition
+from src.constants.game.producer_gameplay import GameplayPosition
 from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.modal_text import ModalText
 from src.constants.game.text.produce_text import ProduceText

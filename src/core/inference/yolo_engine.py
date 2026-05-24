@@ -3,15 +3,12 @@ import traceback
 from threading import Thread
 from time import sleep
 
-import cv2
-import numpy as np
 from typing import Callable, List
 
 import config
 from src.constants.yolo.model_type import YoloModelType
 from src.core.inference.ONNX import YoloModelFromONNX
 from src.entity.BaseDevice import BaseDevice
-from src.entity.WebSocketData import WebSocketData
 from src.entity.Yolo import Yolo_Results
 from src.utils.logger import logger
 

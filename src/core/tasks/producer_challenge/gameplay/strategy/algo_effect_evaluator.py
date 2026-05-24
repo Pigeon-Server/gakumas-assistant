@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.constants.game.produce_enums import ExamEffectType, ProducePlanType
-from src.constants.game.text.produce_text import ProduceText
 
 if TYPE_CHECKING:
     from .algo_strategy_types import (

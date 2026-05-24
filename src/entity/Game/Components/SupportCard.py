@@ -26,7 +26,6 @@ from src.utils.opencv_tools import (
     normalize_binary_mask,
 )
 from src.utils.string_tools import MatchConfig, string_match
-from src.utils.logger import logger
 
 ocr_service = OCRService()
 debug_tools = DebugTools()

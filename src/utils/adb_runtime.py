@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from src.utils.i18n_tools import I18nText, i18n_text
+from src.utils.i18n_tools import i18n_text
 
 
 ADB_MISSING_CODE = "adb_missing"

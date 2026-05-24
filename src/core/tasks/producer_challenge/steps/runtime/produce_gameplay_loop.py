@@ -31,15 +31,12 @@ from src.constants.game.text.button_text import ButtonText
 from src.constants.game.text.produce_text import ProduceText
 from src.constants.game.text.general_text import GeneralText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
-from src.constants.yolo.labels.producer_Labels import ProducerLabels
-from src.core.tasks.producer_challenge.gameplay.modal import _is_connection_error_modal, _click_modal_action_direct
 from src.constants.yolo.model_type import YoloModelType
 from src.core.tasks.base_ui.start_game import action__wait_enter_home
 from src.core.tasks.producer_challenge.context import GameplayPhase
 from src.core.tasks.producer_challenge.shared.common import (
     click_relative_point,
     normalize_text,
-    ocr_text,
     probe_fast_forward_enabled_state,
 )
 from src.core.tasks.producer_challenge.gameplay.decision import sync_visible_planning_context
@@ -56,7 +53,6 @@ from src.core.tasks.producer_challenge.ui import (
     find_button,
 )
 from src.entity.Game.Page.Types.index import GamePageTypes
-from src.utils.debug_tools import DebugTools
 from src.utils.i18n_tools import i18n_text
 from src.utils.logger import logger
 

@@ -9,7 +9,6 @@ from src.core.device.Android.app import Android_App
 from src.core.inference.ocr_engine import OCRService
 from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Components.SupportCard import (
-    SupportCard as SupportCardComponent,
     SupportCardListParser,
 )
 from src.utils.debug_tools import DebugTools

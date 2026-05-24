@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from src.entity.BaseDevice import BaseDevice
-from src.utils.i18n_tools import I18nText, i18n_text
+from src.utils.i18n_tools import I18nText
 
 
 class UnavailableDevice(BaseDevice):

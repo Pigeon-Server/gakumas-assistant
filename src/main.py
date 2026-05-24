@@ -31,7 +31,7 @@ from src.entity.BaseDevice import BaseDevice
 from src.entity.Game.Game_Info import GameStatusManager
 from src.entity.WebSocketData import WebSocketData
 from src.utils.debug_tools import DebugTools
-from src.utils.i18n_tools import I18nText, i18n_text, serialize_i18n_value
+from src.utils.i18n_tools import i18n_text, serialize_i18n_value
 from src.utils.logger import logger
 from src.utils.runtime_paths import resolve_data_str
 

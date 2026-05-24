@@ -31,8 +31,6 @@ from src.core.tasks.producer_challenge.gameplay.llm.llm_caller import (
     parse_decision_reasoning,
 )
 from src.core.tasks.producer_challenge.gameplay.llm.message_builder import (
-    build_current_planning_note,
-    build_insight_reference_text,
     build_system_prompt,
     build_user_prompt,
     prepare_messages,
@@ -819,7 +817,8 @@ class LLMStrategy:
             for insight in insights:
                 store.record_usage(insight.id, outcome_type)
         except Exception:
-            pass
+            pass  # 忽略异常
+
 
     # ── 决策 Dump ───────────────────────────────────────
 

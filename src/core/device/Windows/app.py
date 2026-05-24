@@ -11,9 +11,7 @@ if TYPE_CHECKING:
 import cv2
 import numpy as np
 import pyautogui
-import pythoncom
 import win32api
-import win32com.client
 import win32con
 import win32gui
 

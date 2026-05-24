@@ -114,4 +114,5 @@ class RLInferenceClient:
         try:
             self._session.close()
         except Exception:
-            pass
+            pass  # 忽略异常
+

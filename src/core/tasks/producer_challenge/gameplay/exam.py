@@ -26,7 +26,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.constants.game.producer_gameplay import GameplayPosition
-from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.tasks.producer_challenge.gameplay.exam_prep import (
     extract_exam_prep_bonuses,
     store_exam_prep_bonuses,

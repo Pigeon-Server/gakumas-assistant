@@ -27,8 +27,8 @@ from src.core.tasks.base_ui.learn_idol_card_clip import (
     _try_clip_identify,
 )
 from src.core.tasks.producer_challenge.steps.base import ProduceStep
-from src.core.tasks.producer_challenge.ui import find_button, wait_frame_stable
-from src.entity.Game.Components.Button import ButtonList, Button
+from src.core.tasks.producer_challenge.ui import wait_frame_stable
+from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Page.Types.index import GamePageTypes
 from src.utils.game_database_tools import GakumasDatabase_IdolCardDataUtils
 from src.utils.logger import logger

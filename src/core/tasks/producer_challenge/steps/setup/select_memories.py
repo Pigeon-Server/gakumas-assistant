@@ -23,7 +23,6 @@ from src.core.tasks.producer_challenge.ui import (
     wait_for_memory_selection_page,
     wait_frame_stable,
 )
-from src.entity.Game.Components.Button import ButtonList
 from src.entity.Game.Components.CheckBox import CheckBox
 from src.utils.logger import logger
 from src.utils.string_tools import MatchConfig, string_match

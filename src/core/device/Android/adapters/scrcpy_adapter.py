@@ -29,8 +29,7 @@ def _load_codec_context():
         return None
     try:
         from av.codec import CodecContext as av_codec_context
-    except ImportError as exc:
-        _CODEC_IMPORT_ERROR = exc
+    except ImportError:
         return None
     CodecContext = av_codec_context
     return CodecContext
@@ -231,7 +230,8 @@ class ScrcpyAdapter:
                 if not data:
                     break
         except Exception:
-            pass
+            pass  # 忽略异常
+
         self._server_died.set()
 
     def _open_socket(self) -> socket.socket:

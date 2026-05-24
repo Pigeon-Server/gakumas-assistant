@@ -1,4 +1,3 @@
-from src.entity.Game.Page.Types.index import GamePageTypes
 
 class GameStatusManager:
     class PlayerInfo:

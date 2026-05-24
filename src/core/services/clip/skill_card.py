@@ -1,6 +1,5 @@
 import os
-from dataclasses import dataclass
-from typing import List, Optional, Any
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -8,8 +7,7 @@ import numpy as np
 from src.entity.Game.Database.ProduceCard import ProduceCard
 from src.models.clip import CLIPayload_SkillCard, CLIPMemory
 from src.utils.game_database_tools import GakumasDatabase_ProduceCardDataUtils
-from src.utils.logger import logger
-from src.utils.clip_tools import CLIPTools, CLIPRetrieveData
+from src.utils.clip_tools import CLIPTools
 
 produce_card_db = GakumasDatabase_ProduceCardDataUtils()
 
