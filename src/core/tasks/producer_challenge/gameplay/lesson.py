@@ -126,8 +126,6 @@ _BATTLE_PRESSURE_SETUP_PENALTY = 10.0
 _DESELECT_TAP_Y_RATIO = 0.83
 
 # ── 信息面板探查常量（用于未识别卡片的单击读取） ──
-_CARD_INFO_PANEL_TAP_WAIT = 0.5   # 点击卡片后等待信息面板出现的秒数
-_CARD_INFO_PANEL_INFER_WAIT = 0.4  # 等待 YOLO 推理完成的秒数
 _CARD_INFO_PANEL_DESELECT_WAIT = 0.4  # 取消选中后等待恢复的秒数
 # 信息面板状态驱动轮询（与饮料模态一致）
 _CARD_INFO_PANEL_POLL_SLEEP = 0.3   # 轮询间歇
@@ -188,7 +186,6 @@ _DRINK_MODAL_EFFECT_LINE_RE = re.compile(
 )
 _DRINK_MODAL_JP_CHAR_RE = re.compile(r"[ぁ-んァ-ヶー一-龯]")
 # 模态头 OCR 排除的文本（标题、按钮等）
-_DRINK_MODAL_HEADER_TEXT = ProduceText.P_DRINK_DETAIL
 _DRINK_MODAL_HEADER_ALTS = tuple(
     dict.fromkeys(
         normalize_lookup_text(text)
