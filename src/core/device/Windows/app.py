@@ -49,10 +49,13 @@ class Windows_App(BaseDevice):
         return bool(win32gui.FindWindow(None, self.__window_name))
 
     @staticmethod
-    def _is_admin():
+    def _is_admin() -> bool:
+        """判断当前进程是否具备管理员权限。"""
+
         try:
             return ctypes.windll.shell32.IsUserAnAdmin()
-        except:
+        except OSError as exc:
+            logger.debug("Windows 设备: 查询管理员权限失败: {}", exc)
             return False
 
     def __find_window(self):

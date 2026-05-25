@@ -24,7 +24,7 @@ class ProduceStep(ABC):
         Returns:
             bool: 返回 True 表示步骤成功完成；返回 False 或抛出异常都会让流水线中断。
         """
-        ...
+        raise NotImplementedError
 
     def validate(self, app: "AppProcessor", ctx: "ProduceContext") -> bool:
         """检查当前步骤的前置条件是否满足。

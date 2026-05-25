@@ -55,6 +55,7 @@ class Android_App(BaseDevice):
     __unavailable_code: str = ""
 
     def __init__(self) -> None:
+        super().__init__()
         self.__config_service = ConfigService()
         self.__package_name = self.__config_service.base.game_package_name
         self.__connect_mode = self.__config_service.base.adb_connect_mode
@@ -606,3 +607,4 @@ class Android_App(BaseDevice):
                     return cv2.cvtColor(np.asarray(self.__adb_device.screenshot()), cv2.COLOR_RGB2BGR)
         except Exception as exc:
             self._handle_runtime_adb_error(exc, "截图")
+            return None

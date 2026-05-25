@@ -116,7 +116,6 @@ def start_webapp(core_processor: AppProcessor):
         core_processor.ws_manager.set_fastapi_loop(asyncio.get_event_loop())
         core_processor.start_background_services()
         yield
-        pass
     webapp = FastAPI(lifespan=lifespan)
     register_routes(webapp, core_processor, core_processor.ws_manager)
     uvicorn.run(

@@ -44,7 +44,7 @@ _DIGIT_FALLBACK = {0: 6, 9: 6}
 _EXCLUDE_PATTERNS = [
     re.compile(r"[%％]"),                                  # 百分比数字
     re.compile(r"^\d{3,}$"),                               # 纯3位以上数字（分数）
-    re.compile(r"[ターンカルビジュアダンスボ残り張]"),     # 日文 UI 文字
+    re.compile(r"[ターカルビジュアダンスボ残り張]"),       # 日文 UI 文字
 ]
 
 # ── 有效排名范围 ──

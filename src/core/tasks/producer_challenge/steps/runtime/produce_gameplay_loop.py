@@ -64,11 +64,6 @@ if TYPE_CHECKING:
 _STORY_JP_TEXT_RE = re.compile(r"[ぁ-んァ-ヶ一-龯]")
 _STORY_EPISODE_RE = re.compile(r"\d+\s*話")
 
-# ── 弹窗中间件常量 ──
-_MODAL_GLOBAL_POLL_SLEEP = 0.4   # 中间件轮询间歇
-_MODAL_GLOBAL_MAX_POLLS = 10     # 最大轮询次数（4秒，足够覆盖大多数弹窗出现）
-_MODAL_GLOBAL_STABLE_POLLS = 2   # 目标状态连续命中次数
-
 # ── 培育收尾：结果链推进直到回到主页 ──
 _FINISHING_MAX_ITERATIONS = 120   # 最多轮询次数（约2分钟）
 _FINISHING_POLL_INTERVAL = 1.0    # 每次轮询间隔（秒）

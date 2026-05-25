@@ -21,7 +21,7 @@ debug_tools = DebugTools()
 _ANCHOR_TEXT = "総合力合計"
 _ANCHOR_MATCH_CONFIG = MatchConfig(use_fuzz=True, fuzz_threshold=70, use_contains=True)
 
-@dataclass
+@dataclass(eq=False)
 class ContestItem(Yolo_Box):
     combat_power: int
     pt: int

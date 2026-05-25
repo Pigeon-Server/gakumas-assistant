@@ -36,12 +36,6 @@ NORMALIZED_DIGIT_SIZE = (32, 24)
 SYNTHETIC_DIGIT_CANVAS = (72, 56)
 LIMIT_BREAK_KEYWORDS = [SupportCardText.LIMIT_BREAK, "解放可能"]
 
-# Rarity → maximum possible level at ★4 (for cross-validation)
-_RARITY_MAX_LEVEL = {
-    SupportCardText.RARITY_R: 40,
-    SupportCardText.RARITY_SR: 50,
-    SupportCardText.RARITY_SSR: 60,
-}
 # Rarity → level cap per star count (for cross-validation)
 _RARITY_STAR_CAPS = {
     SupportCardText.RARITY_R:   {0: 20, 1: 25, 2: 30, 3: 35, 4: 40},

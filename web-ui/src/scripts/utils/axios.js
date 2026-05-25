@@ -5,7 +5,7 @@
 import axios from 'axios'
 
 import message from '@/scripts/utils/message.js'
-import { translateAny, translateKey } from '@/scripts/i18n/translate'
+import { translateKey } from '@/scripts/i18n/translate'
 
 /* 远程地址前缀 */
 const axiosplus = axios.create()

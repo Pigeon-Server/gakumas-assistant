@@ -533,6 +533,7 @@ def classify_pipeline_position(
     modal_title: str | None = None,
     final_confirm: bool = False,
     ctx: "ProduceContext | None" = None,
+    phase: str | None = None,
 ) -> str:
     """判定流水线、position并返回结果。
 
@@ -541,6 +542,7 @@ def classify_pipeline_position(
         modal_title: 用于提供弹窗、title相关输入。
         final_confirm: 用于提供final、confirm相关输入。
         ctx: 培育上下文对象，保存跨步骤状态与策略配置。
+        phase: 已判定的 gameplay phase；为空时会重新识别。
 
     Returns:
         str: 处理后的文本结果。
@@ -548,7 +550,7 @@ def classify_pipeline_position(
     if final_confirm:
         return "final_confirm"
 
-    phase = classify_gameplay_phase(results, ctx=ctx)
+    phase = phase or classify_gameplay_phase(results, ctx=ctx)
     if phase == "modal":
         modal_title = modal_title or ""
         if string_match(modal_title, ProduceText.VOICE_PLAYBACK_CONFIRM, MatchConfig(fuzz_threshold=65, normalize=True)):

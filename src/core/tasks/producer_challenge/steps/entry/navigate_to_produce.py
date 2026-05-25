@@ -50,14 +50,6 @@ _MAIN_HOME_SIGNAL_LABELS = (
     BaseUILabels.HOME_DISPATCH_WORK,
     BaseUILabels.HOME_GET_EXPENDITURE,
 )
-_GAMEPLAY_SIGNAL_LABELS = (
-    ProducerLabels.PC_SKIP,
-    ProducerLabels.PC_TRAINING_REMAINING,
-    ProducerLabels.SKILL_CARD_ACTIVE,
-    ProducerLabels.SKILL_CARD_MENTAL,
-    ProducerLabels.SKILL_CARD_TRAP,
-    ProducerLabels.P_DRINK,
-)
 _GAMEPLAY_STRONG_SIGNAL_LABELS = (
     ProducerLabels.PC_SKIP,
     ProducerLabels.PC_TRAINING_REMAINING,
@@ -834,7 +826,6 @@ def _extract_resume_modal_info(app: "AppProcessor") -> dict:
         return {}
 
     info: dict = {}
-    fh, fw = frame.shape[:2]
 
     # OCR 整个模态区域（约 y=30%~95%）
     candidates = _collect_ocr_candidates(

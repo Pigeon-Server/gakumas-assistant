@@ -308,8 +308,8 @@ def _ensure_on_card_list(app: "AppProcessor", max_attempts: int = 5) -> bool:
             continue
         try:
             app.game_utils.back_next_page()
-        except TimeoutError:
-            pass
+        except TimeoutError as exc:
+            logger.debug("支援卡强化: 返回列表页超时，继续尝试恢复: {}", exc)
     return False
 
 def _enter_enhance_page(app: "AppProcessor") -> bool:

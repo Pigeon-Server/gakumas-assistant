@@ -825,7 +825,6 @@ def classify_gameplay_phase(results, *, ctx: "ProduceContext | None" = None) -> 
         return GameplayPhase.LIVE_PERFORMANCE
 
     has_action = results.exists_label(ProducerLabels.PC_ACTION)
-    has_action_info = results.exists_label(ProducerLabels.PC_ACTION_INFO)
     has_recommend = results.exists_label(ProducerLabels.PC_RECOMMEND_ACTION)
     has_skill_card = any(
         results.exists_label(label)

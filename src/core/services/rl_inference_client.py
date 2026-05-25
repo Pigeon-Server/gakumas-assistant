@@ -112,7 +112,7 @@ class RLInferenceClient:
 
     def __del__(self):
         try:
-            self._session.close()
-        except Exception as e:
-            logger.debug(f"RLInference: 操作失败: {e}")
+            self.close()
+        except Exception:
+            pass
 

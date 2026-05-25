@@ -65,7 +65,6 @@ class ADBShell:
         if self.__message_thread is not None:
             del self.__message_thread
         self.__shell.close()
-        del self
 
     def __del__(self):
         self.close()

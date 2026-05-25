@@ -64,8 +64,6 @@ _CONSULT_THUMBNAIL_LABELS = (
     ProducerLabels.SKILL_CARD_MENTAL,
     ProducerLabels.SKILL_CARD_TRAP,
 )
-# 包含 INFO 面板的完整标签列表（用于交换页面等不区分面板/缩略图的场景）
-_CONSULT_CARD_LABELS = _CONSULT_THUMBNAIL_LABELS + (ProducerLabels.SKILL_CARD_INFO,)
 _CONSULT_EXCHANGE_RETRY_THRESHOLD = 2
 
 # OCR 结果前后缀杂字符清理（如 |初星水 → 初星水）
@@ -230,7 +228,6 @@ def _extract_exchange_price(box_frame) -> str:
     """
     if box_frame is None:
         return ""
-    import re
     h, _w = box_frame.shape[:2]
     # 底部约 30% 区域包含价格信息
     price_region = box_frame[int(h * 0.70):, :]
@@ -1361,6 +1358,7 @@ def decide_consult_action(
         candidates,
         decision_state=decision_state,
     )
+    consult_entered_fresh = False
     if decision is not None:
         decided_index = resolve_candidate_index(decision, candidates)
         decided_candidate = candidates[decided_index]

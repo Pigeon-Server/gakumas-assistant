@@ -385,11 +385,11 @@ def invoke_decision_strategy(
     """
     if strategy is None:
         return None
+    parameters: list[Any] = []
     try:
         parameters = list(signature(strategy).parameters.values())
         parameter_count = len(parameters)
     except (TypeError, ValueError):
-        parameters = []
         parameter_count = 0
 
     if parameter_count >= 4:

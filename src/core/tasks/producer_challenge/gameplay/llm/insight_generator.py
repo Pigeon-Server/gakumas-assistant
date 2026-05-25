@@ -98,7 +98,6 @@ class InsightGenerator:
             resources = dict(snapshot.get("resources", {}) or {})
             deck_plan = dict(planning.get("deck_plan", {}) or {})
             p_items = snapshot.get("p_items") or []
-            hand = snapshot.get("hand") or []
 
             recent_steps = self._extract_recent_steps(ctx)
             candidates = self._extract_candidates(decision_state)
@@ -354,8 +353,6 @@ class InsightGenerator:
         build_plan = planning.get("build_plan", {})
         if not isinstance(build_plan, dict):
             build_plan = {}
-
-        session_id = str(ctx.handler_state.get("llm_session_state", {}).get("session_id") or "")
 
         data = InsightData(
             insight_type=insight_type,

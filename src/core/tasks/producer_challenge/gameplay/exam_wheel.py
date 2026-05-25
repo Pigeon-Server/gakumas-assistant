@@ -109,7 +109,7 @@ def _classify_pixel(h: int, s: int, v: int) -> Optional[str]:
         return "Vo"  # Vocal（粉红）
     if 85 <= h <= 130:
         return "Da"  # Dance（蓝）
-    if 12 < h <= 42:
+    if h <= 42:
         return "Vi"  # Visual（黄）
     return None
 
@@ -525,7 +525,6 @@ def _extract_compact_wheel_text_info(
             source = roi
             source_x = roi_x1
             source_y = roi_y1
-            sh, sw = source.shape[:2]
             _debugger.add_box(
                 roi_x1,
                 roi_y1,

@@ -172,7 +172,7 @@ class GameplayHandler(ABC):
         position: str,
     ) -> bool:
         """判断此 handler 是否应处理当前画面，返回 True 表示匹配。"""
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def handle(
@@ -183,7 +183,7 @@ class GameplayHandler(ABC):
         position: str,
     ) -> HandlerResult:
         """执行操作。仅在 can_handle() 返回 True 时调用。"""
-        ...
+        raise NotImplementedError
 
     def __repr__(self) -> str:
         """返回 handler 的字符串表示，包含类名、阶段标签和优先级，便于日志输出和调试。

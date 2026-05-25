@@ -1,5 +1,5 @@
 import {WS_ACTION_HEAD, WS_ACTION} from "@/scripts/constants"
-import {WsEventPayloads, WsOptions} from "@/scripts/entity/webSocket"
+import {WsOptions} from "@/scripts/entity/webSocket"
 
 
 type TextHandler<T = any> = (data: T) => void
@@ -153,7 +153,7 @@ class WebSocketService {
       const msg = JSON.parse(raw)
       this.dispatchText(msg.action, msg.data)
     } catch (e) {
-      console.error('[WS] invalid text message', raw)
+      console.error('[WS] invalid text message', { length: raw.length })
     }
   }
 

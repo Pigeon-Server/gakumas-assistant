@@ -66,6 +66,8 @@ class OCR_Result(Yolo_Box):
         # Pass x2=x+w and y2=y+h so that cx/cy are computed correctly as true centers.
         # Then restore w and h to width/height for merge_lines compatibility.
         super().__init__(x, y, x + w, y + h, None, None)
+        # 覆盖父类 w/h：Yolo_Box 存储的是 x2/y2 坐标，
+        # 而 OCR_Result 需要保留原始 width/height 供 merge_lines 使用。
         self.w = w
         self.h = h
         self.text = text

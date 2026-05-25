@@ -15,7 +15,7 @@ ocr_service = OCRService()
 debug_tools = DebugTools()
 _NEW_PREFIX_PATTERN = re.compile(r"^[A-Za-z]{3,5}")
 
-@dataclass
+@dataclass(eq=False)
 class TabBarItem(Yolo_Box):
     text: str
     selection_frame: Optional[np.ndarray] = field(default=None, repr=False)
@@ -30,7 +30,7 @@ class TabBarItem(Yolo_Box):
         super().__init__(x, y, w, h, "TabBarItem", frame)
 
 
-@dataclass
+@dataclass(eq=False)
 class TabBar(Yolo_Box):
     tab_items: List[TabBarItem]
     selected: TabBarItem = None

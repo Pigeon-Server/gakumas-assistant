@@ -122,6 +122,7 @@ class LLMClient:
                 else:
                     logger.error(f"LLM API 调用失败，已用尽所有重试: {e}")
                     return None
+        return None
 
     @staticmethod
     def _extract_content(resp) -> Optional[str]:

@@ -379,7 +379,7 @@ def _select_work_duration(app: "AppProcessor"):
     """选择工作时长"""
     global FLAG__Reconfigure_work_hour
     if FLAG__Reconfigure_work_hour or not app.config_service().task__dispatch_work.reconfigure_work_hours.value:
-        return
+        return None
     frame_h, frame_w = app.latest_frame.shape[:2]
     y_start = frame_h // 2
     action_button = _get_work_action_button(app, (ButtonText.CONFIRM, _WORK_SELECT_BUTTON_TEXT), timeout=1.5)

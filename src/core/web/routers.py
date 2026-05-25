@@ -77,11 +77,10 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
             if not initial_sent:
                 return
             while True:
-                data = await websocket.receive_json()
-                if not data.get("action"):
+                payload = await websocket.receive_json()
+                if not payload.get("action"):
                     continue
-                action = data.get("action")
-                data = data.get("data")
+                action = payload.get("action")
                 if action == WebsocketActions.BaseActionFlag + ":" + WebsocketActions.WebsocketHeartBeat.Ping:
                     pong_sent = await ws_manager.send_action(websocket, WebsocketActions.WebsocketHeartBeat.Pong)
                     if not pong_sent:
@@ -237,14 +236,6 @@ def register_routes(app: FastAPI, processor: "AppProcessor", ws_manager: WebSock
         new_config = processor.config_service().base.disabled_tasks.value.remove(task_name)
         processor.config_service.save_config(new_config)
         return _api_return(True, translate_like_payload(None, "backend.api.ok"), processor.task_queue.enable_task(task_name))
-
-    # @app.get("/api/debug/switch_yolo_model/{model_name:str}")
-    # def switch_yolo_model(model: str):
-    #     model_list = ["base_ui", "producer"]
-    #     if model.lower() not in model_list:
-    #         return _api_return(False, "Invalid model name")
-    #     processor.yolo_engine.load_model(model.upper())
-    #     return _api_return(True, f"model switched to {model}")
 
     @app.get("/api/config")
     def get_all_config():

@@ -352,9 +352,14 @@ class AppProcessor:
         return self.yolo_engine.start()
 
     def ensure_device_ready(self, force: bool = False, restart_inference: bool = False) -> bool:
+        """确保设备实例可用，并按需同步 YOLO 推理设备。"""
+
         recreate_device = False
         old_device = None
         should_stop_before_recreate = False
+        ready = False
+        should_stop = False
+        should_start = False
         with self._device_state_lock:
             if not force and self.device:
                 ready = True

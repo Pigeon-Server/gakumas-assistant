@@ -674,7 +674,6 @@ class ModalHandler(GameplayHandler):
             logger.info("modal: 检测到通信错误弹窗，点击重试")
             return HandlerResult.ok(f"modal {title!r}: retry connection error", sleep_after=1.0)
 
-        invalid_result = None
         if _is_invalid_skill_use_modal(combined_text):
             _remember_blocked_battle_card(ctx)
             success = click_modal_action_with_retry(

@@ -153,8 +153,8 @@ def action__learn_support_card_clip(app: "AppProcessor") -> bool:
             # Step 4: Go back to card list
             try:
                 app.game_utils.back_next_page()
-            except TimeoutError:
-                pass
+            except TimeoutError as exc:
+                logger.debug("支援卡图像学习: 返回列表页超时，继续处理下一张: {}", exc)
             sleep(1)
             app.game_utils.wait_frame_stable(stable_count=2)
             app.game_utils.wait_for_label(BaseUILabels.SUPPORT_CARD, timeout=10)

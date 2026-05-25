@@ -27,8 +27,8 @@ def _get_caller_info() -> str:
     caller_file = caller_frame.f_code.co_filename
     try:
         caller_file = os.path.relpath(caller_file, os.getcwd())
-    except ValueError:
-        pass
+    except ValueError as exc:
+        logger.debug("性能日志: 调用文件路径转换失败，使用原始路径: {}", exc)
     caller_line = caller_frame.f_lineno
     return f"{caller_name} ({caller_file}:{caller_line})"
 

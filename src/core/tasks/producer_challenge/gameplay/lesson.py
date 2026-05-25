@@ -16,7 +16,6 @@ from src.constants.game.text.button_text import ButtonText
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.yolo.labels.producer_Labels import ProducerLabels
 from src.core.tasks.producer_challenge.shared.common import click_relative_point
-from src.core.tasks.producer_challenge.ui import detect_gameplay_state
 from src.core.tasks.producer_challenge.gameplay.llm.decision_dumper import DecisionDumper
 from src.utils.logger import logger
 from src.utils.string_tools import fullwidth_to_halfwidth
@@ -46,6 +45,17 @@ from .decision import (
 if TYPE_CHECKING:
     from src.core.tasks.producer_challenge.context import ProduceContext
     from src.main import AppProcessor
+
+
+def _detect_gameplay_state(
+    app: "AppProcessor",
+    ctx: "ProduceContext",
+) -> tuple[str, str]:
+    """延迟导入 gameplay 状态检测函数，避免 lesson 与 ui 模块循环导入。"""
+
+    from src.core.tasks.producer_challenge.ui import detect_gameplay_state
+
+    return detect_gameplay_state(app, ctx)
 
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
@@ -1499,8 +1509,6 @@ def _score_drink_modal_name_candidate(
     评分依据：位置（上半部分加分、横向居中加分）、字符类型（日文加分）、
     排除特征（含数字/符号减分、效果描述行减分、过长文本减分）。
     """
-    import re
-
     center_y_ratio = (float(item.y) + float(item.h) * 0.5) / max(float(crop_h), 1.0)
     center_x_ratio = (float(item.x) + float(item.w) * 0.5) / max(float(crop_w), 1.0)
     conf = float(getattr(item, "confidence", 1.0) or 1.0)
@@ -3436,7 +3444,7 @@ def execute_lesson_step(
         position=position,
         pending_index=ctx.pending_lesson_card_index,
     )
-    runtime_phase, runtime_position = detect_gameplay_state(app, ctx)
+    runtime_phase, runtime_position = _detect_gameplay_state(app, ctx)
     if runtime_phase not in {phase, GameplayPhase.EXAM, GameplayPhase.UNKNOWN}:
         _dump_phase_drift_probe(
             app,
@@ -3534,7 +3542,7 @@ def execute_lesson_step(
             logger.info("lesson: 当前无可执行候选，刷新候选后重试")
             _deselect_card(app)
             time.sleep(0.3)
-            runtime_phase, runtime_position = detect_gameplay_state(app, ctx)
+            runtime_phase, runtime_position = _detect_gameplay_state(app, ctx)
             if runtime_phase not in {phase, GameplayPhase.EXAM, GameplayPhase.UNKNOWN}:
                 _dump_phase_drift_probe(
                     app,
@@ -3652,7 +3660,7 @@ def execute_lesson_step(
         tried_indices.add(resolved_index)
         _deselect_card(app)
         time.sleep(0.3)
-        runtime_phase, runtime_position = detect_gameplay_state(app, ctx)
+        runtime_phase, runtime_position = _detect_gameplay_state(app, ctx)
         if runtime_phase not in {phase, GameplayPhase.EXAM, GameplayPhase.UNKNOWN}:
             _dump_phase_drift_probe(
                 app,
@@ -3710,7 +3718,7 @@ class LessonHandler:
         这里做一次轻量复核，发现当前帧已经漂移到非 lesson/exam 的新阶段时，
         立刻把控制权交回主循环重新分发。
         """
-        current_phase, current_position = detect_gameplay_state(app, ctx)
+        current_phase, current_position = _detect_gameplay_state(app, ctx)
         if current_phase in {expected_phase, GameplayPhase.EXAM, GameplayPhase.UNKNOWN}:
             return None
         _dump_phase_drift_probe(

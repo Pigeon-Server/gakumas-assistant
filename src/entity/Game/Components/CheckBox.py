@@ -7,7 +7,7 @@ from src.utils.opencv_tools import check_status_detection
 
 ocr_service = OCRService()
 
-@dataclass
+@dataclass(eq=False)
 class CheckBox(Yolo_Box):
     checked: bool
     _text: str

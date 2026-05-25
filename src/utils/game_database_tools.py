@@ -139,8 +139,8 @@ class _BaseYamlDatabase(metaclass=_SingletonByFileMeta):
             try:
                 with open(cache_path, "rb") as f:
                     return pickle.load(f)
-            except:
-                pass
+            except (EOFError, OSError, pickle.PickleError, TypeError, ValueError) as exc:
+                logger.debug("GameDatabase: 读取缓存失败，将重新解析: {}", exc)
 
         with open(self._diff_file, "r", encoding="utf-8") as f:
             content = self._preprocess_yaml_data(f)
@@ -703,7 +703,6 @@ def get_skill_descriptions_at_level(
 
 def _strip_html_tags(text: str) -> str:
     """移除字符串中的 HTML 标签（如 <nobr>, </nobr> 等）。"""
-    import re
     return re.sub(r"<[^>]+>", "", text)
 
 

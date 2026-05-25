@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
 import cv2
+import numpy as np
 
 import src.entity.Game.Components.TabBar as tabbar_module
 from src.entity.Game.Components.TabBar import (
     TabBar,
+    TabBarItem,
     _expand_tab_region,
     _expand_tab_text_region,
     _extract_tab_word_boxes,
@@ -142,28 +144,57 @@ def test_tabbar_skips_groups_without_centered_text_boxes(monkeypatch):
     ]
 
 
-def test_tabbar_skips_groups_without_centered_text_boxes(monkeypatch):
-    image = cv2.imread("tests/tabbar4.png")
+# ── eq=False 行为验证 ──
 
-    monkeypatch.setattr(
-        tabbar_module,
-        "_extract_tab_word_boxes",
-        lambda _frame: [
-            (10, 0, 50, 12),
-            (91, 13, 166, 38),
-            (351, 13, 398, 38),
-        ],
-    )
 
-    def fake_ocr(cropped):
-        text = "マニー" if cropped.shape[1] > 70 else "AP"
-        return [SimpleNamespace(text=text)]
+def _make_tabbar_item(x=10, y=20, w=50, h=30, text="AP"):
+    """创建 TabBarItem 测试实例，跳过 OCR。"""
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    return TabBarItem(x, y, w, h, text, frame)
 
-    monkeypatch.setattr(tabbar_module.ocr_service, "ocr", fake_ocr)
 
-    tabbar = TabBar(Yolo_Box(0, 0, image.shape[1], image.shape[0], "TAB_BAR", image))
+def test_tabbar_item_eq_uses_position_not_text():
+    """TabBarItem(eq=False) 继承 Yolo_Box.__eq__，按位置+标签比较，不比较 text。"""
+    item1 = _make_tabbar_item(x=10, y=20, w=50, h=30, text="AP")
+    item2 = _make_tabbar_item(x=10, y=20, w=50, h=30, text="マニー")
+    item3 = _make_tabbar_item(x=99, y=20, w=50, h=30, text="AP")
+    assert item1 == item2
+    assert item1 != item3
 
-    assert [(item.text, (item.x, item.y, item.w, item.h)) for item in tabbar] == [
-        ("マニー", (87, 11, 170, 40)),
-        ("AP", (347, 11, 402, 40)),
-    ]
+
+def test_tabbar_item_is_hashable():
+    """TabBarItem(eq=False) 继承 Yolo_Box.__hash__，可哈希、可放入 set。"""
+    item = _make_tabbar_item()
+    assert isinstance(hash(item), int)
+    duplicate = _make_tabbar_item()
+    assert len({item, duplicate}) == 1
+
+
+def test_tabbar_item_same_position_different_text_in_set():
+    """同位置不同 text 的 TabBarItem 在 set 中去重（按位置判等）。"""
+    item_a = _make_tabbar_item(x=10, y=20, w=50, h=30, text="AP")
+    item_b = _make_tabbar_item(x=10, y=20, w=50, h=30, text="マニー")
+    assert len({item_a, item_b}) == 1
+
+
+def test_tabbar_eq_uses_position_not_items(monkeypatch):
+    """TabBar(eq=False) 继承 Yolo_Box.__eq__，按位置+标签比较，不比较 tab_items。"""
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    box1 = Yolo_Box(0, 0, 200, 100, "TAB_BAR", frame)
+    box2 = Yolo_Box(0, 0, 200, 100, "TAB_BAR", frame)
+    box3 = Yolo_Box(0, 0, 300, 100, "TAB_BAR", frame)
+    monkeypatch.setattr(tabbar_module, "_extract_tab_word_boxes", lambda _f: [])
+    tb1 = TabBar(box1)
+    tb2 = TabBar(box2)
+    tb3 = TabBar(box3)
+    assert tb1 == tb2
+    assert tb1 != tb3
+
+
+def test_tabbar_is_hashable(monkeypatch):
+    """TabBar(eq=False) 继承 Yolo_Box.__hash__，可哈希。"""
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    box = Yolo_Box(0, 0, 200, 100, "TAB_BAR", frame)
+    monkeypatch.setattr(tabbar_module, "_extract_tab_word_boxes", lambda _f: [])
+    tb = TabBar(box)
+    assert isinstance(hash(tb), int)

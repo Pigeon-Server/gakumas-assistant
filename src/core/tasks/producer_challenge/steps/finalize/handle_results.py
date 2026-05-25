@@ -89,8 +89,6 @@ _RESULT_CHAIN_KEYWORDS = (
     ProduceText.MEMORY_PHOTO_SELECT_SHORT,
 )
 
-# “完了する”页面的 OCR 标识。
-_COMPLETE_PAGE_KEYWORDS = (ButtonText.COMPLETE,)
 # “プロデュース履歴”页面的 OCR 标识。
 _HISTORY_PAGE_KEYWORD = ProduceText.PRODUCE_HISTORY
 
