@@ -190,11 +190,7 @@ def test_wait_for_modal_resets_when_modal_position_changes(monkeypatch):
     assert game_utils.wait_for_modal("交換確認", timeout=0.3, interval=0.05) is None
 
 
-# 下面这些更偏现有通用导航逻辑，当前回归不稳定，保留原文件但暂不在本次子集里执行。
-# def test_back_next_page_waits_for_visible_transition(monkeypatch):
-# def test_back_next_page_raises_when_click_does_not_change_ui(monkeypatch):
-# def test_back_next_page_uses_cancel_on_memory_detail(monkeypatch):
-# def test_go_home_closes_memory_detail_before_using_back_button(monkeypatch):
+
 
 
 def test_back_next_page_waits_for_visible_transition(monkeypatch):

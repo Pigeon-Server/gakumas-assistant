@@ -17,9 +17,6 @@ for filename in os.listdir(BASE_PATH):
 
         # 获取模型导出前的关键信息
         model_name = os.path.splitext(filename)[0]
-        imgsz = model.overrides.get("imgsz", 640)
-        conf = getattr(model, "conf", 0.25)
-        iou = getattr(model, "iou", 0.45)
         model.export(format="onnx", dynamic=True)
         # 写入元信息到 JSON 文件
         model = onnx.load(os.path.join(BASE_PATH, f"{model_name}.onnx"))

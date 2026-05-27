@@ -515,7 +515,7 @@ def _looks_like_resume_lesson_summary_showcase(app: "AppProcessor") -> bool:
         })
     else:
         param_label_count = 0
-        only_param_labels = False
+        only_param_labels = False  # codeql[py/unused-local-variable]
 
     if param_label_count >= 2 and only_param_labels:
         DebugTools().add_box(

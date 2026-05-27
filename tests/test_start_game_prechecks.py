@@ -147,7 +147,7 @@ def test_pre_start_game_android_does_not_trust_background_process_state(monkeypa
     monkeypatch.setattr(task_register, "sleep", lambda *_args, **_kwargs: None)
 
     class _AndroidDeviceStub(Android_App):
-        def __init__(self):
+        def __init__(self):  # 故意不调用 super().__init__，避免触发 Android_App 复杂的设备初始化
             self.start_game_calls = 0
 
         def is_app_focused(self):

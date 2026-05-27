@@ -6,7 +6,6 @@
   - _is_card_exchanged: 已交换卡片（低亮度+低饱和度）和正常卡片
 """
 import numpy as np
-import pytest
 
 from src.core.tasks.producer_challenge.gameplay import decision as decision_module
 

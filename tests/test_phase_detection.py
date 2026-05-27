@@ -4,7 +4,6 @@
 使用已采集的截图 + YOLO PRODUCER 模型，验证 classify_phase 逻辑。
 """
 import cv2
-import json
 import os
 import sys
 

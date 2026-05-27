@@ -28,7 +28,7 @@ def test_macos_app_close_is_safe_after_port_validation_failure(monkeypatch):
         macos_app_module.MacOS_App.__init__(app)
 
     app.close()
-    app.__del__()
+    app.__del__()  # 验证析构路径不会重复释放
     assert app._adapter is None
 
 

@@ -545,6 +545,10 @@ class GakumasDatabase_IdolCardDataUtils(_BaseYamlDatabase):
 class _SupportCardSkillLevelMixin:
     """Mixin for SupportCardProduceSkillLevel tables that lack an ``id`` field."""
 
+    data_cls = None
+    loc_cls = None
+    default_data_file_parts: tuple[str, ...] = ()
+
     def _build_map_key(self, obj):
         return f"{obj.supportCardId}|{obj.produceSkillId}|{obj.produceSkillLevel}"
 

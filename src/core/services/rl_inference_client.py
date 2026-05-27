@@ -114,5 +114,5 @@ class RLInferenceClient:
         try:
             self.close()
         except Exception:
-            pass
+            pass  # 析构时忽略关闭异常，避免 GC 阶段抛出未处理异常
 

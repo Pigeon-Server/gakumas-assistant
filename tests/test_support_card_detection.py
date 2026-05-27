@@ -25,7 +25,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from src.core.inference.ONNX import YoloModelFromONNX
 from src.entity.Yolo import Yolo_Results
-from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.entity.Game.Components.SupportCard import (
     SupportCard,
     SupportCardListParser,
@@ -37,7 +36,6 @@ from src.entity.Game.Components.SupportCard import (
 from src.core.tasks.base_ui.auto_enhancement_support_card import (
     _card_needs_limit_break,
     _card_needs_enhancement,
-    _get_level_cap,
     _find_lb_arrow,
     _FUZZ_CONFIG,
 )

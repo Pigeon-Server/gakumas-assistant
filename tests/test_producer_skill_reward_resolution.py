@@ -400,7 +400,7 @@ def test_probe_unresolved_cards_saves_unmatched_samples(monkeypatch):
     monkeypatch.setattr(
         db_tools,
         "GakumasDatabase_ProduceCardDataUtils",
-        lambda: SimpleNamespace(),
+        SimpleNamespace,
     )
 
     skill_reward_module._probe_unresolved_cards(app, [candidate])
@@ -443,7 +443,7 @@ def test_probe_unresolved_cards_clears_noisy_thumbnail_title_when_panel_ocr_empt
     monkeypatch.setattr(
         db_tools,
         "GakumasDatabase_ProduceCardDataUtils",
-        lambda: SimpleNamespace(),
+        SimpleNamespace,
     )
 
     skill_reward_module._probe_unresolved_cards(app, [candidate])

@@ -6,7 +6,7 @@ from src.utils.i18n_tools import I18nText, i18n_text
 
 _WINDOWS_APP_CLASS = None
 _WINDOWS_IMPORT_ERROR = None
-_WINDOWS_LOADED = False
+_WINDOWS_LOADED = False  # codeql[py/unused-global-variable]
 
 
 def _ensure_windows_loaded():

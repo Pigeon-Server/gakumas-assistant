@@ -69,7 +69,7 @@ def do_analysis(frame, tag):
             try:
                 cv2.imwrite(os.path.join(OUT, f"{tag}_modal_debug_c{c}.png"), modal.draw_debug())
             except Exception:
-                pass
+                pass  # 调试绘图失败不影响主流程
             results["modal_title"] = modal.modal_title
             results["parsed_conf"] = c
             break

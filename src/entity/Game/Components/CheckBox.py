@@ -17,6 +17,11 @@ class CheckBox(Yolo_Box):
         self.checked = check_status_detection(element.frame).status
         self._text = ""
 
+    def __eq__(self, other):
+        if isinstance(other, CheckBox):
+            return super().__eq__(other) and self.checked == other.checked
+        return False
+
     @property
     def text(self):
         if self._text:

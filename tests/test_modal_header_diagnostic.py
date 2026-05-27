@@ -25,12 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from src.core.inference.ONNX import YoloModelFromONNX
 from src.core.inference.ocr_engine import OCRService
-from src.entity.Yolo import Yolo_Results, Yolo_Box
+from src.entity.Yolo import Yolo_Results
 from src.entity.Game.Components.Modal import ModalParser
 from src.entity.Game.Components.Button import ButtonList
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
 from src.constants.game.text.support_card_text import SupportCardText
-from src.utils.string_tools import string_match, MatchConfig
+from src.utils.string_tools import MatchConfig
 
 OUT_DIR = os.path.join("logs", "debug", "test_captures", "modal_header")
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -278,7 +278,6 @@ def main():
             yolo_res = detect(frame)
             back_btns = yolo_res.filter_by_label(BaseUILabels.BACK_BTN)
             cancel_btns = yolo_res.filter_by_label(BaseUILabels.CLOSE_BUTTON)
-            buttons = ButtonList(yolo_res)
 
             if cancel_btns and len(cancel_btns) > 0:
                 btn = cancel_btns.boxes[0]
@@ -317,7 +316,6 @@ def main():
     print("=" * 60)
 
     has_modal_pages = [r for r in all_results if r["yolo_conf10"]["found"]]
-    no_modal_pages = [r for r in all_results if not r["yolo_conf10"]["found"]]
 
     print(f"  总分析帧数: {len(all_results)}")
     print(f"  YOLO@0.50 检到 MH 的帧: {sum(1 for r in all_results if r['yolo_conf50']['found'])}")

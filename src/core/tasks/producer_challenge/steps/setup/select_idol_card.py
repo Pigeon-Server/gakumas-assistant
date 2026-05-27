@@ -204,7 +204,6 @@ class SelectIdolCardStep(ProduceStep):
                                 f"{verified_card.name} ({verified_card.id})"
                             )
                             ctx.selected_idol_card = verified_card
-                            previous_selected_id = verified_card.id
                             return True
                         if verified_card is not None:
                             logger.debug(
@@ -240,7 +239,6 @@ class SelectIdolCardStep(ProduceStep):
                         f"{current_card.name} ({current_card.id})"
                     )
                     ctx.selected_idol_card = current_card
-                    previous_selected_id = current_card.id
                     self._clip_learn_variant(app, thumb_image, current_card)
                     return True
 

@@ -9,7 +9,6 @@ JPEG noise and Gaussian noise tolerance tests are included to ensure
 no strong template matching is used.
 """
 import json
-import os
 import sys
 from pathlib import Path
 

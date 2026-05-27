@@ -17,7 +17,7 @@ class _DebugToolsStub:
 
 
 sys.modules["src.utils.logger"] = SimpleNamespace(logger=_LoggerStub())
-sys.modules["src.utils.debug_tools"] = SimpleNamespace(DebugTools=lambda: _DebugToolsStub())
+sys.modules["src.utils.debug_tools"] = SimpleNamespace(DebugTools=_DebugToolsStub)
 sys.modules["src.entity.Game.Components.Button"] = SimpleNamespace(ButtonList=object, Button=object)
 sys.modules["src.entity.Game.Components.CheckBox"] = SimpleNamespace(CheckBox=object)
 sys.modules["src.entity.Game.Components.Contest"] = SimpleNamespace(ContestList=object, ContestItem=object)

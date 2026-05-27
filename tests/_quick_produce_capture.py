@@ -10,8 +10,6 @@ from src.core.inference.ONNX import YoloModelFromONNX
 from src.entity.Yolo import Yolo_Results
 from src.entity.Game.Components.Button import ButtonList
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
-from src.utils.string_tools import MatchConfig
-
 ARTIFACTS = os.path.join('tests', '_artifacts', 'produce_flow')
 os.makedirs(ARTIFACTS, exist_ok=True)
 

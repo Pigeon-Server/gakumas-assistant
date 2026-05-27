@@ -1,0 +1,10 @@
+name: Custom CodeQL Configuration
+
+path_filters:
+  - '!devtools/**'
+  - '!train/**'
+
+query_filters:
+  - exclude:
+      id: py/import-and-import-from
+      id: py/mixed-returns

@@ -462,7 +462,6 @@ def test_decision_annotate_battle_candidate_availability_disables_unresolved_dri
         _make_card_payload(),
     ]
 
-    lesson_module.DecisionDumper = lesson_module.DecisionDumper
     from src.core.tasks.producer_challenge.gameplay import decision as decision_module
 
     decision_module._annotate_battle_candidate_availability(

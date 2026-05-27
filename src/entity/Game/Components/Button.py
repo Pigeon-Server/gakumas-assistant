@@ -55,6 +55,11 @@ class Button(Yolo_Box):
         super().__init__(element.x, element.y, element.w, element.h, element.label, element.frame)
         self.text = None if no_text else _extract_button_text(element.frame)
 
+    def __eq__(self, other):
+        if isinstance(other, Button):
+            return super().__eq__(other) and self.text == other.text
+        return False
+
     def is_disabled(self):
         h, w = self.frame.shape[:2]
         total_pixels = h * w  # 总像素数

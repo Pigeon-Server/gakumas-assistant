@@ -18,8 +18,6 @@
 import os
 import sys
 import time
-import json
-
 import cv2
 import numpy as np
 import adbutils
@@ -32,7 +30,7 @@ from src.entity.Yolo import Yolo_Results
 from src.entity.Game.Components.Modal import ModalParser
 from src.entity.Game.Components.Button import ButtonList
 from src.constants.yolo.labels.baseUI_Labels import BaseUILabels
-from src.utils.string_tools import string_match, MatchConfig
+from src.utils.string_tools import MatchConfig
 
 OUT_DIR = os.path.join("logs", "debug", "test_captures", "modal_trigger")
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -201,7 +199,7 @@ def main():
                         debug_img = modal.draw_debug()
                         save(debug_img, f"step3_modal_cap{cap_i}_debug")
                     except Exception:
-                        pass
+                        pass  # 调试绘图失败不影响主流程
                     break
 
             # 点击取消/返回
@@ -248,7 +246,7 @@ def main():
                 try:
                     save(modal.draw_debug(), "step5_menu_modal_debug")
                 except Exception:
-                    pass
+                    pass  # 调试绘图失败不影响主流程
 
             # 返回
             back(dev)

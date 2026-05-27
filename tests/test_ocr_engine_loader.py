@@ -39,7 +39,7 @@ class _RapidFallbackBackend:
 def test_ocr_loader_falls_back_to_rapidocr_when_backend_infer_fails(monkeypatch):
     fallback_backend = _RapidFallbackBackend()
 
-    monkeypatch.setattr(ocr_engine, "create_ocr_backend", lambda: _FailingBackend())
+    monkeypatch.setattr(ocr_engine, "create_ocr_backend", _FailingBackend)
     monkeypatch.setattr(ocr_engine, "RapidOCRBackend", lambda: fallback_backend)
     SingletonMeta._instances.pop(ocr_engine.OCRLoader, None)
 

@@ -32,6 +32,11 @@ class ContestItem(Yolo_Box):
         ocr_result = ocr_service.ocr(frame)
         self._parse_ocr_results(ocr_result)
 
+    def __eq__(self, other):
+        if isinstance(other, ContestItem):
+            return super().__eq__(other) and self.combat_power == other.combat_power and self.pt == other.pt
+        return False
+
     def _parse_ocr_results(self, ocr_results: List[OCR_Result]):
         # 1. 找 “総合力合計” 作为 combat_power 的锚点
         #    OCR 常将 "力" 误识别为 "カ" (片假名)，使用模糊匹配兼容

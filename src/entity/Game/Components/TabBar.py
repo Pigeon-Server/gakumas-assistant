@@ -29,6 +29,11 @@ class TabBarItem(Yolo_Box):
         h = int(h)
         super().__init__(x, y, w, h, "TabBarItem", frame)
 
+    def __eq__(self, other):
+        if isinstance(other, TabBarItem):
+            return super().__eq__(other) and self.text == other.text
+        return False
+
 
 @dataclass(eq=False)
 class TabBar(Yolo_Box):
@@ -42,6 +47,11 @@ class TabBar(Yolo_Box):
             if _is_selected_tab_frame(tab_item.selection_frame if tab_item.selection_frame is not None else tab_item.frame):
                 self.selected = tab_item
                 break
+
+    def __eq__(self, other):
+        if isinstance(other, TabBar):
+            return super().__eq__(other) and self.tab_items == other.tab_items
+        return False
 
     def _get_items(self) -> List[TabBarItem]:
         if self.frame is None or self.frame.size == 0:

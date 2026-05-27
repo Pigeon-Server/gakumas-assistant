@@ -276,7 +276,7 @@ def goto__contest_page(app: "AppProcessor"):
         try:
             app.game_utils.wait_loading(timeout=8)
         except TimeoutError as exc:
-            last_error = exc
+            last_error = exc  # codeql[py/multiple-definition]
             record_task_step(
                 app,
                 "goto_contest.wait_loading_timeout",

@@ -40,7 +40,7 @@ def test_navigate_to_page_suspends_until_user_switches_page(monkeypatch):
             update_current_location=lambda: locations.pop(0),
             wait_for_label=lambda _label: True,
         ),
-        latest_results=SimpleNamespace(filter_by_label=lambda _label: SimpleNamespace(first=lambda: object())),
+        latest_results=SimpleNamespace(filter_by_label=lambda _label: SimpleNamespace(first=object)),
         device=SimpleNamespace(click_element=lambda *_args, **_kwargs: calls.append("click_tab")),
         task_queue=SimpleNamespace(
             suspend_running_task=lambda: calls.append("suspend_running_task"),
@@ -70,7 +70,7 @@ def test_navigate_to_page_enters_skill_tab_when_already_on_illustrated_page(monk
             update_current_location=lambda: GamePageTypes.SUB_MENU.PRODUCER_ILLUSTRATED,
             wait_for_label=lambda _label: True,
         ),
-        latest_results=SimpleNamespace(filter_by_label=lambda _label: SimpleNamespace(first=lambda: object())),
+        latest_results=SimpleNamespace(filter_by_label=lambda _label: SimpleNamespace(first=object)),
         device=SimpleNamespace(click_element=lambda *_args, **_kwargs: calls.append("click_tab")),
         task_queue=SimpleNamespace(suspend_running_task=lambda: calls.append("suspend_running_task")),
     )

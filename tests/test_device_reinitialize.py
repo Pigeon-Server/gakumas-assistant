@@ -147,10 +147,10 @@ def test_init_starts_device_polling_after_device_and_yolo_ready(monkeypatch):
     monkeypatch.setattr(main_module.AppProcessor, "create_device_instance", lambda self: object())
     monkeypatch.setattr(main_module, "ConfigService", _ConfigServiceStub)
     monkeypatch.setattr(main_module, "YoloInferenceEngine", _YoloEngineStub)
-    monkeypatch.setattr(main_module, "DebugTools", lambda: object())
+    monkeypatch.setattr(main_module, "DebugTools", object)
     monkeypatch.setattr(main_module, "TaskService", _TaskServiceStub)
-    monkeypatch.setattr(main_module, "GameStatusManager", lambda: object())
-    monkeypatch.setattr(main_module, "WebSocketManager", lambda: object())
+    monkeypatch.setattr(main_module, "GameStatusManager", object)
+    monkeypatch.setattr(main_module, "WebSocketManager", object)
     monkeypatch.setattr(main_module, "ResourceUpdateService", _ResourceUpdateServiceStub)
 
     app = AppProcessor()

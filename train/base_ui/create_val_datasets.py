@@ -1,6 +1,5 @@
 import os
 import random
-import shutil
 import re
 
 def split_by_percentage(test_ratio, pattern=r'(.+?)_\d+\.'):

@@ -17,7 +17,7 @@ from src.core.tasks.producer_challenge.gameplay.llm.session_state import Session
 from src.core.tasks.producer_challenge.gameplay.llm.insight_data import InsightData
 
 if TYPE_CHECKING:
-    from src.core.tasks.producer_challenge.context import ProduceContext
+    from src.core.tasks.producer_challenge.context import ProduceContext  # codeql[py/unused-import]
 
 # 阶段 → 系统提示词模板映射
 _SYSTEM_TEMPLATE_MAP: dict[str, str] = {

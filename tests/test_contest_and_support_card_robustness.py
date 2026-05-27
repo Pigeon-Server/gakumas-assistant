@@ -110,7 +110,7 @@ class TestContestItemParsing:
                 if ci.combat_power is not None:
                     by_item_idx.setdefault(item_key, []).append(ci.combat_power)
             except Exception:
-                pass
+                pass  # 战力解析失败不影响其他卡片
 
         for item_key, powers in by_item_idx.items():
             unique = set(powers)
